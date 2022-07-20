@@ -1,0 +1,17 @@
+
+config LIB_LIBQMI
+	bool 'libqmi'
+	help
+	  QMI library
+
+config LIB_LIBQMI_QMICLI
+	bool 'qmicli'
+	depends on LIB_LIBQMI
+	help
+	  The qmicli command
+
+config LIB_LIBQMI_QMI_NETWORK
+	bool 'qmi-network'
+	depends on LIB_LIBQMI
+	help
+	  The qmi-network command

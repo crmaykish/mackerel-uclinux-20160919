@@ -1,0 +1,13 @@
+diff --git a/src/mm-iface-modem.c b/src/mm-iface-modem.c
+index 0de50e2..a9351cd 100644
+--- a/src/mm-iface-modem.c
++++ b/src/mm-iface-modem.c
+@@ -4520,7 +4520,7 @@ interface_initialization_step (InitializationContext *ctx)
+     case INITIALIZATION_STEP_SIM:
+         /* If the modem doesn't need any SIM (not implemented by plugin, or not
+          * needed in CDMA-only modems) */
+-        if (!mm_iface_modem_is_cdma_only (ctx->self) &&
++        if (/*!mm_iface_modem_is_cdma_only (ctx->self) &&*/
+             MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->create_sim &&
+             MM_IFACE_MODEM_GET_INTERFACE (ctx->self)->create_sim_finish) {
+             MMBaseSim *sim = NULL;

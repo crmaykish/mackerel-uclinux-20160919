@@ -1,0 +1,23 @@
+--- Python-3.4.2/setup.py.org	2016-03-04 16:38:56.659259290 +1000
++++ Python-3.4.2/setup.py	2016-03-04 16:39:53.495260209 +1000
+@@ -219,8 +219,9 @@
+ 
+             # If a module has already been built statically,
+             # don't build it here
+-            if ext.name in sys.builtin_module_names:
+-                self.extensions.remove(ext)
++            if not cross_compiling:
++                if ext.name in sys.builtin_module_names:
++                    self.extensions.remove(ext)
+ 
+         # Parse Modules/Setup and Modules/Setup.local to figure out which
+         # modules are turned on in the file.
+@@ -454,8 +455,6 @@
+             add_dir_to_list(self.compiler.library_dirs, '/usr/local/lib')
+             add_dir_to_list(self.compiler.include_dirs, '/usr/local/include')
+         # only change this for cross builds for 3.3, issues on Mageia
+-        if cross_compiling:
+-            self.add_gcc_paths()
+         self.add_multiarch_paths()
+ 
+         # Add paths specified in the environment variables LDFLAGS and

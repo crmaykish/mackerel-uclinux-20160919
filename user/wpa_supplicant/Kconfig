@@ -1,0 +1,9 @@
+config USER_WPA_SUPPLICANT
+	bool "wpa_supplicant"
+	help
+	  Support for advanved wireless encryption standards.
+
+config USER_WPA_PASSPHRASE
+	bool "wpa_passphrase"
+	help
+	  Support for advanved wireless encryption standard config generation.

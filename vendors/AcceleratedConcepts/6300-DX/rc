@@ -1,0 +1,4 @@
+#!/bin/sh
+# make sure our flash devices (/dev/flash/*) are ready
+cp -a /lib/udev/devices/* /dev/.
+exit 0

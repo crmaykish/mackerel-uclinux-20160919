@@ -1,0 +1,416 @@
+
+6300-DX DEVICE TESTING
+
+-------------------------------------------------------------------------------
+
+0. Setting up the 6300-DX Hardware
+
+The device to test must have the Accelerated Concepts 6300-DX u-boot
+firmware loaded into the base of the onboard flash. Normally this is exptected
+to be programmed into the flash chip before it is mounted onto the board.
+
+It is possible to program an existing board with older u-boot firmware when
+it is running Linux (for example if retrofitting it to an older board).
+This is covered in the flash programming section later in this document.
+
+-------------------------------------------------------------------------------
+
+1. Installing Linux Firmware into 6300-DX
+
+The first step in carrying out the 6300-DX Device Tests is to install the
+Accelerated Concepts 6300-DX test firmware image into the hardware. This
+will require the serial console to be attached, and it can be loaded via
+either the USB port, or an ethernet port.
+
+The steps described here expect that the flash chip is otherwise empty before
+we begin this process. In particular the u-boot environment flash segment
+(which is at offset 0x60000 to 0x70000) is empty. If this is not the case
+then see later in this document on how to clear the u-boot envinroment first.
+
+
+1.1 Loading Firmware via the USB Port
+
+To load the Linux firmware using the USB port you will need a flash USB stick
+formatted with the usual FAT filesystem. Copy the firmware image file,
+normally named image.bin, onto the USB flash stick.
+
+Insert the USB flash stick into any of the USB ports on the 6300-DX board.
+Power up the 6300-DX. You will see the u-boot boot up messages and it will
+then count down 2 seconds until fully booting. Hit any key on the serial
+console to break into the u-boot command shell.
+
+At the u-boot command shell do:
+
+    run usbload
+
+That will read the image.bin file from the USB flash stick, and execute it.
+You will see the usual Linux boot and start messages come out on the serial
+console. The login username is "root" with no password.
+
+Note that we have not programmed this firmware into flash yet. To write this
+firmware into flash use the following Linux shell commands:
+
+    mount /dev/sda1 /mnt
+    netflash -i /mnt/image.bin
+
+The process will take a couple of minutes, the LEDs on the board will flash
+in a fixed pattern to let you know that it is programming the flash.
+
+Once the flash programming is complete the 6300-DX will reboot and will
+now boot up into the Linux Firmware again.
+
+
+1.2 Loading Firmware via the Ethernet Ports
+
+Either ethernet port can be used (the LAN switch ports or the WAN port) and
+it must be connected to a local network. The local network must have a server
+that can act as a dhcp and tftp server.
+
+Take the 6300-DX firmware file, image.bin, and put it onto your local tftp
+server - so that it can be tftp loaded over the network.
+
+No specific IP addresses are required if using a dhcp server on your local
+network.
+
+Power up the 6300-DX. You will see the u-boot boot up messages and it will
+then count down 2 seconds until fully booting. Hit any key on the serial
+console to break into the u-boot command shell.
+
+At the u-boot command shell do:
+
+    run netload
+
+This will load the image.bin file over the network, and execute it.
+You will see the usual Linux boot and start messages come out on the serial
+console. The login username is "root" with no password.
+
+You can used fixed IP addresses if you do not have a dhcp server on the local
+network. Instead of running the "netload" command above use the following
+commands at the u-boot shell:
+
+   set ipaddr 192.168.0.101
+   set serverip 192.168.0.99
+   tftp $loadaddr $loadfile
+   run bootimage
+
+Substitute your local network IP addresses as required.
+
+Note that we have not programmed this firmware into flash yet. To write this
+firmware into flash use the following Linux shell commands:
+
+    ifconfig eth0 192.168.0.101
+    netflash -i 192.168.0.99 image.bin
+
+This process will take a couple of minutes, and the netflash command will
+print out its progress as it programs the flash, and it will also flash the
+LEDs in a cycling pattern.
+
+Once the flash programming is complete the 6300-DX will reboot and will
+now boot up into the Linux Firmware again.
+
+-------------------------------------------------------------------------------
+
+2. Testing 6300-DX Functions
+
+The following sections test the various harwdare functions of the 6300-DX
+hardware. Note that under Linux the ethernet ports are configured such that
+eth0 is any of the 4 switch ports, and eth1 is the WAN port.
+
+-------------------------------------------------------------------------------
+
+2.1  LAN and WAN Ethernet ports
+
+Configure and test the WAN port:
+
+    ifconfig eth1 192.168.0.101
+    ping 192.168.0.99
+
+You will see successfull ping actions if the interface is working correctly.
+Once verified kill the ping process (with CTRL-C).
+
+Now move the network cable from the WAN port to LAN port 1 and then do:
+
+    ifconfig eth1 down
+    ifconfig eth0 192.168.0.102
+    ping 192.168.0.99
+
+Once pings have been verified on LAN port 1 then move the network cable to LAN
+port 2 - do not stop the ping process running. After a few seconds the ping
+actions should recommence output. Once port 2 is verifyed move the cable onto
+ports 3 and 4 verifying each in turn. After all 4 LAN/switch ports have been
+verified then you can kill the ping process.
+
+-------------------------------------------------------------------------------
+
+2.2  LEDs
+
+To test individual LEDs on the 6300-DX use the "ledcmd" test program.
+
+The table below lists each LED and the command to issue to turn it on, off and
+flash. Issue each command and verify that the LED actions properly.
+
+     LED NAME      TURN ON          TURN OFF          FLASH
+     -------------------------------------------------------------
+      LED 1        -                -                 -
+      LED 2        ledcmd -s 2      ledcmd -c 2       ledcmd -f 2
+      LED 3        ledcmd -s 36     ledcmd -c 36      ledcmd -f 36
+      LED 4        ledcmd -s 37     ledcmd -c 37      ledcmd -f 37
+      LED 5        ledcmd -s 38     ledcmd -c 38      ledcmd -f 38
+      LED 6        ledcmd -s 39     ledcmd -c 39      ledcmd -f 39
+      LED 7        ledcmd -s 40     ledcmd -c 40      ledcmd -f 40
+      LANLED 0     ledcmd -s 23     ledcmd -c 23      ledcmd -f 23
+      LANLED 1     ledcmd -s 24     ledcmd -c 24      ledcmd -f 24
+      LANLED 2     ledcmd -s 31     ledcmd -c 31      ledcmd -f 31
+      LANLED 3     ledcmd -s 35     ledcmd -c 35      ledcmd -f 35
+
+Note that LED 1 is the power LED and will always be turned on when power is
+applied to the 6300-DX. Note also that LED 2 by default will flash on booting
+the supplied test firmware image - this is normal. The "LED NAME" used is as
+per the labels marked on the PCB (which is different to the "ROA Netbridge
+Setup Guide" document labels).
+
+Also be aware that the action for the LANLEDs is driven via the Linux ethernet
+driver. So if you set the one of those LANLEDs to a state it will be
+over-ridden by the ethernet driver within about 1 second.
+
+-------------------------------------------------------------------------------
+
+2.3  JOG Switch
+
+To test the actions of the JOG switch run the "key" test program:
+
+    key
+
+When the JOG switches are activated it will print out the switch direction
+pressed. Output will look like this:
+
+    RIGHT
+    LEFT
+    UP
+    DOWN
+    CENTER
+    CENTER
+
+-------------------------------------------------------------------------------
+
+2.4 LCD
+
+To test character output to the LCD use the "lcd" test program.
+The most basic test can be achieved with:
+
+    lcd -i "Hello world"
+
+This will initialize the LCD display and output the string "Hello World".
+
+To clear the display again, and output 2 individual lines do:
+
+    lcd -c
+    lcd -y 0 "Line 1"
+    lcd -y 1 "Line 2"
+
+To verify output from the LCD inverted character set do:
+
+    lcd -c
+    lcd -z "UPSIDE DOWN"
+
+As a byproduct of testing the LCD you have also verified the I2C port.
+
+-------------------------------------------------------------------------------
+
+2.5  USB Ports
+
+On booting the test firmware all USB ports will be enabled and ready for use.
+The simplest test is to insert a USB flash stick into each port in turn.
+You can use the "lsusb" program to list the devices connected to the system.
+The default listing (no devices inserted) will look like this:
+
+    # lsusb
+    Bus 001 Device 002: ID 058f:6254 Alcor Micro Corp. USB Hub
+    Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+
+If you then insert a USB flash stick you will see a new line for it:
+
+    # lsusb
+    Bus 001 Device 002: ID 058f:6254 Alcor Micro Corp. USB Hub
+    Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+    Bus 001 Device 007: ID 2008:2018  
+
+You may also get some kernel trace on the insertion of a USB flash stick.
+It may look like this:
+
+    [  988.570000] sd 4:0:0:0: [sda] No Caching mode page present
+    [  988.580000] sd 4:0:0:0: [sda] Assuming drive cache: write through
+    [  988.610000] sd 4:0:0:0: [sda] No Caching mode page present
+    [  988.620000] sd 4:0:0:0: [sda] Assuming drive cache: write through
+    [  988.650000] sd 4:0:0:0: [sda] No Caching mode page present
+    [  988.650000] sd 4:0:0:0: [sda] Assuming drive cache: write through
+
+This is normal, and can be ignored.
+
+Typically you will get no trace when you remove a USB flash stick from the
+6300-DX board. If you again run "lsusb" there will no longer be a line for
+the USB flash stick.
+
+For thorough testing of the port you can run tests such as a complete raw read
+of the USB flash with:
+
+    dd if=/dev/sda of=/dev/null
+
+Or mount and read/write to the filesystem for example:
+
+    mount /dev/sda1 /mnt
+    cp /bin/* /mnt
+
+The Linux kernel will monitor the status of the USB over-current bits as well.
+When an over-current condition is detected the kernel will disable the USB
+port. You can check this by shorting the USB +5V power pin inside the USB
+connector to the metal connector shell (using a paper clip or similar). The
+kernel will print a message on the console like:
+
+    6300-DX: USB1 power over-current condition, temporarily disabling
+
+After a small period of time the kernel will attempt to re-enable the port
+again, you will see the message:
+
+    6300-DX: restarting USB1 power
+
+If the over-current condition occurrs again then the port will again be
+temporarily disabled.
+
+-------------------------------------------------------------------------------
+
+2.6 RESET Button
+
+The test firmware has been setup to clear its flash configuration region and
+reboot the 6300-DX when the RESET switch is pressed. To test this action
+push in the RESET switch. After a few seconds the 6300-DX unit will reboot.
+
+-------------------------------------------------------------------------------
+
+2.7 Uploading Files
+
+There is a number of mechanisms you can use to load files onto the 6300-DX.
+The usual Linux client network tools installed include:
+
+    tftp, ftp, scp, wget
+
+If you only need temporary storage of files then the /tmp directory may be
+an appropriate place to put them. If you need more permanant storage (that
+is you need the files to be kept in flash) then use the /flash directory
+area.
+
+-------------------------------------------------------------------------------
+
+2.8 Programming MAC Addresses
+
+Using the test firmware you can program MAC addresses for the ethernet ports
+into the flash. These will be assigned to the ethernet interfaces on every
+boot up.
+
+The ethernet MAC addresses are stored in the u-boot environment segment.
+To list what they are currently set to you can use the following command
+to print out the u-boot environment:
+
+    fw_printenv
+
+You will see entries for the ethernet MAC address like this:
+
+    ethaddr=00:27:04:00:00:01
+    eth1addr=00:27:04:00:00:02
+    eth2addr=00:27:04:00:00:03
+
+To set these values use commands like this:
+
+    fw_setenv ethaddr 00:27:00:00:04
+    fw_setenv eth1addr 00:27:00:00:05
+    fw_setenv eth2addr 00:27:00:00:06
+
+To verify that the addresses have been programmed correctly you can use the
+system "ifconfig" command. Note that you must reboot after flash programming
+the new MAC addresses for them to take effect:
+
+Use "ifconfig -a" at the console to list the interfaces:
+
+eth0      Link encap:Ethernet  HWaddr 00:27:04:00:00:04
+          inet addr:192.168.210.1  Bcast:0.0.0.0  Mask:255.255.255.255
+          inet6 addr: fe80::227:4ff:fe00:1/64 Scope:Link
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:6 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+                    Interrupt:5 
+
+eth1      Link encap:Ethernet  HWaddr 00:27:04:00:00:05
+          BROADCAST MULTICAST  MTU:1500  Metric:1
+          RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+                    Interrupt:4 
+
+wlan0     Link encap:Ethernet  HWaddr 00:27:04:00:00:06  
+          BROADCAST MULTICAST  MTU:1500  Metric:1
+          RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          
+-------------------------------------------------------------------------------
+
+2.9 Reading and Writing Flash
+
+The flash partitioning used by the 6300-DX firmware is:
+
+    0x00000000-0x00060000 : "u-boot"
+    0x00060000-0x00070000 : "u-boot-env"
+    0x00070000-0x00080000 : "art"
+    0x00080000-0x00400000 : "config"
+    0x00400000-0x00600000 : "kernel"
+    0x00600000-0x01000000 : "rootfs"
+    0x00400000-0x01000000 : "image"
+    0x00000000-0x02000000 : "all"
+    0x01000000-0x01400000 : "store"
+    0x01400000-0x015b0000 : "kernel1"
+    0x015b0000-0x01000000 : "rootfs1"
+    0x01400000-0x02000000 : "image1"
+
+This is based on a 32MB SPI flash. Note that the ART Atheros segment is in
+a different location to the normal Atheros default.
+
+The netflash tool can be used to quickly program a binary file into any of the
+flash partitions. For example if you wanted to program a new boot loader into
+the u-boot flash partition you would do something like:
+
+    netflash -k -b -n -r /dev/flash/boot u-boot.bin
+
+The u-boot.bin must be a local file in this example. Netflash is capable of
+network loading the file over tftp or http directly as well, for example:
+
+    netflash -k -b -n -r /dev/flash/boot 192.168.0.99 u-boot.bin
+
+This will load the u-boot.bin file using tftp from the server at 192.168.0.99.
+
+This can also be use to reload the Atheros ART binary blob into its partition.
+Use the same command as above:
+
+    netflash -k -b -n -r /dev/flash/art art.bin
+
+If you want to look at the contents of a flash partition then you can use
+the hexdump tool, hd:
+
+    hd -b /dev/flash/bootenv | more
+
+It will give a hexdump of the flash contents that looks like this:
+
+    000000: e2 7f 77 f6 62 6f 6f 74 63 6d 64 3d 62 6f 6f 74    w.bootcmd=boot
+    000010: 6d 20 30 78 39 66 65 30 30 30 30 30 00 62 6f 6f    m 0x9fe00000.boo
+    000020: 74 64 65 6c 61 79 3d 34 00 62 61 75 64 72 61 74    tdelay=4.baudrat
+    ....
+
+You can read out to a file the entire contents of a flash section usuing the
+dd tool:
+
+    dd if=/dev/flash/art of=/tmp/art.bin
+
+This will create a file, /tmp/art.bin, that contains the contents of the flash
+ART partition.
+
+-------------------------------------------------------------------------------

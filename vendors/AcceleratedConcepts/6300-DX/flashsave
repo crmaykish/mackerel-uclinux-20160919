@@ -1,0 +1,4 @@
+#!/bin/sh
+# A stub for saving flash if using traditional flatfsd
+#[ -x /bin/flatfsd ] && flatfsd -s
+exit 0

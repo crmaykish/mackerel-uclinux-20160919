@@ -1,0 +1,39 @@
+#!/bin/sh
+
+start() {
+  echo "Loading network drivers..."
+  modprobe sky2
+  setmac -n 2
+  echo "OK"
+
+  echo "Loading crypto drivers."
+  modprobe ocf
+  modprobe mv_cesa
+  modprobe cryptodev
+  echo "OK"
+}
+
+stop() {
+  return 0
+}
+
+restart() {
+  return 0
+}
+
+case "$1" in
+  start)
+    start
+  ;;
+  stop)
+    stop
+  ;;
+  restart|reload)
+    restart
+  ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+esac
+
+exit $?

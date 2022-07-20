@@ -1,0 +1,6 @@
+#!/bin/sh
+# a simple HW clock stub for platforms that do not have an RTC
+case "$@" in
+*-r*) date +"%a %d %b %Y %H:%M:%S %Z   -0.0 seconds" ;;
+esac
+exit 0

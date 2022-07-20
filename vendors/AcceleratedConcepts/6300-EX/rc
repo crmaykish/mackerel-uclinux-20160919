@@ -1,0 +1,15 @@
+hostname 6300-EX
+
+echo "Loading network drivers..."
+modprobe sky2
+setmac -n 2
+
+echo "Loading crypto drivers."
+modprobe ocf
+modprobe mv_cesa
+modprobe cryptodev
+modprobe ipsec
+
+# make sure our flash devices (/dev/flash/*) are ready
+cp -a /lib/udev/devices/* /dev/.
+exit 0

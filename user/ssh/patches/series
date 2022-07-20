@@ -1,0 +1,9 @@
+openssh-openssl-fips.patch
+openssh-genkeys.patch
+openssh-ld-is-cc.patch
+openssh-pthread.patch
+openssh-uclinux.patch
+openssh-umac_ctx.patch
+openssh-virtual-user.patch
+openssh-fwd_opts.patch
+openssh-uclinux-sshd-config.patch

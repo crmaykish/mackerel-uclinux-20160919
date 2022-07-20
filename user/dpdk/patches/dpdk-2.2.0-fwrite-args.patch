@@ -1,0 +1,11 @@
+--- dpdk-2.2.0/lib/librte_eal/linuxapp/eal/eal_log.c.orig	2015-12-16 03:06:58.000000000 +1000
++++ dpdk-2.2.0/lib/librte_eal/linuxapp/eal/eal_log.c	2016-03-16 13:42:45.371856920 +1000
+@@ -117,7 +117,7 @@
+ early_log_write(__attribute__((unused)) void *c, const char *buf, size_t size)
+ {
+ 	ssize_t ret;
+-	ret = fwrite(buf, size, 1, stdout);
++	ret = fwrite(buf, 1, size, stdout);
+ 	fflush(stdout);
+ 	if (ret == 0)
+ 		return -1;

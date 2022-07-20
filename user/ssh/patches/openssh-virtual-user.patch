@@ -1,0 +1,121 @@
+Index: openssh-6.6p1/auth.c
+===================================================================
+--- openssh-6.6p1.orig/auth.c
++++ openssh-6.6p1/auth.c
+@@ -603,7 +603,7 @@
+ 	aix_setauthdb(user);
+ #endif
+ 
+-	pw = getpwnam(user);
++	pw = getpwnam(options.virtual_user ?: user);
+ 
+ #if defined(_AIX) && defined(HAVE_SETAUTHDB)
+ 	aix_restoreauthdb();
+@@ -650,8 +650,14 @@
+ 		auth_close(as);
+ #endif
+ #endif
+-	if (pw != NULL)
+-		return (pwcopy(pw));
++	if (pw != NULL) {
++		pw = pwcopy(pw);
++		if (pw && options.virtual_user && strcmp(options.virtual_user, pw->pw_name) == 0) {
++			free(pw->pw_name);
++			pw->pw_name = xstrdup(user);
++		}
++		return (pw);
++	}
+ 	return (NULL);
+ }
+ 
+--- openssh-6.8p1/servconf.c.orig	2015-03-17 15:49:20.000000000 +1000
++++ openssh-6.8p1/servconf.c	2015-03-19 10:22:00.704516821 +1000
+@@ -162,6 +162,7 @@
+ 	options->ip_qos_interactive = -1;
+ 	options->ip_qos_bulk = -1;
+ 	options->version_addendum = NULL;
++	options->virtual_user = NULL;
+ 	options->fingerprint_hash = -1;
+ }
+ 
+@@ -401,6 +402,7 @@
+ 	sAuthenticationMethods, sHostKeyAgent, sPermitUserRC,
+ 	sStreamLocalBindMask, sStreamLocalBindUnlink,
+ 	sAllowStreamLocalForwarding, sFingerprintHash,
++	sVirtualUser,
+ 	sDeprecated, sUnsupported
+ } ServerOpCodes;
+ 
+@@ -534,6 +536,7 @@
+ 	{ "streamlocalbindunlink", sStreamLocalBindUnlink, SSHCFG_ALL },
+ 	{ "allowstreamlocalforwarding", sAllowStreamLocalForwarding, SSHCFG_ALL },
+ 	{ "fingerprinthash", sFingerprintHash, SSHCFG_GLOBAL },
++	{ "virtualuser", sVirtualUser, SSHCFG_ALL },
+ 	{ NULL, sBadOption, 0 }
+ };
+ 
+@@ -1743,6 +1746,17 @@
+ 			options->fingerprint_hash = value;
+ 		break;
+ 
++	case sVirtualUser:
++		charptr = &options->virtual_user;
++
++		arg = strdelim(&cp);
++		if (!arg || *arg == '\0')
++			fatal("%s line %d: missing user name.",
++			    filename, linenum);
++		if (*activep && *charptr == NULL)
++			*charptr = xstrdup(arg);
++		break;
++
+ 	case sDeprecated:
+ 		logit("%s line %d: Deprecated option %s",
+ 		    filename, linenum, arg);
+@@ -2173,6 +2187,7 @@
+ 	    o->hostbased_key_types : KEX_DEFAULT_PK_ALG);
+ 	dump_cfg_string(sPubkeyAcceptedKeyTypes, o->pubkey_key_types ?
+ 	    o->pubkey_key_types : KEX_DEFAULT_PK_ALG);
++	dump_cfg_string(sVirtualUser, o->virtual_user);
+ 
+ 	/* string arguments requiring a lookup */
+ 	dump_cfg_string(sLogLevel, log_level_name(o->log_level));
+--- openssh-6.8p1/servconf.h.orig	2015-03-19 10:15:51.640525369 +1000
++++ openssh-6.8p1/servconf.h	2015-03-19 10:23:09.460515228 +1000
+@@ -189,6 +189,7 @@
+ 	char   *auth_methods[MAX_AUTH_METHODS];
+ 
+ 	int	fingerprint_hash;
++	char   *virtual_user;
+ }       ServerOptions;
+ 
+ /* Information about the incoming connection as used by Match */
+Index: openssh-6.6p1/loginrec.c
+===================================================================
+--- openssh-6.6p1.orig/loginrec.c
++++ openssh-6.6p1/loginrec.c
+@@ -175,6 +175,7 @@
+ #include "canohost.h"
+ #include "auth.h"
+ #include "buffer.h"
++#include "servconf.h"
+ 
+ #ifdef HAVE_UTIL_H
+ # include <util.h>
+@@ -208,6 +209,7 @@
+ int wtmpx_get_entry(struct logininfo *li);
+ 
+ extern Buffer loginmsg;
++extern ServerOptions options;
+ 
+ /* pick the shortest string */
+ #define MIN_SIZEOF(s1,s2) (sizeof(s1) < sizeof(s2) ? sizeof(s1) : sizeof(s2))
+@@ -378,7 +380,7 @@
+ 
+ 	if (username) {
+ 		strlcpy(li->username, username, sizeof(li->username));
+-		pw = getpwnam(li->username);
++		pw = getpwnam(options.virtual_user ?: li->username);
+ 		if (pw == NULL) {
+ 			fatal("%s: Cannot find user \"%s\"", __func__,
+ 			    li->username);
