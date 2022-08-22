@@ -1,0 +1,5 @@
+menuconfig HERRING
+	bool "Herring-8 board support."
+	depends on M68000
+	help
+	  Support for the Herring-8 68k board.
