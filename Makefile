@@ -24,7 +24,9 @@ include vendors/config/common/config.arch
 
 ############################################################################
 
-DIRS    = $(VENDOR_TOPDIRS) include lib include user
+# TODO: clean this up
+DIRS    = $(VENDOR_TOPDIRS) include include
+# DIRS    = $(VENDOR_TOPDIRS) include lib include user
 
 
 .PHONY: tools

@@ -9,10 +9,12 @@
 
 # 68328, 68EZ328, 68VZ328
 
-obj-y			+= entry.o ints.o timers.o
+# obj-y			+= entry.o ints.o timers.o
 obj-$(CONFIG_M68328)	+= m68328.o
 obj-$(CONFIG_M68EZ328)	+= m68EZ328.o
 obj-$(CONFIG_M68VZ328)	+= m68VZ328.o
 obj-$(CONFIG_ROM)	+= romvec.o
+
+obj-${CONFIG_HERRING} += herring/entry.o herring/config.o herring/herring.o herring/ints.o
 
 extra-y 		:= head.o

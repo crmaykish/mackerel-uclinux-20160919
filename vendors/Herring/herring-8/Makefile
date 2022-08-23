@@ -49,46 +49,9 @@ clean:
 	for i in $$dirs; do [ ! -d $$i ] || make -C $$i clean; done
 
 romfs:
-	[ -d $(ROMFSDIR)/$$i ] || mkdir -p $(ROMFSDIR)
-	for i in $(ROMFS_DIRS); do \
-		[ -d $(ROMFSDIR)/$$i ] || mkdir -p $(ROMFSDIR)/$$i; \
-	done
-	for i in $(DEVICES); do \
-		touch $(ROMFSDIR)/dev/@$$i; \
-	done
-	# these permissions are needed for openpty and family to work
-	# on non-ptmx ptys
-	chmod 620 $(ROMFSDIR)/dev/@[pt]ty[pqrsPQRS][0-9a-f],*
-	dirs=$(DIRS) ; for i in $$dirs; do  make -C $$i romfs || exit $? ; done
-	$(ROMFSINST) -s /var/tmp /tmp
-	$(ROMFSINST) -s /bin /sbin
-	$(ROMFSINST) /etc/rc
-	$(ROMFSINST) /etc/inittab
-	$(ROMFSINST) ../../Generic/romfs/etc/services /etc/services
-	$(ROMFSINST) /etc/motd
-	if [ -f passwd.$(LIBCDIR) ]; then \
-		$(ROMFSINST) passwd.$(LIBCDIR) /etc/passwd; \
-	else \
-		$(ROMFSINST) /etc/passwd; \
-	fi
-	if [ -f group.$(LIBCDIR) ]; then \
-		$(ROMFSINST) group.$(LIBCDIR) /etc/group; \
-	fi
-	$(ROMFSINST) ../../Generic/httpd /home/httpd
-	echo "$(VERSIONSTR) -- " `date` > $(ROMFSDIR)/etc/version
+	echo "skipping ROMFS"
+
 
 image:
 	[ -d $(IMAGEDIR) ] || mkdir -p $(IMAGEDIR)
-	genromfs -v -V "ROMdisk" -f $(ROMFSIMG) -d $(ROMFSDIR)
-	$(CROSS_COMPILE)objcopy -O binary --remove-section=.romvec \
-			--remove-section=.text --remove-section=.ramvec \
-			--remove-section=.bss --remove-section=.eram \
-			$(ROOTDIR)/$(LINUXDIR)/linux $(IMAGEDIR)/linux.data
-	$(CROSS_COMPILE)objcopy -O binary --remove-section=.ramvec \
-			--remove-section=.bss --remove-section=.data \
-			--remove-section=.eram \
-			--set-section-flags=.romvec=CONTENTS,ALLOC,LOAD,READONLY,CODE \
-			$(ROOTDIR)/$(LINUXDIR)/linux $(IMAGEDIR)/linux.text
-	cat $(IMAGEDIR)/linux.text $(IMAGEDIR)/linux.data $(ROMFSIMG) > $(IMAGE)
-	[ -n "$(NO_BUILD_INTO_TFTPBOOT)" ] || cp $(IMAGE) /tftpboot
-
+	$(CROSS_COMPILE)objcopy -O binary $(ROOTDIR)/$(LINUXDIR)/vmlinux $(IMAGE)
