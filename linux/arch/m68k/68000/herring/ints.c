@@ -11,7 +11,7 @@ asmlinkage irqreturn_t inthandler1(void);
 
 void process_int(int vec, struct pt_regs *fp)
 {
-    MEM(MFP_GPDR) += 1;
+    MEM(DUART_OPR_RESET); // Stop counter, i.e. reset the timer
 
     // TODO: hardcoded to 1, use the vec param?
     do_IRQ(1, fp);
@@ -38,7 +38,7 @@ void __init trap_init(void)
     printk("Herring trap_init()\r\n");
 
     _ramvec[32] = system_call;
-    _ramvec[0x48] = inthandler1;
+    _ramvec[0x40] = inthandler1;
 
     // TODO: map everything else to bad interrupt handler
 }

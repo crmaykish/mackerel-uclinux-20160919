@@ -1,34 +1,42 @@
 #ifndef _HERRING_H
 #define _HERRING_H
 
-// MC68901 Multi-function Peripheral
+// MC68681P DUART
+#define DUART_BASE 0x3E0000
+#define DUART_MR1A (DUART_BASE + 0x01)
+#define DUART_MR2A (DUART_BASE + 0x01)
+#define DUART_SRA (DUART_BASE + 0x03)
+#define DUART_CSRA (DUART_BASE + 0x03)
+#define DUART_CRA (DUART_BASE + 0x05)
+#define DUART_RBA (DUART_BASE + 0x07)
+#define DUART_TBA (DUART_BASE + 0x07)
+#define DUART_ACR (DUART_BASE + 0x09)
+#define DUART_ISR (DUART_BASE + 0x0B)
+#define DUART_IMR (DUART_BASE + 0x0B)
+#define DUART_CUR (DUART_BASE + 0x0D)
+#define DUART_CLR (DUART_BASE + 0x0F)
 
-#define MFP_GPDR 0x3F0001
-#define MFP_DDR 0x3F0005
-#define MFP_IERA 0x3F0007
-#define MFP_IERB 0x3F0009
-#define MFP_IMRA 0x3F0013
-#define MFP_IMRB 0x3F0015
-#define MFP_TACR 0x3F0019
-#define MFP_TBCR 0x3F001B
-#define MFP_TCDCR 0x3F001D
-#define MFP_TADR 0x3F001F
-#define MFP_TBDR 0x3F0021
-#define MFP_TCDR 0x3F0023
-#define MFP_TDDR 0x3F0015
-#define MFP_VR 0x3F0017  // Vector Register
-#define MFP_UCR 0x3F0029 // USART Control Register
-#define MFP_RSR 0x3F002B // USART Receiver Status Register
-#define MFP_TSR 0x3F002D // USART Transmitter Status Register
-#define MFP_UDR 0x3F002F // USART Data Register
+#define DUART_MR1B (DUART_BASE + 0x11)
+#define DUART_MR2B (DUART_BASE + 0x11)
+#define DUART_SRB (DUART_BASE + 0x13)
+#define DUART_CSRB (DUART_BASE + 0x13)
+#define DUART_CRB (DUART_BASE + 0x15)
+#define DUART_RBB (DUART_BASE + 0x17)
+#define DUART_TBB (DUART_BASE + 0x17)
+
+#define DUART_IVR (DUART_BASE + 0x19)
+#define DUART_OPCR (DUART_BASE + 0x1B)
+#define DUART_OPR (DUART_BASE + 0x1D)
+#define DUART_OPR_RESET (DUART_BASE + 0x1F)
 
 // Get the value at a memory address
 #define MEM(address) (*(volatile unsigned char *)(address))
 
-// MFP
-// void mfp_init(void);
-void mfp_putc(char s);
-void mfp_puts(const char *s);
-// char mfp_getc(void);
+
+// DUART
+void duart_init(void);
+void duart_putc(char c);
+void duart_puts(const char *s);
+char duart_getc(void);
 
 #endif

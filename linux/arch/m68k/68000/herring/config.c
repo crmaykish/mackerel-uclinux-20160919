@@ -42,7 +42,7 @@ static cycle_t mackerel_read_clk(struct clocksource *cs)
 	u32 cycles;
 
 	local_irq_save(flags);
-	cycles = mackerel_tick_count + MEM(MFP_TBDR);	// TODO: This is definitely not the right value
+	cycles = mackerel_tick_count + 100;	// TODO: This is definitely not the right value
 	local_irq_restore(flags);
 
 	return cycles;
@@ -62,12 +62,13 @@ void mackerel_sched_init(irq_handler_t handler)
 
     setup_irq(1, &mackerel_timer_irq);
 
-    // // Set MFP Timer B to run at 36 Hz and trigger an interrupt on every tick
-    MEM(MFP_TBDR) = 0;         // Timer B counter max (i.e 255);
-    MEM(MFP_TBCR) = 0b0010111; // Timer B enabled, delay mode, /200 prescalar
-    MEM(MFP_VR) = 0x40;        // Set base vector for MFP interrupt handlers
-    MEM(MFP_IERA) = 0x01;      // Enable interrupts for Timer B
-    MEM(MFP_IMRA) = 0x01;      // Unmask interrupt for Timer B
+    // Setup DUART timer as 50 Hz interrupt
+    MEM(DUART_IVR) = 0x40;       // Interrupt base register
+    MEM(DUART_ACR) = 0xF0;       // Set timer mode X/16
+    MEM(DUART_IMR) = 0b00001000; // Unmask counter interrupt
+    MEM(DUART_CUR) = 0x09;       // Counter upper byte, (3.6864MHz / 2 / 16 / 0x900) = 50 Hz
+    MEM(DUART_CLR) = 0x00;       // Counter lower byte
+    MEM(DUART_OPR);              // Start counter
 
     clocksource_register_hz(&mackerel_clk, 10 * 100); // TODO: this should be calculated properly from the interrupt rate and CPU speed and all that
 

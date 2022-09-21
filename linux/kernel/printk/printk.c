@@ -1907,7 +1907,7 @@ asmlinkage __visible int printk(const char *fmt, ...)
 	char buf[512];
 	va_start(args, fmt);
 	r = vscnprintf(buf, sizeof(buf), fmt, args);
-	mfp_puts(buf);
+	duart_puts(buf);
 	va_end(args);
 
 	return r;
