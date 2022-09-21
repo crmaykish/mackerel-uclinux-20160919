@@ -31,8 +31,6 @@ static struct irqaction mackerel_timer_irq = {
 
 void mackerel_reset(void)
 {
-    printk("mackerel_reset()\r\n");
-
     local_irq_disable();
 }
 
@@ -58,8 +56,6 @@ static struct clocksource mackerel_clk = {
 
 void mackerel_sched_init(irq_handler_t handler)
 {
-    printk("mackerel_sched_init()\r\n");
-
     setup_irq(1, &mackerel_timer_irq);
 
     // Setup DUART timer as 50 Hz interrupt

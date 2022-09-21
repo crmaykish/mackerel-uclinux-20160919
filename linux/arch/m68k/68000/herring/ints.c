@@ -35,8 +35,6 @@ static struct irq_chip intc_irq_chip = {
 
 void __init trap_init(void)
 {
-    printk("Herring trap_init()\r\n");
-
     _ramvec[32] = system_call;
     _ramvec[0x40] = inthandler1;
 
@@ -46,8 +44,6 @@ void __init trap_init(void)
 void __init init_IRQ(void)
 {
     int i;
-
-    printk("Herring init_IRQ()\r\n");
 
     for (i = 0; (i < NR_IRQS); i++)
     {
