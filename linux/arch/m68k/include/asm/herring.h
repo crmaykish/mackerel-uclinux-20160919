@@ -34,9 +34,7 @@
 
 
 // DUART
-void duart_init(void);
 void duart_putc(char c);
-void duart_puts(const char *s);
 char duart_getc(void);
 
 #endif

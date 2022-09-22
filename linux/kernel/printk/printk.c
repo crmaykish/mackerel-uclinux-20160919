@@ -47,8 +47,6 @@
 #include <linux/ctype.h>
 #include <linux/uio.h>
 
-#include <asm/herring.h>
-
 #include <asm/uaccess.h>
 
 #define CREATE_TRACE_POINTS
@@ -1900,18 +1898,6 @@ DEFINE_PER_CPU(printk_func_t, printk_func) = vprintk_default;
  */
 asmlinkage __visible int printk(const char *fmt, ...)
 {
-#ifdef CONFIG_HERRING
-	va_list args;
-	int r;
-
-	char buf[512];
-	va_start(args, fmt);
-	r = vscnprintf(buf, sizeof(buf), fmt, args);
-	duart_puts(buf);
-	va_end(args);
-
-	return r;
-#else
 	printk_func_t vprintk_func;
 	va_list args;
 	int r;
@@ -1930,7 +1916,6 @@ asmlinkage __visible int printk(const char *fmt, ...)
 	va_end(args);
 
 	return r;
-	#endif
 }
 EXPORT_SYMBOL(printk);
 
