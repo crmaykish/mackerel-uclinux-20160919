@@ -49,9 +49,39 @@ clean:
 	for i in $$dirs; do [ ! -d $$i ] || make -C $$i clean; done
 
 romfs:
-	echo "skipping ROMFS"
+	[ -d $(ROMFSDIR)/$$i ] || mkdir -p $(ROMFSDIR)
+
+	for i in $(ROMFS_DIRS); do \
+		[ -d $(ROMFSDIR)/$$i ] || mkdir -p $(ROMFSDIR)/$$i; \
+	done
+
+	for i in $(DEVICES); do \
+		touch $(ROMFSDIR)/dev/@$$i; \
+	done
+
+	# these permissions are needed for openpty and family to work
+	# on non-ptmx ptys
+	chmod 620 $(ROMFSDIR)/dev/@[pt]ty[pqrsPQRS][0-9a-f],*
+
+	$(ROMFSINST) -s /var/tmp /tmp
+	$(ROMFSINST) ../../Generic/romfs /
+	$(ROMFSINST) ../../Generic/httpd /home/httpd
+	$(ROMFSINST) ../../Generic/big/inittab /etc/inittab
+
+	if [ $(CONFIG_BLK_DEV_INITRD) = "y" ]; then \
+		ln -sf bin/init $(ROMFSDIR)/linuxrc; \
+	fi
+
+	echo "$(VERSIONSTR) -- " `date` > $(ROMFSDIR)/etc/version
 
 
 image:
 	[ -d $(IMAGEDIR) ] || mkdir -p $(IMAGEDIR)
-	$(CROSS_COMPILE)objcopy -O binary $(ROOTDIR)/$(LINUXDIR)/vmlinux $(IMAGE)
+
+	genromfs -v -V "ROMdisk" -f $(ROMFSIMG) -d $(ROMFSDIR)
+
+	$(CROSS)objcopy -O binary $(ROOTDIR)/$(LINUXDIR)/linux $(IMAGEDIR)/linux.bin
+
+	cat $(IMAGEDIR)/linux.bin $(ROMFSIMG) > $(IMAGE)
+
+	$(ROOTDIR)/tools/cksum -b -o 2 $(IMAGE) >> $(IMAGE)
