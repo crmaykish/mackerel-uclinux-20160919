@@ -80,8 +80,9 @@ image:
 
 	genromfs -v -V "ROMdisk" -f $(ROMFSIMG) -d $(ROMFSDIR)
 
-	$(CROSS)objcopy -O binary $(ROOTDIR)/$(LINUXDIR)/linux $(IMAGEDIR)/linux.bin
+	# === 
 
-	cat $(IMAGEDIR)/linux.bin $(ROMFSIMG) > $(IMAGE)
+	$(CROSS)objcopy -O binary $(ROOTDIR)/$(LINUXDIR)/linux $(IMAGE)
 
-	$(ROOTDIR)/tools/cksum -b -o 2 $(IMAGE) >> $(IMAGE)
+	#$(CROSS)objcopy -O binary $(ROOTDIR)/$(LINUXDIR)/linux $(IMAGEDIR)/linux.bin
+	# cat $(IMAGEDIR)/linux.bin $(ROMFSIMG) > $(IMAGE)

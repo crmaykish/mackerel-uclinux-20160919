@@ -24,16 +24,19 @@
 
 /****************************************************************************/
 
-#if defined(CONFIG_MTD_UCLINUX_EBSS)
+// #if defined(CONFIG_MTD_UCLINUX_EBSS)
+// #define MAP_NAME	"ram"
+// #define CONFIG_MTD_UCLINUX_ADDRESS __bss_stop
+// #elif defined(CONFIG_MTD_UCLINUX_RAM)
+// #define MAP_NAME	"ram"
+// #elif defined(CONFIG_MTD_UCLINUX_ROM)
+// #define MAP_NAME	"rom"
+// #else
+// #error "Unknown uClinux map type"
+// #endif
+
 #define MAP_NAME	"ram"
-#define CONFIG_MTD_UCLINUX_ADDRESS __bss_stop
-#elif defined(CONFIG_MTD_UCLINUX_RAM)
-#define MAP_NAME	"ram"
-#elif defined(CONFIG_MTD_UCLINUX_ROM)
-#define MAP_NAME	"rom"
-#else
-#error "Unknown uClinux map type"
-#endif
+#define CONFIG_MTD_UCLINUX_ADDRESS 0x300000
 
 /****************************************************************************/
 
@@ -82,6 +85,8 @@ static int __init uclinux_mtd_init(void)
 	struct map_info *mapp;
 
 	mapp = &uclinux_ram_map;
+
+	printk("MTD init address: %X\r", CONFIG_MTD_UCLINUX_ADDRESS);
 
 	if (physaddr == -1)
 		mapp->phys = (resource_size_t) CONFIG_MTD_UCLINUX_ADDRESS;
