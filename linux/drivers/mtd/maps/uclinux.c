@@ -24,19 +24,19 @@
 
 /****************************************************************************/
 
-// #if defined(CONFIG_MTD_UCLINUX_EBSS)
-// #define MAP_NAME	"ram"
-// #define CONFIG_MTD_UCLINUX_ADDRESS __bss_stop
-// #elif defined(CONFIG_MTD_UCLINUX_RAM)
-// #define MAP_NAME	"ram"
-// #elif defined(CONFIG_MTD_UCLINUX_ROM)
-// #define MAP_NAME	"rom"
-// #else
-// #error "Unknown uClinux map type"
-// #endif
-
+#if defined CONFIG_HERRING
 #define MAP_NAME	"ram"
 #define CONFIG_MTD_UCLINUX_ADDRESS 0x300000
+#elif defined(CONFIG_MTD_UCLINUX_EBSS)
+#define MAP_NAME	"ram"
+#define CONFIG_MTD_UCLINUX_ADDRESS __bss_stop
+#elif defined(CONFIG_MTD_UCLINUX_RAM)
+#define MAP_NAME	"ram"
+#elif defined(CONFIG_MTD_UCLINUX_ROM)
+#define MAP_NAME	"rom"
+#else
+#error "Unknown uClinux map type"
+#endif
 
 /****************************************************************************/
 
