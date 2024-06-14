@@ -50,22 +50,32 @@ clean:
 
 romfs:
 	[ -d $(ROMFSDIR)/$$i ] || mkdir -p $(ROMFSDIR)
-
 	for i in $(ROMFS_DIRS); do \
 		[ -d $(ROMFSDIR)/$$i ] || mkdir -p $(ROMFSDIR)/$$i; \
 	done
-
 	for i in $(DEVICES); do \
 		touch $(ROMFSDIR)/dev/@$$i; \
 	done
-
 	# these permissions are needed for openpty and family to work
 	# on non-ptmx ptys
 	chmod 620 $(ROMFSDIR)/dev/@[pt]ty[pqrsPQRS][0-9a-f],*
-
+	dirs=$(DIRS) ; for i in $$dirs; do  make -C $$i romfs || exit $? ; done
 	$(ROMFSINST) -s /var/tmp /tmp
-	$(ROMFSINST) ../../Generic/romfs /
+	$(ROMFSINST) -s /bin /sbin
+	$(ROMFSINST) /etc/rc
+	$(ROMFSINST) /etc/inittab
+	$(ROMFSINST) ../../Generic/romfs/etc/services /etc/services
+	$(ROMFSINST) /etc/motd
+	if [ -f passwd.$(LIBCDIR) ]; then \
+		$(ROMFSINST) passwd.$(LIBCDIR) /etc/passwd; \
+	else \
+		$(ROMFSINST) /etc/passwd; \
+	fi
+	if [ -f group.$(LIBCDIR) ]; then \
+		$(ROMFSINST) group.$(LIBCDIR) /etc/group; \
+	fi
 	$(ROMFSINST) ../../Generic/httpd /home/httpd
+	
 	$(ROMFSINST) ../../Generic/big/inittab /etc/inittab
 
 	if [ $(CONFIG_BLK_DEV_INITRD) = "y" ]; then \
@@ -74,13 +84,10 @@ romfs:
 
 	echo "$(VERSIONSTR) -- " `date` > $(ROMFSDIR)/etc/version
 
-
 image:
 	[ -d $(IMAGEDIR) ] || mkdir -p $(IMAGEDIR)
 
 	genromfs -v -V "ROMdisk" -f $(ROMFSIMG) -d $(ROMFSDIR)
-
-	# === 
 
 	$(CROSS)objcopy -O binary $(ROOTDIR)/$(LINUXDIR)/linux $(IMAGE)
 
