@@ -1,5 +1,5 @@
-#ifndef _HERRING_H
-#define _HERRING_H
+#ifndef _MACKEREL_H
+#define _MACKEREL_H
 
 // MC68681P DUART
 #define DUART_BASE 0x3E0000

@@ -15,6 +15,6 @@ obj-$(CONFIG_M68EZ328)	+= m68EZ328.o
 obj-$(CONFIG_M68VZ328)	+= m68VZ328.o
 obj-$(CONFIG_ROM)	+= romvec.o
 
-obj-${CONFIG_HERRING} += herring/entry.o herring/config.o herring/herring.o herring/ints.o
+obj-${CONFIG_MACKEREL} += mackerel/entry.o mackerel/config.o mackerel/mackerel.o mackerel/ints.o
 
 extra-y 		:= head.o

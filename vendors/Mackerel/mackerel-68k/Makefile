@@ -1,6 +1,5 @@
 #
-#	Makefile -- Build instructions for Arcturus/uCsimm
-#
+#	Makefile -- Build instructions for Mackerel-68k
 
 ROMFSIMG = $(IMAGEDIR)/romfs.img
 IMAGE    = $(IMAGEDIR)/image.bin

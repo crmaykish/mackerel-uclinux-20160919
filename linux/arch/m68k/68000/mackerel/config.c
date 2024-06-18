@@ -12,7 +12,7 @@
 #include <linux/signal.h>
 #include <linux/ptrace.h>
 #include <linux/console.h>
-#include <asm/herring.h>
+#include <asm/mackerel.h>
 #include <asm/irq.h>
 
 static u32 mackerel_tick_count;
@@ -92,7 +92,7 @@ void mackerel_sched_init(irq_handler_t handler)
 
 void __init config_BSP(char *command, int len)
 {
-	printk(KERN_INFO "\Herring-8 68k support by Colin Maykish <crmaykish@gmail.com>\n");
+	printk(KERN_INFO "Mackerel 68k support by Colin Maykish <crmaykish@gmail.com>\n");
 
 	mach_reset = mackerel_reset;
 	mach_sched_init = mackerel_sched_init;

@@ -1,4 +1,4 @@
-#include <asm/herring.h>
+#include <asm/mackerel.h>
 
 void duart_putc(char c)
 {

@@ -4,7 +4,7 @@
 #include <linux/irq.h>
 #include <asm/traps.h>
 #include <asm/machdep.h>
-#include <asm/herring.h>
+#include <asm/mackerel.h>
 
 asmlinkage void system_call(void);
 asmlinkage irqreturn_t inthandler1(void);
@@ -28,7 +28,7 @@ static void intc_irq_mask(struct irq_data *d)
 }
 
 static struct irq_chip intc_irq_chip = {
-    .name = "HERRING-INTC",
+    .name = "MACKEREL-INTC",
     .irq_mask = intc_irq_mask,
     .irq_unmask = intc_irq_unmask,
 };
