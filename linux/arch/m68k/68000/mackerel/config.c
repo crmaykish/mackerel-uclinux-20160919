@@ -12,8 +12,8 @@
 #include <linux/signal.h>
 #include <linux/ptrace.h>
 #include <linux/console.h>
-#include <asm/mackerel.h>
 #include <asm/irq.h>
+#include <asm/mackerel.h>
 
 static u32 mackerel_tick_count;
 static irq_handler_t timer_interrupt;
@@ -30,7 +30,7 @@ static void mackerel_console_write(struct console *co, const char *str, unsigned
 }
 
 static struct console mackerel_console_driver = {
-	.name = "mackconsole",
+	.name = "ttyS",
 	.flags = CON_PRINTBUFFER,
 	.index = -1,
 	.write = mackerel_console_write
@@ -38,6 +38,8 @@ static struct console mackerel_console_driver = {
 
 static irqreturn_t hw_tick(int irq, void *dummy)
 {
+	MEM(DUART_OPR_RESET); // Stop counter, i.e. reset the timer
+
 	mackerel_tick_count += 10;
 	return timer_interrupt(irq, dummy);
 }
@@ -75,12 +77,12 @@ static struct clocksource mackerel_clk = {
 
 void mackerel_sched_init(irq_handler_t handler)
 {
+	// TODO: use real vector
 	setup_irq(1, &mackerel_timer_irq);
 
 	// Setup DUART timer as 50 Hz interrupt
-	MEM(DUART_IVR) = 0x40;		 // Interrupt base register
 	MEM(DUART_ACR) = 0xF0;		 // Set timer mode X/16
-	MEM(DUART_IMR) = 0b00001000; // Unmask counter interrupt
+	MEM(DUART_IMR) = DUART_INTR_COUNTER; // Unmask counter interrupt
 	MEM(DUART_CUR) = 0x09;		 // Counter upper byte, (3.6864MHz / 2 / 16 / 0x900) = 50 Hz
 	MEM(DUART_CLR) = 0x00;		 // Counter lower byte
 	MEM(DUART_OPR);				 // Start counter

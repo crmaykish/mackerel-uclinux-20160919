@@ -24,7 +24,7 @@
 
 /****************************************************************************/
 
-#if defined CONFIG_HERRING
+#ifdef CONFIG_MACKEREL
 #define MAP_NAME	"ram"
 #define CONFIG_MTD_UCLINUX_ADDRESS 0x300000
 #elif defined(CONFIG_MTD_UCLINUX_EBSS)
@@ -86,7 +86,7 @@ static int __init uclinux_mtd_init(void)
 
 	mapp = &uclinux_ram_map;
 
-	printk("MTD init address: %X\r", CONFIG_MTD_UCLINUX_ADDRESS);
+	printk(KERN_WARNING "MTD init address: %X\r", CONFIG_MTD_UCLINUX_ADDRESS);
 
 	if (physaddr == -1)
 		mapp->phys = (resource_size_t) CONFIG_MTD_UCLINUX_ADDRESS;

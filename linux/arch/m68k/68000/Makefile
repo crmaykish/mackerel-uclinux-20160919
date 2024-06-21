@@ -9,12 +9,12 @@
 
 # 68328, 68EZ328, 68VZ328
 
-# obj-y			+= entry.o ints.o timers.o
+obj-y			+= entry.o ints.o timers.o
 obj-$(CONFIG_M68328)	+= m68328.o
 obj-$(CONFIG_M68EZ328)	+= m68EZ328.o
 obj-$(CONFIG_M68VZ328)	+= m68VZ328.o
 obj-$(CONFIG_ROM)	+= romvec.o
 
-obj-${CONFIG_MACKEREL} += mackerel/entry.o mackerel/config.o mackerel/mackerel.o mackerel/ints.o
+obj-${CONFIG_MACKEREL} += mackerel/config.o mackerel/mackerel.o
 
 extra-y 		:= head.o

@@ -2,7 +2,7 @@
 #	Makefile -- Build instructions for Mackerel-68k
 
 ROMFSIMG = $(IMAGEDIR)/romfs.img
-IMAGE    = $(IMAGEDIR)/image.bin
+IMAGE    = $(IMAGEDIR)/mackerel.bin
 
 DIRS = 
 

@@ -1,11 +1,17 @@
 #!/bin/sh
 
-PORT=/dev/ttyACM0
-IMAGE_FILE="images/image.bin"
+PORT=/dev/ttyUSB0
+IMAGE_FILE="images/mackerel.bin"
+ROMFS_FILE="images/romfs.img"
 
-ls -lah "$IMAGE_FILE"
+echo "Copying ROMFS, size: $(stat --printf="%s" $ROMFS_FILE)"
+echo "load 300000" > $PORT
+sleep 1
+ctt -p $PORT -f "$ROMFS_FILE"
 
-echo "Copying Linux image..."
+sleep 1
+
+echo "Copying Linux image, size: $(stat --printf="%s" $IMAGE_FILE)"
 echo "load" > $PORT
 sleep 1
 ctt -p $PORT -f "$IMAGE_FILE"

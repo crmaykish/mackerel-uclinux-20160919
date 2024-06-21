@@ -24,6 +24,8 @@
 #include <asm/MC68EZ328.h>
 #elif defined(CONFIG_M68VZ328)
 #include <asm/MC68VZ328.h>
+#elif defined(CONFIG_MACKEREL)
+#include <asm/mackerel.h>
 #endif
 
 /* assembler routines */
@@ -76,6 +78,10 @@ asmlinkage irqreturn_t inthandler7(void);
  */
 void process_int(int vec, struct pt_regs *fp)
 {
+#ifdef CONFIG_MACKEREL
+	// TODO use the correct vector
+	do_IRQ(1, fp);
+#else
 	int irq;
 	int mask;
 
@@ -128,16 +134,21 @@ void process_int(int vec, struct pt_regs *fp)
 		do_IRQ(irq, fp);
 		pend &= ~mask;
 	}
+#endif
 }
 
 static void intc_irq_unmask(struct irq_data *d)
 {
+#ifndef CONFIG_MACKEREL
 	IMR &= ~(1 << d->irq);
+#endif
 }
 
 static void intc_irq_mask(struct irq_data *d)
 {
+#ifndef CONFIG_MACKEREL
 	IMR |= (1 << d->irq);
+#endif
 }
 
 static struct irq_chip intc_irq_chip = {
@@ -154,6 +165,13 @@ void __init trap_init(void)
 {
 	int i;
 
+#ifdef CONFIG_MACKEREL
+	_ramvec[32] = system_call;
+	_ramvec[VEC_DUART] = (e_vector) inthandler1;
+
+	for (i = VEC_DUART+1; i < 256; ++i)
+		_ramvec[i] = (e_vector) bad_interrupt;
+#else
 	/* set up the vectors */
 	for (i = 72; i < 256; ++i)
 		_ramvec[i] = (e_vector) bad_interrupt;
@@ -167,20 +185,29 @@ void __init trap_init(void)
 	_ramvec[69] = (e_vector) inthandler5;
 	_ramvec[70] = (e_vector) inthandler6;
 	_ramvec[71] = (e_vector) inthandler7;
+
+#endif
 }
 
 void __init init_IRQ(void)
 {
 	int i;
 
+#ifdef CONFIG_MACKEREL
+	// Mask all DUART interrupts (our only interrupt source)
+	MEM(DUART_IMR) = 0x00;
+
+	// Set DUART interrupt vector
+	MEM(DUART_IVR) = VEC_DUART;		 // Interrupt base register
+#else
 	IVR = 0x40; /* Set DragonBall IVR (interrupt base) to 64 */
 
 	/* turn off all interrupts */
 	IMR = ~0;
+#endif
 
 	for (i = 0; (i < NR_IRQS); i++) {
 		irq_set_chip(i, &intc_irq_chip);
 		irq_set_handler(i, handle_level_irq);
 	}
 }
-
