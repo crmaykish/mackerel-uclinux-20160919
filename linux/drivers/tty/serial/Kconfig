@@ -1661,6 +1661,15 @@ config SERIAL_STM32_CONSOLE
 	depends on SERIAL_STM32=y
 	select SERIAL_CORE_CONSOLE
 
+
+config SERIAL_XR68C681
+    bool "XR68C681 serial port support"
+    select SERIAL_CORE
+	select SERIAL_CORE_CONSOLE
+    help
+        Support for XR68C681 DUART
+
+
 endmenu
 
 config SERIAL_MCTRL_GPIO

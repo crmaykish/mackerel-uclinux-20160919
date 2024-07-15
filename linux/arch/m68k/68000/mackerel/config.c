@@ -30,11 +30,10 @@ static void mackerel_console_write(struct console *co, const char *str, unsigned
 }
 
 static struct console mackerel_console_driver = {
-	.name = "ttyS",
-	.flags = CON_PRINTBUFFER,
+	.name = "mackserial",
+	.flags = CON_PRINTBUFFER | CON_BOOT,
 	.index = -1,
-	.write = mackerel_console_write
-};
+	.write = mackerel_console_write};
 
 static irqreturn_t hw_tick(int irq, void *dummy)
 {
@@ -81,11 +80,11 @@ void mackerel_sched_init(irq_handler_t handler)
 	setup_irq(1, &mackerel_timer_irq);
 
 	// Setup DUART timer as 50 Hz interrupt
-	MEM(DUART_ACR) = 0xF0;		 // Set timer mode X/16
+	MEM(DUART_ACR) = 0xF0;				 // Set timer mode X/16
 	MEM(DUART_IMR) = DUART_INTR_COUNTER; // Unmask counter interrupt
-	MEM(DUART_CUR) = 0x09;		 // Counter upper byte, (3.6864MHz / 2 / 16 / 0x900) = 50 Hz
-	MEM(DUART_CLR) = 0x00;		 // Counter lower byte
-	MEM(DUART_OPR);				 // Start counter
+	MEM(DUART_CUR) = 0x09;				 // Counter upper byte, (3.6864MHz / 2 / 16 / 0x900) = 50 Hz
+	MEM(DUART_CLR) = 0x00;				 // Counter lower byte
+	MEM(DUART_OPR);						 // Start counter
 
 	clocksource_register_hz(&mackerel_clk, 10 * 100); // TODO: this should be calculated properly from the interrupt rate and CPU speed and all that
 

@@ -24,10 +24,7 @@
 
 /****************************************************************************/
 
-#ifdef CONFIG_MACKEREL
-#define MAP_NAME	"ram"
-#define CONFIG_MTD_UCLINUX_ADDRESS 0x300000
-#elif defined(CONFIG_MTD_UCLINUX_EBSS)
+#if defined(CONFIG_MTD_UCLINUX_EBSS)
 #define MAP_NAME	"ram"
 #define CONFIG_MTD_UCLINUX_ADDRESS __bss_stop
 #elif defined(CONFIG_MTD_UCLINUX_RAM)

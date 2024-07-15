@@ -4,7 +4,7 @@
 #include <asm/traps.h>
 
 // MC68681P DUART
-#define DUART_BASE 0x3E0000
+#define DUART_BASE 0x3C0000
 #define DUART_MR1A (DUART_BASE + 0x01)
 #define DUART_MR2A (DUART_BASE + 0x01)
 #define DUART_SRA (DUART_BASE + 0x03)
