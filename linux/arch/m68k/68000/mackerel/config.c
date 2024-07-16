@@ -12,11 +12,37 @@
 #include <linux/signal.h>
 #include <linux/ptrace.h>
 #include <linux/console.h>
+#include <linux/platform_device.h>
 #include <asm/mackerel.h>
 #include <asm/irq.h>
 
 static u32 mackerel_tick_count;
 static irq_handler_t timer_interrupt;
+
+static struct resource uart_res[] = {
+	{
+		.start = DUART1_BASE,
+		.end = DUART1_BASE + 31,
+		.flags = IORESOURCE_MEM,
+	},
+	{
+		//         .start          = IRQ_USER + 12,
+		//         .end            = IRQ_USER + 12,
+		// TODO ?
+		.start = 1,
+		.end = 1,
+		.flags = IORESOURCE_IRQ,
+	}};
+
+/*
+ * UART device
+ */
+static struct platform_device xr68c681_duart_device = {
+	.name = "xr68c681-serial",
+	.id = 0,
+	.num_resources = ARRAY_SIZE(uart_res),
+	.resource = uart_res,
+};
 
 static void mackerel_console_write(struct console *co, const char *str, unsigned int count)
 {
@@ -31,7 +57,7 @@ static void mackerel_console_write(struct console *co, const char *str, unsigned
 
 static struct console mackerel_console_driver = {
 	.name = "mackconsole",
-	.flags = CON_PRINTBUFFER | CON_BOOT,
+	.flags = CON_PRINTBUFFER, // | CON_BOOT,
 	.index = -1,
 	.write = mackerel_console_write};
 
@@ -106,3 +132,23 @@ void __init config_BSP(char *command, int len)
 
 	register_console(&mackerel_console_driver);
 }
+
+int __init mackerel_platform_init(void)
+{
+
+	printk(KERN_INFO "Registering DUART device\n");
+
+	if (platform_device_register(&xr68c681_duart_device))
+	{
+		printk(KERN_ERR "Failed to register DUART\n");
+		panic("Could not register DUART device");
+	}
+	else
+	{
+		printk(KERN_INFO "Registered DUART\n");
+	}
+
+	return 0;
+}
+
+arch_initcall(mackerel_platform_init);
