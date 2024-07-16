@@ -77,6 +77,17 @@ static void xr68c681_stop_tx(struct uart_port *port)
 static unsigned int xr68c681_tx_empty(struct uart_port *port)
 {
 	// return (FTDI_STAT & FTDI_TXE) ? 0 : TIOCSER_TEMT;
+
+	// TODO: backwards?
+
+	if (MEM(DUART1_SRB) & 0b00000100)
+	{
+		return 1;
+	}
+	else
+	{
+		return 0;
+	}
 }
 
 static void xr68c681_tx_chars(struct xr68c681_uart_port *pp)
@@ -112,9 +123,22 @@ static void xr68c681_tx_chars(struct xr68c681_uart_port *pp)
 	// 	INT_CTRL &= ~FTDI_TXIE;
 }
 
+static void xr68c681_uart_putchar(struct uart_port *port, int ch) {
+	duart_putc(ch);
+}
+
 static void xr68c681_start_tx(struct uart_port *port)
 {
 	// INT_CTRL |= FTDI_TXIE;
+
+	struct circ_buf *xmit = &port->state->xmit;
+
+	while (!uart_circ_empty(xmit))
+	{
+		xr68c681_uart_putchar(port, xmit->buf[xmit->tail]);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		port->icount.tx++;
+	}
 }
 
 static void xr68c681_rx_chars(struct xr68c681_uart_port *pp)
@@ -178,6 +202,8 @@ static int xr68c681_startup(struct uart_port *port)
 	unsigned long flags;
 
 	spin_lock_irqsave(&port->lock, flags);
+
+	printk(KERN_INFO "startup()\n");
 
 	// INT_CTRL &= ~(FTDI_IEN | FTDI_RXIE | FTDI_TXIE);
 
@@ -287,8 +313,12 @@ static int xr68c681_console_setup(struct console *co, char *options)
 
 static void xr68c681_console_write(struct console *co, const char *s, unsigned int count)
 {
-	// TODO:
-	duart_putc('#');
+	struct uart_port *port = &xr68c681_uart_ports[co->index].port;
+	unsigned long flags;
+
+	spin_lock_irqsave(&port->lock, flags);
+	uart_console_write(port, s, count, xr68c681_uart_putchar);
+	spin_unlock_irqrestore(&port->lock, flags);
 }
 
 static struct console xr68c681_console = {
@@ -305,7 +335,6 @@ static struct console xr68c681_console = {
 
 static int xr68c681_probe(struct platform_device *pdev)
 {
-	printk(KERN_INFO "XR68C681 probe()\n");
 
 	// struct alce_platform_uart *platp = pdev->dev.platform_data;
 	// struct uart_port *port;
@@ -330,6 +359,21 @@ static int xr68c681_probe(struct platform_device *pdev)
 
 	// 	uart_add_one_port(&xr68c681_driver, port);
 	// }
+
+	struct uart_port *port = &xr68c681_uart_ports[pdev->id].port;
+
+	printk(KERN_INFO "XR68C681 probe()\n");
+
+	port->line = pdev->id;
+	port->ops = &xr68c681_uart_ops;
+	port->flags = ASYNC_BOOT_AUTOCONF; // TODO: UPF_?
+	port->mapbase = DUART1_BASE;	   // TODO fix
+	port->membase = DUART1_BASE;	   // TODO fix
+	port->uartclk = 1843200;
+	port->irq = 1; // TODO fix
+
+	uart_add_one_port(&xr68c681_driver, port);
+	// TODO: platform_set_drvdata?
 
 	return 0;
 }

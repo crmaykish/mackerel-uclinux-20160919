@@ -57,7 +57,7 @@ static void mackerel_console_write(struct console *co, const char *str, unsigned
 
 static struct console mackerel_console_driver = {
 	.name = "mackconsole",
-	.flags = CON_PRINTBUFFER, // | CON_BOOT,
+	.flags = CON_PRINTBUFFER | CON_BOOT,
 	.index = -1,
 	.write = mackerel_console_write};
 

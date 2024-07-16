@@ -4,6 +4,7 @@ void duart_putc(char c)
 {
     while ((MEM(DUART1_SRB) & 0b00000100) == 0)
     {
+        // cpu_relax();
     }
 
     MEM(DUART1_TBB) = c;
