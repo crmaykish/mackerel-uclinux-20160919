@@ -123,7 +123,8 @@ static void xr68c681_tx_chars(struct xr68c681_uart_port *pp)
 	// 	INT_CTRL &= ~FTDI_TXIE;
 }
 
-static void xr68c681_uart_putchar(struct uart_port *port, int ch) {
+static void xr68c681_uart_putchar(struct uart_port *port, int ch)
+{
 	duart_putc(ch);
 }
 
@@ -141,20 +142,31 @@ static void xr68c681_start_tx(struct uart_port *port)
 	}
 }
 
-static void xr68c681_rx_chars(struct xr68c681_uart_port *pp)
+static irqreturn_t xr68c681_rx_chars(struct xr68c681_uart_port *pp)
 {
 	struct uart_port *port = &pp->port;
-	unsigned char ch, flag;
+	unsigned char ch, status, flag;
 
-	// while (!(FTDI_STAT & FTDI_RXF)) {
-	// 	ch = FTDI_DATA;
-	// 	flag = TTY_NORMAL;
-	// 	port->icount.rx++;
+	// while ((MEM(DUART1_SRB) & 0b00000001) != 0)
+	// {
+	ch = MEM(DUART1_RBB);
+	status = MEM(DUART1_SRB);
+	flag = TTY_NORMAL;
+	port->icount.rx++;
 
-	// 	if (uart_handle_sysrq_char(port, ch))
-	// 		continue;
-	// 	tty_insert_flip_char(&port->state->port, ch, flag);
-	// }
+	uart_insert_char(port, status, 0, ch, flag);
+
+	spin_unlock(&port->lock);
+	tty_flip_buffer_push(&port->state->port);
+	spin_lock(&port->lock);
+
+	return IRQ_HANDLED;
+
+	// if (uart_handle_sysrq_char(port, ch))
+	// 	continue;
+
+	// tty_insert_flip_char(&port->state->port, ch, flag);
+	// // }
 
 	// tty_flip_buffer_push(&port->state->port);
 }
@@ -164,6 +176,8 @@ static irqreturn_t xr68c681_interrupt(int irq, void *data)
 	struct uart_port *port = data;
 	struct xr68c681_uart_port *pp = container_of(port, struct xr68c681_uart_port, port);
 	irqreturn_t ret = IRQ_NONE;
+
+	unsigned char misr;
 
 	unsigned long flags;
 
@@ -176,6 +190,17 @@ static irqreturn_t xr68c681_interrupt(int irq, void *data)
 	// 	xr68c681_tx_chars(pp);
 	// 	ret = IRQ_HANDLED;
 	// }
+
+	duart_putc('*');
+
+	// read the DUART MISR register to determine the source of the interrupt - serial or timer
+	misr = MEM(DUART1_MISR);
+
+	if (misr & DUART_INTR_RXRDY)
+	{
+		// Received characters
+		ret = xr68c681_rx_chars(pp);
+	}
 
 	return ret;
 }
@@ -207,6 +232,9 @@ static int xr68c681_startup(struct uart_port *port)
 
 	// INT_CTRL &= ~(FTDI_IEN | FTDI_RXIE | FTDI_TXIE);
 
+	MEM(DUART1_IVR) = 65; // Interrupt base register
+	MEM(DUART1_IMR) = 0;  // Disable all interrupts
+
 	if (request_irq(port->irq, xr68c681_interrupt, 0, "XR68C681UART", port))
 		printk(KERN_ERR "XR68C681UART: unable to attach XR68C681UART %d "
 						"interrupt vector=%d\n",
@@ -214,6 +242,8 @@ static int xr68c681_startup(struct uart_port *port)
 
 	/* Enable RX interrupts now */
 	// INT_CTRL |= FTDI_IEN | FTDI_RXIE;
+
+	MEM(DUART1_IMR) = DUART_INTR_RXRDY; // Enable just Rx interrupts
 
 	spin_unlock_irqrestore(&port->lock, flags);
 
