@@ -245,6 +245,11 @@ config USER_NOOOM_BINARIES
 	default ""
 	help
 
+comment "Colin's Test Tool"
+
+config USER_COLIN
+	bool "ctt"
+
 endmenu
 
 #############################################################################

@@ -172,8 +172,6 @@ static int xr68c681_startup(struct uart_port *port)
 
 	spin_lock_irqsave(&port->lock, flags);
 
-	printk(KERN_INFO "startup()\n");
-
 	MEM(DUART1_IVR) = 65; // Interrupt base register
 	MEM(DUART1_IMR) = 0;  // Disable all interrupts
 
