@@ -6,8 +6,7 @@ IMAGE    = $(IMAGEDIR)/image.bin
 
 DIRS = 
 
-ROMFS_DIRS = bin dev etc home lib mnt proc usr var \
-             home/httpd home/httpd/cgi-bin
+ROMFS_DIRS = bin dev etc home lib mnt proc usr var
 
 DEVICES = \
 	tty,c,5,0      console,c,5,1      cua0,c,5,64      cua1,c,5,65  \
@@ -73,10 +72,7 @@ romfs:
 	if [ -f group.$(LIBCDIR) ]; then \
 		$(ROMFSINST) group.$(LIBCDIR) /etc/group; \
 	fi
-	$(ROMFSINST) ../../Generic/httpd /home/httpd
 	
-	$(ROMFSINST) ../../Generic/big/inittab /etc/inittab
-
 	if [ $(CONFIG_BLK_DEV_INITRD) = "y" ]; then \
 		ln -sf bin/init $(ROMFSDIR)/linuxrc; \
 	fi

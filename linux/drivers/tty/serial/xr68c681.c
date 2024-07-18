@@ -66,18 +66,14 @@ static struct uart_driver xr68c681_driver = {
 
 static void xr68c681_stop_rx(struct uart_port *port)
 {
-	// INT_CTRL &= ~FTDI_RXIE;
 }
 
 static void xr68c681_stop_tx(struct uart_port *port)
 {
-	// INT_CTRL &= ~FTDI_TXIE;
 }
 
 static unsigned int xr68c681_tx_empty(struct uart_port *port)
 {
-	// return (FTDI_STAT & FTDI_TXE) ? 0 : TIOCSER_TEMT;
-
 	// TODO: backwards?
 
 	if (MEM(DUART1_SRB) & 0b00000100)
@@ -92,35 +88,7 @@ static unsigned int xr68c681_tx_empty(struct uart_port *port)
 
 static void xr68c681_tx_chars(struct xr68c681_uart_port *pp)
 {
-	// struct uart_port *port = &pp->port;
-	// struct circ_buf *xmit = &port->state->xmit;
-
-	// if (port->x_char) {
-	// 	/* Send special char - probably flow control */
-	// 	FTDI_DATA = port->x_char;
-	// 	port->x_char = 0;
-	// 	port->icount.tx++;
-	// 	return;
-	// }
-
-	// if (uart_circ_empty(xmit) || uart_tx_stopped(port)) {
-	// 	INT_CTRL &= ~FTDI_TXIE;
-	// 	return;
-	// }
-
-	// while (!(FTDI_STAT & FTDI_TXE)) {
-	// 	FTDI_DATA = xmit->buf[xmit->tail];
-	// 	xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE -1);
-	// 	port->icount.tx++;
-	// 	if (uart_circ_empty(xmit))
-	// 		break;
-	// }
-
-	// if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
-	// 	uart_write_wakeup(port);
-
-	// if (uart_circ_empty(xmit))
-	// 	INT_CTRL &= ~FTDI_TXIE;
+	// TODO? this is unused at the moment
 }
 
 static void xr68c681_uart_putchar(struct uart_port *port, int ch)
@@ -130,8 +98,6 @@ static void xr68c681_uart_putchar(struct uart_port *port, int ch)
 
 static void xr68c681_start_tx(struct uart_port *port)
 {
-	// INT_CTRL |= FTDI_TXIE;
-
 	struct circ_buf *xmit = &port->state->xmit;
 
 	while (!uart_circ_empty(xmit))
@@ -147,8 +113,6 @@ static irqreturn_t xr68c681_rx_chars(struct xr68c681_uart_port *pp)
 	struct uart_port *port = &pp->port;
 	unsigned char ch, status, flag;
 
-	// while ((MEM(DUART1_SRB) & 0b00000001) != 0)
-	// {
 	ch = MEM(DUART1_RBB);
 	status = MEM(DUART1_SRB);
 	flag = TTY_NORMAL;
@@ -161,14 +125,6 @@ static irqreturn_t xr68c681_rx_chars(struct xr68c681_uart_port *pp)
 	spin_lock(&port->lock);
 
 	return IRQ_HANDLED;
-
-	// if (uart_handle_sysrq_char(port, ch))
-	// 	continue;
-
-	// tty_insert_flip_char(&port->state->port, ch, flag);
-	// // }
-
-	// tty_flip_buffer_push(&port->state->port);
 }
 
 static irqreturn_t xr68c681_interrupt(int irq, void *data)
@@ -180,18 +136,6 @@ static irqreturn_t xr68c681_interrupt(int irq, void *data)
 	unsigned char misr;
 
 	unsigned long flags;
-
-	// if (!(FTDI_STAT & FTDI_RXF)) {
-	// 	xr68c681_rx_chars(pp);
-	// 	ret = IRQ_HANDLED;
-	// } else
-
-	// if (!(FTDI_STAT & FTDI_TXE)) {
-	// 	xr68c681_tx_chars(pp);
-	// 	ret = IRQ_HANDLED;
-	// }
-
-	duart_putc('*');
 
 	// read the DUART MISR register to determine the source of the interrupt - serial or timer
 	misr = MEM(DUART1_MISR);
@@ -230,8 +174,6 @@ static int xr68c681_startup(struct uart_port *port)
 
 	printk(KERN_INFO "startup()\n");
 
-	// INT_CTRL &= ~(FTDI_IEN | FTDI_RXIE | FTDI_TXIE);
-
 	MEM(DUART1_IVR) = 65; // Interrupt base register
 	MEM(DUART1_IMR) = 0;  // Disable all interrupts
 
@@ -239,9 +181,6 @@ static int xr68c681_startup(struct uart_port *port)
 		printk(KERN_ERR "XR68C681UART: unable to attach XR68C681UART %d "
 						"interrupt vector=%d\n",
 			   port->line, port->irq);
-
-	/* Enable RX interrupts now */
-	// INT_CTRL |= FTDI_IEN | FTDI_RXIE;
 
 	MEM(DUART1_IMR) = DUART_INTR_RXRDY; // Enable just Rx interrupts
 
@@ -256,8 +195,8 @@ static void xr68c681_shutdown(struct uart_port *port)
 
 	spin_lock_irqsave(&port->lock, flags);
 
-	/* Disable all interrupts now */
-	// INT_CTRL &= ~(FTDI_IEN | FTDI_RXIE | FTDI_TXIE);
+	// TODO: disable interrupts
+
 	free_irq(port->irq, port);
 
 	spin_unlock_irqrestore(&port->lock, flags);
@@ -275,7 +214,6 @@ static const char *xr68c681_type(struct uart_port *port)
 
 static void xr68c681_release_port(struct uart_port *port)
 {
-	/* Nothing to release... */
 }
 
 static int xr68c681_verify_port(struct uart_port *port, struct serial_struct *ser)
@@ -287,7 +225,6 @@ static int xr68c681_verify_port(struct uart_port *port, struct serial_struct *se
 
 static int xr68c681_request_port(struct uart_port *port)
 {
-	/* UARTs always present */
 	return 0;
 }
 
@@ -296,8 +233,8 @@ static void xr68c681_config_port(struct uart_port *port, int flags)
 	port->type = PORT_XR68C681;
 	port->fifosize = 3; // TODO is this right? does it matter?
 
-	// 	/* Clear mask, so no surprise interrupts. */
-	// 	INT_CTRL &= ~(FTDI_IEN | FTDI_RXIE | FTDI_TXIE);
+	// TODO: disable interrupts
+
 }
 
 static const struct uart_ops xr68c681_uart_ops = {
@@ -365,34 +302,7 @@ static struct console xr68c681_console = {
 
 static int xr68c681_probe(struct platform_device *pdev)
 {
-
-	// struct alce_platform_uart *platp = pdev->dev.platform_data;
-	// struct uart_port *port;
-	// int i;
-
-	// if (is_early_platform_device(pdev))
-	// 	return xr68c681_probe_earlyprintk(pdev);
-
-	// for (i = 0; ((i < XR68C681_MAXPORTS) && (platp[i].mapbase)); i++) {
-	// 	port = &xr68c681_uart_ports[i].port;
-
-	// 	port->line = i;
-	// 	port->type = PORT_XR68C681;
-	// 	port->mapbase = platp[i].mapbase;
-	// 	port->membase = (platp[i].membase) ? platp[i].membase :
-	// 		(unsigned char __iomem *) platp[i].mapbase;
-	// 	port->iotype = SERIAL_IO_MEM;
-	// 	port->irq = platp[i].irq;
-	// 	port->uartclk = 12000000;
-	// 	port->ops = &xr68c681_uart_ops;
-	// 	port->flags = ASYNC_BOOT_AUTOCONF;
-
-	// 	uart_add_one_port(&xr68c681_driver, port);
-	// }
-
 	struct uart_port *port = &xr68c681_uart_ports[pdev->id].port;
-
-	printk(KERN_INFO "XR68C681 probe()\n");
 
 	port->line = pdev->id;
 	port->ops = &xr68c681_uart_ops;
@@ -410,14 +320,7 @@ static int xr68c681_probe(struct platform_device *pdev)
 
 static int xr68c681_remove(struct platform_device *pdev)
 {
-	/*struct uart_port *port;
-	int i;
-	for (i = 0; (i < XR68C681_MAXPORTS); i++) {
-		port = &xr68c681_uart_ports[i].port;
-		if (port)
-			uart_remove_one_port(&xr68c681_driver, port);
-	}
-	*/
+	// TODO remove port
 	return 0;
 }
 

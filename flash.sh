@@ -4,14 +4,14 @@ PORT=/dev/ttyUSB0
 IMAGE_FILE="images/image.bin"
 ROMFS_FILE="images/romfs.img"
 
-ls -lah "$ROMFS_FILE"
+# ls -lah "$ROMFS_FILE"
 
-echo "Copying ROMfs..."
-echo "load 300000" > $PORT
-sleep 1
-ctt -p $PORT -f "$ROMFS_FILE"
+# echo "Copying ROMfs..."
+# echo "load 300000" > $PORT
+# sleep 1
+# ctt -p $PORT -f "$ROMFS_FILE"
 
-sleep 1
+# sleep 1
 
 ls -lah "$IMAGE_FILE"
 
