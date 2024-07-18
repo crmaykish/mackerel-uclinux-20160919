@@ -345,20 +345,12 @@ static int __init xr68c681_serial_init(void)
 		printk(KERN_ERR "Failed to register uart driver\n");
 		return ret;
 	}
-	else
-	{
-		printk("Registered UART driver\n");
-	}
 
 	ret = platform_driver_register(&xr68c681_platform_driver);
 	if (ret != 0)
 	{
 		printk(KERN_ERR "Failed to register platform serial driver\n");
 		uart_unregister_driver(&xr68c681_driver);
-	}
-	else
-	{
-		printk("Registered platform serial driver\n");
 	}
 
 	return 0;
