@@ -135,17 +135,9 @@ void __init config_BSP(char *command, int len)
 
 int __init mackerel_platform_init(void)
 {
-
-	printk(KERN_INFO "Registering DUART device\n");
-
 	if (platform_device_register(&xr68c681_duart_device))
 	{
-		printk(KERN_ERR "Failed to register DUART\n");
 		panic("Could not register DUART device");
-	}
-	else
-	{
-		printk(KERN_INFO "Registered DUART\n");
 	}
 
 	return 0;

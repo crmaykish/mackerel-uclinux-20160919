@@ -62,7 +62,6 @@ romfs:
 	$(ROMFSINST) -s /bin /sbin
 	$(ROMFSINST) /etc/rc
 	$(ROMFSINST) /etc/inittab
-	$(ROMFSINST) ../../Generic/romfs/etc/services /etc/services
 	$(ROMFSINST) /etc/motd
 	if [ -f passwd.$(LIBCDIR) ]; then \
 		$(ROMFSINST) passwd.$(LIBCDIR) /etc/passwd; \
