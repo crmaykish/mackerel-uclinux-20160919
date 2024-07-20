@@ -60,7 +60,6 @@ romfs:
 	dirs=$(DIRS) ; for i in $$dirs; do  make -C $$i romfs || exit $? ; done
 	$(ROMFSINST) -s /var/tmp /tmp
 	$(ROMFSINST) -s /bin /sbin
-	$(ROMFSINST) /etc/rc
 	$(ROMFSINST) /etc/inittab
 	if [ -f passwd.$(LIBCDIR) ]; then \
 		$(ROMFSINST) passwd.$(LIBCDIR) /etc/passwd; \
