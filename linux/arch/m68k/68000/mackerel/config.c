@@ -63,7 +63,7 @@ static struct console mackerel_console_driver = {
 
 static irqreturn_t hw_tick(int irq, void *dummy)
 {
-	MEM(DUART2_OPR_RESET); // Stop counter, i.e. reset the timer
+	MEM(DUART1_OPR_RESET); // Stop counter, i.e. reset the timer
 
 	mackerel_tick_count += 10;
 	return timer_interrupt(irq, dummy);
@@ -104,15 +104,17 @@ void mackerel_sched_init(irq_handler_t handler)
 {
 	int timer_int_vec = 2;
 
+	printk(KERN_INFO "Setting up Mackerel timer hardware\n");
+
 	setup_irq(timer_int_vec, &mackerel_timer_irq);
 
-	// Setup DUART 2 as 50 Hz interrupt timer
-	MEM(DUART2_IVR) = 0x40 + timer_int_vec; // Interrupt base register
-	MEM(DUART2_ACR) = 0xF0;					// Set timer mode X/16
-	MEM(DUART2_IMR) = 0b00001000;			// Unmask counter interrupt
-	MEM(DUART2_CUR) = 0x09;					// Counter upper byte, (3.6864MHz / 2 / 16 / 0x900) = 50 Hz
-	MEM(DUART2_CLR) = 0x00;					// Counter lower byte
-	MEM(DUART2_OPR);						// Start counter
+	// Setup DUART as 50 Hz interrupt timer
+	MEM(DUART1_IVR) = 0x40 + timer_int_vec; // Interrupt base register
+	MEM(DUART1_ACR) = 0xF0;					// Set timer mode X/16
+	MEM(DUART1_IMR) = 0b00001000;			// Unmask counter interrupt
+	MEM(DUART1_CUR) = 0x09;					// Counter upper byte, (3.6864MHz / 2 / 16 / 0x900) = 50 Hz
+	MEM(DUART1_CLR) = 0x00;					// Counter lower byte
+	MEM(DUART1_OPR);						// Start counter
 
 	clocksource_register_hz(&mackerel_clk, 10 * 100); // TODO: this should be calculated properly from the interrupt rate and CPU speed and all that
 
@@ -125,7 +127,6 @@ void __init config_BSP(char *command, int len)
 
 	// Disable all DUART interrupts
 	MEM(DUART1_IMR) = 0;
-	MEM(DUART2_IMR) = 0;
 
 	mach_reset = mackerel_reset;
 	mach_sched_init = mackerel_sched_init;

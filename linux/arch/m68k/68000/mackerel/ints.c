@@ -50,7 +50,24 @@ asmlinkage irqreturn_t inthandler7(void);
 
 void process_int(int vec, struct pt_regs *fp)
 {
-    do_IRQ(vec - 0x40, fp);
+    int new_vec = vec;
+
+    // Determine the type of interrupt and how to handle it
+    if (vec == 0x41) {
+        // DUART interrupt source
+        unsigned char misr = MEM(DUART1_MISR);
+
+        if (misr & DUART_INTR_RXRDY) {
+            // serial Rx interrupt
+            new_vec = 0x41;
+        }
+        else if (misr & DUART_INTR_COUNTER) {
+            // timer interrupt
+            new_vec = 0x42;
+        }
+    }
+
+    do_IRQ(new_vec - 0x40, fp);
 }
 
 static void intc_irq_unmask(struct irq_data *d)

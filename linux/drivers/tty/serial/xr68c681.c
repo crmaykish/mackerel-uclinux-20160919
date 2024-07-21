@@ -137,14 +137,8 @@ static irqreturn_t xr68c681_interrupt(int irq, void *data)
 
 	unsigned long flags;
 
-	// read the DUART MISR register to determine the source of the interrupt - serial or timer
-	misr = MEM(DUART1_MISR);
-
-	if (misr & DUART_INTR_RXRDY)
-	{
-		// Received characters
-		ret = xr68c681_rx_chars(pp);
-	}
+	// Received characters
+	ret = xr68c681_rx_chars(pp);
 
 	return ret;
 }
@@ -172,15 +166,15 @@ static int xr68c681_startup(struct uart_port *port)
 
 	spin_lock_irqsave(&port->lock, flags);
 
-	MEM(DUART1_IVR) = 65; // Interrupt base register
-	MEM(DUART1_IMR) = 0;  // Disable all interrupts
+	MEM(DUART1_IVR) = 0x41;				  // Interrupt base register
+	MEM(DUART1_IMR) = DUART_INTR_COUNTER; // Disable serial interrupts, leave counter enabled
 
 	if (request_irq(port->irq, xr68c681_interrupt, 0, "XR68C681UART", port))
 		printk(KERN_ERR "XR68C681UART: unable to attach XR68C681UART %d "
 						"interrupt vector=%d\n",
 			   port->line, port->irq);
 
-	MEM(DUART1_IMR) = DUART_INTR_RXRDY; // Enable just Rx interrupts
+	MEM(DUART1_IMR) = DUART_INTR_COUNTER | DUART_INTR_RXRDY; // Enable Rx interrupts
 
 	spin_unlock_irqrestore(&port->lock, flags);
 
