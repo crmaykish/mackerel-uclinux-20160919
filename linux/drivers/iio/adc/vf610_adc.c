@@ -1,21 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Freescale Vybrid vf610 ADC driver
  *
  * Copyright 2013 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -77,7 +64,7 @@
 #define VF610_ADC_ADSTS_MASK		0x300
 #define VF610_ADC_ADLPC_EN		0x80
 #define VF610_ADC_ADHSC_EN		0x400
-#define VF610_ADC_REFSEL_VALT		0x100
+#define VF610_ADC_REFSEL_VALT		0x800
 #define VF610_ADC_REFSEL_VBG		0x1000
 #define VF610_ADC_ADTRG_HARD		0x2000
 #define VF610_ADC_AVGS_8		0x4000
@@ -180,7 +167,11 @@ struct vf610_adc {
 	u32 sample_freq_avail[5];
 
 	struct completion completion;
-	u16 buffer[8];
+	/* Ensure the timestamp is naturally aligned */
+	struct {
+		u16 chan;
+		s64 timestamp __aligned(8);
+	} scan;
 };
 
 static const u32 vf610_hw_avgs[] = { 1, 4, 8, 16, 32 };
@@ -584,7 +575,7 @@ static int vf610_adc_read_data(struct vf610_adc *info)
 
 static irqreturn_t vf610_adc_isr(int irq, void *dev_id)
 {
-	struct iio_dev *indio_dev = (struct iio_dev *)dev_id;
+	struct iio_dev *indio_dev = dev_id;
 	struct vf610_adc *info = iio_priv(indio_dev);
 	int coco;
 
@@ -592,9 +583,10 @@ static irqreturn_t vf610_adc_isr(int irq, void *dev_id)
 	if (coco & VF610_ADC_HS_COCO0) {
 		info->value = vf610_adc_read_data(info);
 		if (iio_buffer_enabled(indio_dev)) {
-			info->buffer[0] = info->value;
+			info->scan.chan = info->value;
 			iio_push_to_buffers_with_timestamp(indio_dev,
-					info->buffer, iio_get_time_ns());
+					&info->scan,
+					iio_get_time_ns(indio_dev));
 			iio_trigger_notify_done(indio_dev->trig);
 		} else
 			complete(&info->completion);
@@ -714,19 +706,19 @@ static int vf610_write_raw(struct iio_dev *indio_dev,
 	int i;
 
 	switch (mask) {
-		case IIO_CHAN_INFO_SAMP_FREQ:
-			for (i = 0;
-				i < ARRAY_SIZE(info->sample_freq_avail);
-				i++)
-				if (val == info->sample_freq_avail[i]) {
-					info->adc_feature.sample_rate = i;
-					vf610_adc_sample_set(info);
-					return 0;
-				}
-			break;
+	case IIO_CHAN_INFO_SAMP_FREQ:
+		for (i = 0;
+			i < ARRAY_SIZE(info->sample_freq_avail);
+			i++)
+			if (val == info->sample_freq_avail[i]) {
+				info->adc_feature.sample_rate = i;
+				vf610_adc_sample_set(info);
+				return 0;
+			}
+		break;
 
-		default:
-			break;
+	default:
+		break;
 	}
 
 	return -EINVAL;
@@ -798,7 +790,6 @@ static int vf610_adc_reg_access(struct iio_dev *indio_dev,
 }
 
 static const struct iio_info vf610_adc_iio_info = {
-	.driver_module = THIS_MODULE,
 	.read_raw = &vf610_read_raw,
 	.write_raw = &vf610_write_raw,
 	.debugfs_reg_access = &vf610_adc_reg_access,
@@ -834,10 +825,8 @@ static int vf610_adc_probe(struct platform_device *pdev)
 		return PTR_ERR(info->regs);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(&pdev->dev, "no irq resource?\n");
+	if (irq < 0)
 		return irq;
-	}
 
 	ret = devm_request_irq(info->dev, irq,
 				vf610_adc_isr, 0,

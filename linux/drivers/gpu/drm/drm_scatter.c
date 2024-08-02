@@ -1,4 +1,4 @@
-/**
+/*
  * \file drm_scatter.c
  * IOCTLs to manage scatter/gather memory
  *
@@ -31,9 +31,14 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include <linux/vmalloc.h>
+#include <linux/mm.h>
 #include <linux/slab.h>
-#include <drm/drmP.h>
+#include <linux/vmalloc.h>
+
+#include <drm/drm.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_print.h>
+
 #include "drm_legacy.h"
 
 #define DEBUG_SCATTER 0
@@ -41,7 +46,7 @@
 static inline void *drm_vmalloc_dma(unsigned long size)
 {
 #if defined(__powerpc__) && defined(CONFIG_NOT_COHERENT_CACHE)
-	return __vmalloc(size, GFP_KERNEL, PAGE_KERNEL | _PAGE_NO_CACHE);
+	return __vmalloc(size, GFP_KERNEL, pgprot_noncached_wc(PAGE_KERNEL));
 #else
 	return vmalloc_32(size);
 #endif
@@ -68,7 +73,7 @@ static void drm_sg_cleanup(struct drm_sg_mem * entry)
 void drm_legacy_sg_cleanup(struct drm_device *dev)
 {
 	if (drm_core_check_feature(dev, DRIVER_SG) && dev->sg &&
-	    !drm_core_check_feature(dev, DRIVER_MODESET)) {
+	    drm_core_check_feature(dev, DRIVER_LEGACY)) {
 		drm_sg_cleanup(dev->sg);
 		dev->sg = NULL;
 	}
@@ -88,11 +93,11 @@ int drm_legacy_sg_alloc(struct drm_device *dev, void *data,
 
 	DRM_DEBUG("\n");
 
-	if (drm_core_check_feature(dev, DRIVER_MODESET))
-		return -EINVAL;
+	if (!drm_core_check_feature(dev, DRIVER_LEGACY))
+		return -EOPNOTSUPP;
 
 	if (!drm_core_check_feature(dev, DRIVER_SG))
-		return -EINVAL;
+		return -EOPNOTSUPP;
 
 	if (dev->sg)
 		return -EINVAL;
@@ -201,11 +206,11 @@ int drm_legacy_sg_free(struct drm_device *dev, void *data,
 	struct drm_scatter_gather *request = data;
 	struct drm_sg_mem *entry;
 
-	if (drm_core_check_feature(dev, DRIVER_MODESET))
-		return -EINVAL;
+	if (!drm_core_check_feature(dev, DRIVER_LEGACY))
+		return -EOPNOTSUPP;
 
 	if (!drm_core_check_feature(dev, DRIVER_SG))
-		return -EINVAL;
+		return -EOPNOTSUPP;
 
 	entry = dev->sg;
 	dev->sg = NULL;

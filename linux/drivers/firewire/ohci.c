@@ -1,21 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for OHCI 1394 controllers
  *
  * Copyright (C) 2003-2006 Kristian Hoegsberg <krh@bitplanet.net>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
 #include <linux/bitops.h>
@@ -291,6 +278,51 @@ static char ohci_driver_name[] = KBUILD_MODNAME;
 #define QUIRK_NO_MSI			0x10
 #define QUIRK_TI_SLLZ059		0x20
 #define QUIRK_IR_WAKE			0x40
+
+// On PCI Express Root Complex in any type of AMD Ryzen machine, VIA VT6306/6307/6308 with Asmedia
+// ASM1083/1085 brings an inconvenience that the read accesses to 'Isochronous Cycle Timer' register
+// (at offset 0xf0 in PCI I/O space) often causes unexpected system reboot. The mechanism is not
+// clear, since the read access to the other registers is enough safe; e.g. 'Node ID' register,
+// while it is probable due to detection of any type of PCIe error.
+#define QUIRK_REBOOT_BY_CYCLE_TIMER_READ	0x80000000
+
+#if IS_ENABLED(CONFIG_X86)
+
+static bool has_reboot_by_cycle_timer_read_quirk(const struct fw_ohci *ohci)
+{
+	return !!(ohci->quirks & QUIRK_REBOOT_BY_CYCLE_TIMER_READ);
+}
+
+#define PCI_DEVICE_ID_ASMEDIA_ASM108X	0x1080
+
+static bool detect_vt630x_with_asm1083_on_amd_ryzen_machine(const struct pci_dev *pdev)
+{
+	const struct pci_dev *pcie_to_pci_bridge;
+
+	// Detect any type of AMD Ryzen machine.
+	if (!static_cpu_has(X86_FEATURE_ZEN))
+		return false;
+
+	// Detect VIA VT6306/6307/6308.
+	if (pdev->vendor != PCI_VENDOR_ID_VIA)
+		return false;
+	if (pdev->device != PCI_DEVICE_ID_VIA_VT630X)
+		return false;
+
+	// Detect Asmedia ASM1083/1085.
+	pcie_to_pci_bridge = pdev->bus->self;
+	if (pcie_to_pci_bridge->vendor != PCI_VENDOR_ID_ASMEDIA)
+		return false;
+	if (pcie_to_pci_bridge->device != PCI_DEVICE_ID_ASMEDIA_ASM108X)
+		return false;
+
+	return true;
+}
+
+#else
+#define has_reboot_by_cycle_timer_read_quirk(ohci) false
+#define detect_vt630x_with_asm1083_on_amd_ryzen_machine(pdev)	false
+#endif
 
 /* In case of multiple matches in ohci_quirks[], only the first one is used. */
 static const struct {
@@ -734,7 +766,7 @@ static unsigned int ar_search_last_active_buffer(struct ar_context *ctx,
 	__le16 res_count, next_res_count;
 
 	i = ar_first_buffer_index(ctx);
-	res_count = ACCESS_ONCE(ctx->descriptors[i].res_count);
+	res_count = READ_ONCE(ctx->descriptors[i].res_count);
 
 	/* A buffer that is not yet completely filled must be the last one. */
 	while (i != last && res_count == 0) {
@@ -742,8 +774,7 @@ static unsigned int ar_search_last_active_buffer(struct ar_context *ctx,
 		/* Peek at the next descriptor. */
 		next_i = ar_next_buffer_index(i);
 		rmb(); /* read descriptors in order */
-		next_res_count = ACCESS_ONCE(
-				ctx->descriptors[next_i].res_count);
+		next_res_count = READ_ONCE(ctx->descriptors[next_i].res_count);
 		/*
 		 * If the next descriptor is still empty, we must stop at this
 		 * descriptor.
@@ -759,8 +790,7 @@ static unsigned int ar_search_last_active_buffer(struct ar_context *ctx,
 			if (MAX_AR_PACKET_SIZE > PAGE_SIZE && i != last) {
 				next_i = ar_next_buffer_index(next_i);
 				rmb();
-				next_res_count = ACCESS_ONCE(
-					ctx->descriptors[next_i].res_count);
+				next_res_count = READ_ONCE(ctx->descriptors[next_i].res_count);
 				if (next_res_count != cpu_to_le16(PAGE_SIZE))
 					goto next_buffer_is_active;
 			}
@@ -1114,7 +1144,7 @@ static void context_tasklet(unsigned long data)
 static int context_add_buffer(struct context *ctx)
 {
 	struct descriptor_buffer *desc;
-	dma_addr_t uninitialized_var(bus_addr);
+	dma_addr_t bus_addr;
 	int offset;
 
 	/*
@@ -1130,7 +1160,13 @@ static int context_add_buffer(struct context *ctx)
 		return -ENOMEM;
 
 	offset = (void *)&desc->buffer - (void *)desc;
-	desc->buffer_size = PAGE_SIZE - offset;
+	/*
+	 * Some controllers, like JMicron ones, always issue 0x20-byte DMA reads
+	 * for descriptors, even 0x10-byte ones. This can cause page faults when
+	 * an IOMMU is in use and the oversized read crosses a page boundary.
+	 * Work around this by always leaving at least 0x10 bytes of padding.
+	 */
+	desc->buffer_size = PAGE_SIZE - offset - 0x10;
 	desc->buffer_bus = bus_addr + offset;
 	desc->used = 0;
 
@@ -1298,7 +1334,7 @@ static int at_context_queue_packet(struct context *ctx,
 				   struct fw_packet *packet)
 {
 	struct fw_ohci *ohci = ctx->ohci;
-	dma_addr_t d_bus, uninitialized_var(payload_bus);
+	dma_addr_t d_bus, payload_bus;
 	struct driver_data *driver_data;
 	struct descriptor *d, *last;
 	__le32 *header;
@@ -1726,6 +1762,9 @@ static u32 get_cycle_time(struct fw_ohci *ohci)
 	s32 diff01, diff12;
 	int i;
 
+	if (has_reboot_by_cycle_timer_read_quirk(ohci))
+		return 0;
+
 	c2 = reg_read(ohci, OHCI1394_IsochronousCycleTimer);
 
 	if (ohci->quirks & QUIRK_CYCLE_TIMER) {
@@ -2014,6 +2053,8 @@ static void bus_reset_work(struct work_struct *work)
 
 	ohci->generation = generation;
 	reg_write(ohci, OHCI1394_IntEventClear, OHCI1394_busReset);
+	if (param_debug & OHCI_PARAM_DEBUG_BUSRESETS)
+		reg_write(ohci, OHCI1394_IntMaskSet, OHCI1394_busReset);
 
 	if (ohci->quirks & QUIRK_RESET_PACKET)
 		ohci->request_generation = generation;
@@ -2080,12 +2121,14 @@ static irqreturn_t irq_handler(int irq, void *data)
 		return IRQ_NONE;
 
 	/*
-	 * busReset and postedWriteErr must not be cleared yet
+	 * busReset and postedWriteErr events must not be cleared yet
 	 * (OHCI 1.1 clauses 7.2.3.2 and 13.2.8.1)
 	 */
 	reg_write(ohci, OHCI1394_IntEventClear,
 		  event & ~(OHCI1394_busReset | OHCI1394_postedWriteErr));
 	log_irqs(ohci, event);
+	if (event & OHCI1394_busReset)
+		reg_write(ohci, OHCI1394_IntMaskClear, OHCI1394_busReset);
 
 	if (event & OHCI1394_selfIDComplete)
 		queue_work(selfid_workqueue, &ohci->bus_reset_work);
@@ -2278,9 +2321,10 @@ static int ohci_enable(struct fw_card *card,
 	u32 lps, version, irqs;
 	int i, ret;
 
-	if (software_reset(ohci)) {
+	ret = software_reset(ohci);
+	if (ret < 0) {
 		ohci_err(ohci, "failed to reset ohci card\n");
-		return -EBUSY;
+		return ret;
 	}
 
 	/*
@@ -2453,7 +2497,7 @@ static int ohci_set_config_rom(struct fw_card *card,
 {
 	struct fw_ohci *ohci;
 	__be32 *next_config_rom;
-	dma_addr_t uninitialized_var(next_config_rom_bus);
+	dma_addr_t next_config_rom_bus;
 
 	ohci = fw_ohci(card);
 
@@ -2811,7 +2855,7 @@ static int handle_ir_buffer_fill(struct context *context,
 	u32 buffer_dma;
 
 	req_count = le16_to_cpu(last->req_count);
-	res_count = le16_to_cpu(ACCESS_ONCE(last->res_count));
+	res_count = le16_to_cpu(READ_ONCE(last->res_count));
 	completed = req_count - res_count;
 	buffer_dma = le32_to_cpu(last->data_address);
 
@@ -2934,7 +2978,6 @@ static void set_multichannel_mask(struct fw_ohci *ohci, u64 channels)
 	reg_write(ohci, OHCI1394_IRMultiChanMaskLoClear, ~lo);
 	reg_write(ohci, OHCI1394_IRMultiChanMaskHiSet, hi);
 	reg_write(ohci, OHCI1394_IRMultiChanMaskLoSet, lo);
-	mmiowb();
 	ohci->mc_channels = channels;
 }
 
@@ -2942,10 +2985,10 @@ static struct fw_iso_context *ohci_allocate_iso_context(struct fw_card *card,
 				int type, int channel, size_t header_size)
 {
 	struct fw_ohci *ohci = fw_ohci(card);
-	struct iso_context *uninitialized_var(ctx);
-	descriptor_callback_t uninitialized_var(callback);
-	u64 *uninitialized_var(channels);
-	u32 *uninitialized_var(mask), uninitialized_var(regs);
+	struct iso_context *ctx;
+	descriptor_callback_t callback;
+	u64 *channels;
+	u32 *mask, regs;
 	int index, ret = -EBUSY;
 
 	spin_lock_irq(&ohci->lock);
@@ -3627,6 +3670,9 @@ static int pci_probe(struct pci_dev *dev,
 		}
 	if (param_quirks)
 		ohci->quirks = param_quirks;
+
+	if (detect_vt630x_with_asm1083_on_amd_ryzen_machine(dev))
+		ohci->quirks |= QUIRK_REBOOT_BY_CYCLE_TIMER_READ;
 
 	/*
 	 * Because dma_alloc_coherent() allocates at least one page,

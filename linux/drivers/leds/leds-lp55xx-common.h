@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * LP55XX Common Driver Header
  *
  * Copyright (C) 2012 Texas Instruments
  *
  * Author: Milo(Woogyom) Kim <milo.kim@ti.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * version 2 as published by the Free Software Foundation.
  *
  * Derived from leds-lp5521.c, leds-lp5523.c
  */
@@ -95,7 +92,7 @@ struct lp55xx_reg {
  * @enable             : Chip specific enable command
  * @max_channel        : Maximum number of channels
  * @post_init_device   : Chip specific initialization code
- * @brightness_work_fn : Brightness work function
+ * @brightness_fn      : Brightness function
  * @set_led_current    : LED current set function
  * @firmware_cb        : Call function when the firmware is loaded
  * @run_engine         : Run internal engine for pattern
@@ -110,7 +107,7 @@ struct lp55xx_device_config {
 	int (*post_init_device) (struct lp55xx_chip *chip);
 
 	/* access brightness register */
-	void (*brightness_work_fn)(struct work_struct *work);
+	int (*brightness_fn)(struct lp55xx_led *led);
 
 	/* current setting function */
 	void (*set_led_current) (struct lp55xx_led *led, u8 led_current);
@@ -164,7 +161,6 @@ struct lp55xx_chip {
  * @cdev            : LED class device
  * @led_current     : Current setting at each led channel
  * @max_current     : Maximun current at each led channel
- * @brightness_work : Workqueue for brightness control
  * @brightness      : Brightness value
  * @chip            : The lp55xx chip data
  */
@@ -173,7 +169,6 @@ struct lp55xx_led {
 	struct led_classdev cdev;
 	u8 led_current;
 	u8 max_current;
-	struct work_struct brightness_work;
 	u8 brightness;
 	struct lp55xx_chip *chip;
 };

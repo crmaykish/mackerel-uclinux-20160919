@@ -1,12 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Access to the shared data page by the vDSO & syscall map
  *
  * Copyright (C) 2004 Benjamin Herrenschmuidt (benh@kernel.crashing.org), IBM Corp.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  */
 
 #include <asm/processor.h>
@@ -37,6 +33,7 @@ data_page_branch:
 	mtlr	r0
 	addi	r3, r3, __kernel_datapage_offset-data_page_branch
 	lwz	r0,0(r3)
+  .cfi_restore lr
 	add	r3,r0,r3
 	blr
   .cfi_endproc
@@ -61,7 +58,7 @@ V_FUNCTION_BEGIN(__kernel_get_syscall_map)
 	addi	r3,r3,CFG_SYSCALL_MAP32
 	cmpli	cr0,r4,0
 	beqlr
-	li	r0,__NR_syscalls
+	li	r0,NR_syscalls
 	stw	r0,0(r4)
 	crclr	cr0*4+so
 	blr
@@ -73,6 +70,7 @@ V_FUNCTION_END(__kernel_get_syscall_map)
  *
  * returns the timebase frequency in HZ
  */
+#ifndef CONFIG_PPC_BOOK3S_601
 V_FUNCTION_BEGIN(__kernel_get_tbfreq)
   .cfi_startproc
 	mflr	r12
@@ -85,3 +83,4 @@ V_FUNCTION_BEGIN(__kernel_get_tbfreq)
 	blr
   .cfi_endproc
 V_FUNCTION_END(__kernel_get_tbfreq)
+#endif

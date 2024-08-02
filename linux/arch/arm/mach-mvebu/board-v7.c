@@ -16,7 +16,6 @@
 #include <linux/init.h>
 #include <linux/of_address.h>
 #include <linux/of_fdt.h>
-#include <linux/of_platform.h>
 #include <linux/io.h>
 #include <linux/clocksource.h>
 #include <linux/dma-mapping.h>
@@ -137,29 +136,19 @@ static void __init i2c_quirk(void)
 
 		of_update_property(np, new_compat);
 	}
-	return;
-}
-
-static struct map_desc armada_370_xp_io_desc[] __initdata = {
-	{
-		.virtual = (unsigned long) ARMADA_370_XP_REGS_VIRT_BASE,
-		.pfn     = __phys_to_pfn(ARMADA_370_XP_REGS_PHYS_BASE),
-		.length  = ARMADA_370_XP_REGS_SIZE,
-		.type    = MT_DEVICE,
-	},
-};
-
-static void __init armada_370_xp_map_io(void)
-{
-	iotable_init(armada_370_xp_io_desc, ARRAY_SIZE(armada_370_xp_io_desc));
 }
 
 static void __init mvebu_dt_init(void)
 {
 	if (of_machine_is_compatible("marvell,armadaxp"))
 		i2c_quirk();
+}
 
-	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
+static void __init armada_370_xp_dt_fixup(void)
+{
+#ifdef CONFIG_SMP
+	smp_set_ops(smp_ops(armada_xp_smp_ops));
+#endif
 }
 
 static const char * const armada_370_xp_dt_compat[] __initconst = {
@@ -170,18 +159,12 @@ static const char * const armada_370_xp_dt_compat[] __initconst = {
 DT_MACHINE_START(ARMADA_370_XP_DT, "Marvell Armada 370/XP (Device Tree)")
 	.l2c_aux_val	= 0,
 	.l2c_aux_mask	= ~0,
-/*
- * The following field (.smp) is still needed to ensure backward
- * compatibility with old Device Trees that were not specifying the
- * cpus enable-method property.
- */
-	.smp		= smp_ops(armada_xp_smp_ops),
 	.init_machine	= mvebu_dt_init,
-	.map_io		= armada_370_xp_map_io,
 	.init_irq       = mvebu_init_irq,
 	.restart	= mvebu_restart,
 	.reserve        = mvebu_memblock_reserve,
 	.dt_compat	= armada_370_xp_dt_compat,
+	.dt_fixup	= armada_370_xp_dt_fixup,
 MACHINE_END
 
 static const char * const armada_375_dt_compat[] __initconst = {

@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  linux/drivers/mmc/core/sdio_bus.c
  *
  *  Copyright 2007 Pierre Ossman
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or (at
- * your option) any later version.
  *
  * SDIO function driver model
  */
@@ -25,6 +21,7 @@
 #include <linux/of.h>
 
 #include "core.h"
+#include "card.h"
 #include "sdio_cis.h"
 #include "sdio_bus.h"
 
@@ -138,8 +135,10 @@ static int sdio_bus_probe(struct device *dev)
 		return -ENODEV;
 
 	ret = dev_pm_domain_attach(dev, false);
-	if (ret == -EPROBE_DEFER)
+	if (ret)
 		return ret;
+
+	atomic_inc(&func->card->sdio_funcs_probed);
 
 	/* Unbound SDIO functions are always suspended.
 	 * During probe, the function is set active and the usage count
@@ -156,7 +155,10 @@ static int sdio_bus_probe(struct device *dev)
 	/* Set the default block size so the driver is sure it's something
 	 * sensible. */
 	sdio_claim_host(func);
-	ret = sdio_set_block_size(func, 0);
+	if (mmc_card_removed(func->card))
+		ret = -ENOMEDIUM;
+	else
+		ret = sdio_set_block_size(func, 0);
 	sdio_release_host(func);
 	if (ret)
 		goto disable_runtimepm;
@@ -168,6 +170,7 @@ static int sdio_bus_probe(struct device *dev)
 	return 0;
 
 disable_runtimepm:
+	atomic_dec(&func->card->sdio_funcs_probed);
 	if (func->card->host->caps & MMC_CAP_POWER_OFF_CARD)
 		pm_runtime_put_noidle(dev);
 	dev_pm_domain_detach(dev, false);
@@ -178,13 +181,13 @@ static int sdio_bus_remove(struct device *dev)
 {
 	struct sdio_driver *drv = to_sdio_driver(dev->driver);
 	struct sdio_func *func = dev_to_sdio_func(dev);
-	int ret = 0;
 
 	/* Make sure card is powered before invoking ->remove() */
 	if (func->card->host->caps & MMC_CAP_POWER_OFF_CARD)
 		pm_runtime_get_sync(dev);
 
 	drv->remove(func);
+	atomic_dec(&func->card->sdio_funcs_probed);
 
 	if (func->irq_handler) {
 		pr_warn("WARNING: driver %s did not remove its interrupt handler!\n",
@@ -204,7 +207,7 @@ static int sdio_bus_remove(struct device *dev)
 
 	dev_pm_domain_detach(dev, false);
 
-	return ret;
+	return 0;
 }
 
 static const struct dev_pm_ops sdio_bus_pm_ops = {
@@ -263,10 +266,17 @@ static void sdio_release_func(struct device *dev)
 {
 	struct sdio_func *func = dev_to_sdio_func(dev);
 
-	sdio_free_func_cis(func);
+	if (!(func->card->quirks & MMC_QUIRK_NONSTD_SDIO))
+		sdio_free_func_cis(func);
+
+	/*
+	 * We have now removed the link to the tuples in the
+	 * card structure, so remove the reference.
+	 */
+	put_device(&func->card->dev);
 
 	kfree(func->info);
-
+	kfree(func->tmpbuf);
 	kfree(func);
 }
 
@@ -281,9 +291,25 @@ struct sdio_func *sdio_alloc_func(struct mmc_card *card)
 	if (!func)
 		return ERR_PTR(-ENOMEM);
 
+	/*
+	 * allocate buffer separately to make sure it's properly aligned for
+	 * DMA usage (incl. 64 bit DMA)
+	 */
+	func->tmpbuf = kmalloc(4, GFP_KERNEL);
+	if (!func->tmpbuf) {
+		kfree(func);
+		return ERR_PTR(-ENOMEM);
+	}
+
 	func->card = card;
 
 	device_initialize(&func->dev);
+
+	/*
+	 * We may link to tuples in the card structure,
+	 * we need make sure we have a reference to it.
+	 */
+	get_device(&func->card->dev);
 
 	func->dev.parent = &card->dev;
 	func->dev.bus = &sdio_bus_type;
@@ -322,6 +348,7 @@ int sdio_add_func(struct sdio_func *func)
 
 	sdio_set_of_node(func);
 	sdio_acpi_set_handle(func);
+	device_enable_async_suspend(&func->dev);
 	ret = device_add(&func->dev);
 	if (ret == 0)
 		sdio_func_set_present(func);
@@ -337,10 +364,9 @@ int sdio_add_func(struct sdio_func *func)
  */
 void sdio_remove_func(struct sdio_func *func)
 {
-	if (!sdio_func_present(func))
-		return;
+	if (sdio_func_present(func))
+		device_del(&func->dev);
 
-	device_del(&func->dev);
 	of_node_put(func->dev.of_node);
 	put_device(&func->dev);
 }

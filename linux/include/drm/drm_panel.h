@@ -24,8 +24,11 @@
 #ifndef __DRM_PANEL_H__
 #define __DRM_PANEL_H__
 
+#include <linux/err.h>
+#include <linux/errno.h>
 #include <linux/list.h>
 
+struct device_node;
 struct drm_connector;
 struct drm_device;
 struct drm_panel;
@@ -33,14 +36,6 @@ struct display_timing;
 
 /**
  * struct drm_panel_funcs - perform operations on a given panel
- * @disable: disable panel (turn off back light, etc.)
- * @unprepare: turn off panel
- * @prepare: turn on panel and perform set up
- * @enable: enable panel (turn on back light, etc.)
- * @get_modes: add modes to the connector that the panel is attached to and
- * return the number of modes added
- * @get_timings: copy display timings into the provided array and return
- * the number of display timings available
  *
  * The .prepare() function is typically called before the display controller
  * starts to transmit video data. Panel drivers can use this to turn the panel
@@ -66,79 +61,125 @@ struct display_timing;
  * the panel. This is the job of the .unprepare() function.
  */
 struct drm_panel_funcs {
-	int (*disable)(struct drm_panel *panel);
-	int (*unprepare)(struct drm_panel *panel);
+	/**
+	 * @prepare:
+	 *
+	 * Turn on panel and perform set up.
+	 */
 	int (*prepare)(struct drm_panel *panel);
+
+	/**
+	 * @enable:
+	 *
+	 * Enable panel (turn on back light, etc.).
+	 */
 	int (*enable)(struct drm_panel *panel);
+
+	/**
+	 * @disable:
+	 *
+	 * Disable panel (turn off back light, etc.).
+	 */
+	int (*disable)(struct drm_panel *panel);
+
+	/**
+	 * @unprepare:
+	 *
+	 * Turn off panel.
+	 */
+	int (*unprepare)(struct drm_panel *panel);
+
+	/**
+	 * @get_modes:
+	 *
+	 * Add modes to the connector that the panel is attached to and
+	 * return the number of modes added.
+	 */
 	int (*get_modes)(struct drm_panel *panel);
+
+	/**
+	 * @get_timings:
+	 *
+	 * Copy display timings into the provided array and return
+	 * the number of display timings available.
+	 */
 	int (*get_timings)(struct drm_panel *panel, unsigned int num_timings,
 			   struct display_timing *timings);
 };
 
+/**
+ * struct drm_panel - DRM panel object
+ */
 struct drm_panel {
+	/**
+	 * @drm:
+	 *
+	 * DRM device owning the panel.
+	 */
 	struct drm_device *drm;
+
+	/**
+	 * @connector:
+	 *
+	 * DRM connector that the panel is attached to.
+	 */
 	struct drm_connector *connector;
+
+	/**
+	 * @dev:
+	 *
+	 * Parent device of the panel.
+	 */
 	struct device *dev;
 
+	/**
+	 * @funcs:
+	 *
+	 * Operations that can be performed on the panel.
+	 */
 	const struct drm_panel_funcs *funcs;
 
+	/**
+	 * @connector_type:
+	 *
+	 * Type of the panel as a DRM_MODE_CONNECTOR_* value. This is used to
+	 * initialise the drm_connector corresponding to the panel with the
+	 * correct connector type.
+	 */
+	int connector_type;
+
+	/**
+	 * @list:
+	 *
+	 * Panel entry in registry.
+	 */
 	struct list_head list;
 };
 
-static inline int drm_panel_unprepare(struct drm_panel *panel)
-{
-	if (panel && panel->funcs && panel->funcs->unprepare)
-		return panel->funcs->unprepare(panel);
-
-	return panel ? -ENOSYS : -EINVAL;
-}
-
-static inline int drm_panel_disable(struct drm_panel *panel)
-{
-	if (panel && panel->funcs && panel->funcs->disable)
-		return panel->funcs->disable(panel);
-
-	return panel ? -ENOSYS : -EINVAL;
-}
-
-static inline int drm_panel_prepare(struct drm_panel *panel)
-{
-	if (panel && panel->funcs && panel->funcs->prepare)
-		return panel->funcs->prepare(panel);
-
-	return panel ? -ENOSYS : -EINVAL;
-}
-
-static inline int drm_panel_enable(struct drm_panel *panel)
-{
-	if (panel && panel->funcs && panel->funcs->enable)
-		return panel->funcs->enable(panel);
-
-	return panel ? -ENOSYS : -EINVAL;
-}
-
-static inline int drm_panel_get_modes(struct drm_panel *panel)
-{
-	if (panel && panel->funcs && panel->funcs->get_modes)
-		return panel->funcs->get_modes(panel);
-
-	return panel ? -ENOSYS : -EINVAL;
-}
-
-void drm_panel_init(struct drm_panel *panel);
+void drm_panel_init(struct drm_panel *panel, struct device *dev,
+		    const struct drm_panel_funcs *funcs,
+		    int connector_type);
 
 int drm_panel_add(struct drm_panel *panel);
 void drm_panel_remove(struct drm_panel *panel);
 
 int drm_panel_attach(struct drm_panel *panel, struct drm_connector *connector);
-int drm_panel_detach(struct drm_panel *panel);
+void drm_panel_detach(struct drm_panel *panel);
 
-#ifdef CONFIG_OF
-struct drm_panel *of_drm_find_panel(struct device_node *np);
+int drm_panel_prepare(struct drm_panel *panel);
+int drm_panel_unprepare(struct drm_panel *panel);
+
+int drm_panel_enable(struct drm_panel *panel);
+int drm_panel_disable(struct drm_panel *panel);
+
+int drm_panel_get_modes(struct drm_panel *panel);
+
+#if defined(CONFIG_OF) && defined(CONFIG_DRM_PANEL)
+struct drm_panel *of_drm_find_panel(const struct device_node *np);
 #else
-static inline struct drm_panel *of_drm_find_panel(struct device_node *np)
+static inline struct drm_panel *of_drm_find_panel(const struct device_node *np)
 {
-	return NULL;
+	return ERR_PTR(-ENODEV);
 }
 #endif
 

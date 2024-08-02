@@ -1,14 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * drivers/mfd/mfd-core.h
  *
  * core MFD support
  * Copyright (c) 2006 Ian Molton
  * Copyright (c) 2007 Dmitry Baryshkov
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  */
 
 #ifndef MFD_CORE_H
@@ -17,6 +13,7 @@
 #include <linux/platform_device.h>
 
 struct irq_domain;
+struct property_entry;
 
 /* Matches ACPI PNP id, either _HID or _CID, or ACPI _ADR */
 struct mfd_cell_acpi_match {
@@ -44,6 +41,10 @@ struct mfd_cell {
 	/* platform data passed to the sub devices drivers */
 	void			*platform_data;
 	size_t			pdata_size;
+
+	/* device properties passed to the sub devices drivers */
+	struct property_entry *properties;
+
 	/*
 	 * Device Tree compatible string
 	 * See: Documentation/devicetree/usage-model.txt Chapter 2.2 for details
@@ -126,4 +127,8 @@ static inline int mfd_add_hotplug_devices(struct device *parent,
 
 extern void mfd_remove_devices(struct device *parent);
 
+extern int devm_mfd_add_devices(struct device *dev, int id,
+				const struct mfd_cell *cells, int n_devs,
+				struct resource *mem_base,
+				int irq_base, struct irq_domain *irq_domain);
 #endif

@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2003-2005	Devicescape Software, Inc.
  * Copyright (c) 2006	Jiri Benc <jbenc@suse.cz>
  * Copyright 2007	Johannes Berg <johannes@sipsolutions.net>
  * Copyright (C) 2015	Intel Deutschland GmbH
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kobject.h>
@@ -132,9 +129,10 @@ static ssize_t key_tx_spec_read(struct file *file, char __user *userbuf,
 		len = scnprintf(buf, sizeof(buf), "\n");
 		break;
 	case WLAN_CIPHER_SUITE_TKIP:
+		pn = atomic64_read(&key->conf.tx_pn);
 		len = scnprintf(buf, sizeof(buf), "%08x %04x\n",
-				key->u.tkip.tx.iv32,
-				key->u.tkip.tx.iv16);
+				TKIP_PN_TO_IV32(pn),
+				TKIP_PN_TO_IV16(pn));
 		break;
 	case WLAN_CIPHER_SUITE_CCMP:
 	case WLAN_CIPHER_SUITE_CCMP_256:
@@ -340,9 +338,6 @@ void ieee80211_debugfs_key_add(struct ieee80211_key *key)
 	keycount++;
 	key->debugfs.dir = debugfs_create_dir(buf,
 					key->local->debugfs.keys);
-
-	if (!key->debugfs.dir)
-		return;
 
 	sta = key->sta;
 	if (sta) {

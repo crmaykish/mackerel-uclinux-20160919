@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/arch/arm/mach-pxa/cm-x2xx.c
  *
  * Copyright (C) 2008 CompuLab, Ltd.
  * Mike Rapoport <mike@compulab.co.il>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/platform_device.h>
@@ -22,9 +19,18 @@
 #include <asm/mach-types.h>
 #include <asm/mach/map.h>
 
-#include <mach/pxa25x.h>
+#include "pxa25x.h"
 #undef GPIO24_SSP1_SFRM
-#include <mach/pxa27x.h>
+#undef GPIO86_GPIO
+#undef GPIO87_GPIO
+#undef GPIO88_GPIO
+#undef GPIO89_GPIO
+#include "pxa27x.h"
+#undef GPIO24_SSP1_SFRM
+#undef GPIO86_GPIO
+#undef GPIO87_GPIO
+#undef GPIO88_GPIO
+#undef GPIO89_GPIO
 #include <mach/audio.h>
 #include <linux/platform_data/video-pxafb.h>
 #include <mach/smemc.h>

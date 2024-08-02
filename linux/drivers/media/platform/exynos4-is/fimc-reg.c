@@ -1,19 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Register interface file for Samsung Camera Interface (FIMC) driver
  *
  * Copyright (C) 2010 - 2013 Samsung Electronics Co., Ltd.
  * Sylwester Nawrocki <s.nawrocki@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
 */
 
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/regmap.h>
 
-#include <media/exynos-fimc.h>
+#include <media/drv-intf/exynos-fimc.h>
 #include "media-dev.h"
 
 #include "fimc-reg.h"

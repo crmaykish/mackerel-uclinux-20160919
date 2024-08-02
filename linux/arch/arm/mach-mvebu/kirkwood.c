@@ -25,7 +25,6 @@
 #include "kirkwood.h"
 #include "kirkwood-pm.h"
 #include "common.h"
-#include "board.h"
 
 static struct resource kirkwood_cpufreq_resources[] = {
 	[0] = {
@@ -93,7 +92,8 @@ static void __init kirkwood_dt_eth_fixup(void)
 			continue;
 
 		/* skip disabled nodes or nodes with valid MAC address*/
-		if (!of_device_is_available(pnp) || of_get_mac_address(np))
+		if (!of_device_is_available(pnp) ||
+		    !IS_ERR(of_get_mac_address(np)))
 			goto eth_fixup_skip;
 
 		clk = of_clk_get(pnp, 0);
@@ -108,9 +108,6 @@ static void __init kirkwood_dt_eth_fixup(void)
 		clk_prepare_enable(clk);
 
 		/* store MAC address register contents in local-mac-address */
-		pr_err(FW_INFO "%s: local-mac-address is not set\n",
-		       np->full_name);
-
 		pmac = kzalloc(sizeof(*pmac) + 6, GFP_KERNEL);
 		if (!pmac)
 			goto eth_fixup_no_mem;
@@ -151,26 +148,12 @@ eth_fixup_skip:
  * causes mbus errors (which can occur for example for PCI aborts) to
  * throw CPU aborts, which we're not set up to deal with.
  */
-void kirkwood_disable_mbus_error_propagation(void)
+static void kirkwood_disable_mbus_error_propagation(void)
 {
 	void __iomem *cpu_config;
 
 	cpu_config = ioremap(CPU_CONFIG_PHYS, 4);
 	writel(readl(cpu_config) & ~CPU_CONFIG_ERROR_PROP, cpu_config);
-}
-
-static struct map_desc kirkwood_io_desc[] __initdata = {
-	{
-		.virtual = (unsigned long) KIRKWOOD_REGS_VIRT_BASE,
-		.pfn     = __phys_to_pfn(KIRKWOOD_REGS_PHYS_BASE),
-		.length  = 0x100000,
-		.type    = MT_DEVICE,
-	},
-};
-
-static void __init kirkwood_map_io(void)
-{
-	iotable_init(kirkwood_io_desc, ARRAY_SIZE(kirkwood_io_desc));
 }
 
 static struct of_dev_auxdata auxdata[] __initdata = {
@@ -194,11 +177,7 @@ static void __init kirkwood_dt_init(void)
 	kirkwood_pm_init();
 	kirkwood_dt_eth_fixup();
 
-	if (of_machine_is_compatible("accelerated,5400-rm") ||
-	    of_machine_is_compatible("accelerated,6300-ex"))
-		accelerated_init();
-
-	of_platform_populate(NULL, of_default_bus_match_table, auxdata, NULL);
+	of_platform_default_populate(NULL, auxdata, NULL);
 }
 
 static const char * const kirkwood_dt_board_compat[] __initconst = {
@@ -210,6 +189,5 @@ DT_MACHINE_START(KIRKWOOD_DT, "Marvell Kirkwood (Flattened Device Tree)")
 	/* Maintainer: Jason Cooper <jason@lakedaemon.net> */
 	.init_machine	= kirkwood_dt_init,
 	.restart	= mvebu_restart,
-	.map_io		= kirkwood_map_io,
 	.dt_compat	= kirkwood_dt_board_compat,
 MACHINE_END

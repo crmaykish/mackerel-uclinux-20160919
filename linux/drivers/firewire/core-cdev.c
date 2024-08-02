@@ -1,21 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Char device for device raw access
  *
  * Copyright (C) 2005-2007  Kristian Hoegsberg <krh@bitplanet.net>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software Foundation,
- * Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
 #include <linux/bug.h>
@@ -221,7 +208,7 @@ struct inbound_phy_packet_event {
 #ifdef CONFIG_COMPAT
 static void __user *u64_to_uptr(u64 value)
 {
-	if (is_compat_task())
+	if (in_compat_syscall())
 		return compat_ptr(value);
 	else
 		return (void __user *)(unsigned long)value;
@@ -229,7 +216,7 @@ static void __user *u64_to_uptr(u64 value)
 
 static u64 uptr_to_u64(void __user *ptr)
 {
-	if (is_compat_task())
+	if (in_compat_syscall())
 		return ptr_to_compat(ptr);
 	else
 		return (u64)(unsigned long)ptr;
@@ -831,8 +818,10 @@ static int ioctl_send_response(struct client *client, union ioctl_arg *arg)
 
 	r = container_of(resource, struct inbound_transaction_resource,
 			 resource);
-	if (is_fcp_request(r->request))
+	if (is_fcp_request(r->request)) {
+		kfree(r->data);
 		goto out;
+	}
 
 	if (a->length != fw_get_response_length(r->request)) {
 		ret = -EINVAL;
@@ -1094,7 +1083,7 @@ static int ioctl_queue_iso(struct client *client, union ioctl_arg *arg)
 		return -EINVAL;
 
 	p = (struct fw_cdev_iso_packet __user *)u64_to_uptr(a->packets);
-	if (!access_ok(VERIFY_READ, p, a->size))
+	if (!access_ok(p, a->size))
 		return -EFAULT;
 
 	end = (void __user *)p + a->size;
@@ -1205,7 +1194,7 @@ static int ioctl_get_cycle_timer2(struct client *client, union ioctl_arg *arg)
 {
 	struct fw_cdev_get_cycle_timer2 *a = &arg->get_cycle_timer2;
 	struct fw_card *card = client->device->card;
-	struct timespec ts = {0, 0};
+	struct timespec64 ts = {0, 0};
 	u32 cycle_time;
 	int ret = 0;
 
@@ -1214,9 +1203,9 @@ static int ioctl_get_cycle_timer2(struct client *client, union ioctl_arg *arg)
 	cycle_time = card->driver->read_csr(card, CSR_CYCLE_TIME);
 
 	switch (a->clk_id) {
-	case CLOCK_REALTIME:      getnstimeofday(&ts);	break;
-	case CLOCK_MONOTONIC:     ktime_get_ts(&ts);	break;
-	case CLOCK_MONOTONIC_RAW: getrawmonotonic(&ts);	break;
+	case CLOCK_REALTIME:      ktime_get_real_ts64(&ts);	break;
+	case CLOCK_MONOTONIC:     ktime_get_ts64(&ts);		break;
+	case CLOCK_MONOTONIC_RAW: ktime_get_raw_ts64(&ts);	break;
 	default:
 		ret = -EINVAL;
 	}
@@ -1307,8 +1296,7 @@ static void iso_resource_work(struct work_struct *work)
 	 */
 	if (r->todo == ISO_RES_REALLOC && !success &&
 	    !client->in_shutdown &&
-	    idr_find(&client->resource_idr, r->resource.handle)) {
-		idr_remove(&client->resource_idr, r->resource.handle);
+	    idr_remove(&client->resource_idr, r->resource.handle)) {
 		client_put(client);
 		free = true;
 	}
@@ -1496,6 +1484,7 @@ static void outbound_phy_packet_callback(struct fw_packet *packet,
 {
 	struct outbound_phy_packet_event *e =
 		container_of(packet, struct outbound_phy_packet_event, p);
+	struct client *e_client;
 
 	switch (status) {
 	/* expected: */
@@ -1512,9 +1501,10 @@ static void outbound_phy_packet_callback(struct fw_packet *packet,
 	}
 	e->phy_packet.data[0] = packet->timestamp;
 
+	e_client = e->client;
 	queue_event(e->client, &e->event, &e->phy_packet,
 		    sizeof(e->phy_packet) + e->phy_packet.length, NULL, 0);
-	client_put(e->client);
+	client_put(e_client);
 }
 
 static int ioctl_send_phy_packet(struct client *client, union ioctl_arg *arg)
@@ -1785,17 +1775,17 @@ static int fw_device_op_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static unsigned int fw_device_op_poll(struct file *file, poll_table * pt)
+static __poll_t fw_device_op_poll(struct file *file, poll_table * pt)
 {
 	struct client *client = file->private_data;
-	unsigned int mask = 0;
+	__poll_t mask = 0;
 
 	poll_wait(file, &client->wait, pt);
 
 	if (fw_device_is_shutdown(client->device))
-		mask |= POLLHUP | POLLERR;
+		mask |= EPOLLHUP | EPOLLERR;
 	if (!list_empty(&client->event_list))
-		mask |= POLLIN | POLLRDNORM;
+		mask |= EPOLLIN | EPOLLRDNORM;
 
 	return mask;
 }

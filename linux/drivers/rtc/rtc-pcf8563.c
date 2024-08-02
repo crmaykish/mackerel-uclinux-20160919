@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * An I2C driver for the Philips PCF8563 RTC
  * Copyright 2005-06 Tower Technologies
@@ -8,10 +9,6 @@
  * based on the other drivers in this same directory.
  *
  * http://www.semiconductors.philips.com/acrobat/datasheets/PCF8563-04.pdf
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk-provider.h>
@@ -22,8 +19,6 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/err.h>
-
-#define DRV_VERSION "0.4.4"
 
 #define PCF8563_REG_ST1		0x00 /* status */
 #define PCF8563_REG_ST2		0x01
@@ -201,8 +196,9 @@ static irqreturn_t pcf8563_irq(int irq, void *dev_id)
  * In the routines that deal directly with the pcf8563 hardware, we use
  * rtc_time -- month 0-11, hour 0-23, yr = calendar year-epoch.
  */
-static int pcf8563_get_datetime(struct i2c_client *client, struct rtc_time *tm)
+static int pcf8563_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct pcf8563 *pcf8563 = i2c_get_clientdata(client);
 	unsigned char buf[9];
 	int err;
@@ -233,9 +229,7 @@ static int pcf8563_get_datetime(struct i2c_client *client, struct rtc_time *tm)
 	tm->tm_mday = bcd2bin(buf[PCF8563_REG_DM] & 0x3F);
 	tm->tm_wday = buf[PCF8563_REG_DW] & 0x07;
 	tm->tm_mon = bcd2bin(buf[PCF8563_REG_MO] & 0x1F) - 1; /* rtc mn 1-12 */
-	tm->tm_year = bcd2bin(buf[PCF8563_REG_YR]);
-	if (tm->tm_year < 70)
-		tm->tm_year += 100;	/* assume we are in 1970...2069 */
+	tm->tm_year = bcd2bin(buf[PCF8563_REG_YR]) + 100;
 	/* detect the polarity heuristically. see note above. */
 	pcf8563->c_polarity = (buf[PCF8563_REG_MO] & PCF8563_MO_C) ?
 		(tm->tm_year >= 100) : (tm->tm_year < 100);
@@ -249,14 +243,17 @@ static int pcf8563_get_datetime(struct i2c_client *client, struct rtc_time *tm)
 	return 0;
 }
 
-static int pcf8563_set_datetime(struct i2c_client *client, struct rtc_time *tm)
+static int pcf8563_rtc_set_time(struct device *dev, struct rtc_time *tm)
 {
+	struct i2c_client *client = to_i2c_client(dev);
 	struct pcf8563 *pcf8563 = i2c_get_clientdata(client);
 	unsigned char buf[9];
 
-	dev_dbg(&client->dev, "%s: secs=%d, mins=%d, hours=%d, ",
+	dev_dbg(&client->dev, "%s: secs=%d, mins=%d, hours=%d, "
+		"mday=%d, mon=%d, year=%d, wday=%d\n",
 		__func__,
-		tm->tm_sec, tm->tm_min, tm->tm_hour);
+		tm->tm_sec, tm->tm_min, tm->tm_hour,
+		tm->tm_mday, tm->tm_mon, tm->tm_year, tm->tm_wday);
 
 	/* hours, minutes and seconds */
 	buf[PCF8563_REG_SC] = bin2bcd(tm->tm_sec);
@@ -269,7 +266,7 @@ static int pcf8563_set_datetime(struct i2c_client *client, struct rtc_time *tm)
 	buf[PCF8563_REG_MO] = bin2bcd(tm->tm_mon + 1);
 
 	/* year and century */
-	buf[PCF8563_REG_YR] = bin2bcd(tm->tm_year % 100);
+	buf[PCF8563_REG_YR] = bin2bcd(tm->tm_year - 100);
 	if (pcf8563->c_polarity ? (tm->tm_year >= 100) : (tm->tm_year < 100))
 		buf[PCF8563_REG_MO] |= PCF8563_MO_C;
 
@@ -302,8 +299,8 @@ static int pcf8563_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long
 		 * because of the cached voltage_low value but do it
 		 * anyway for consistency.
 		 */
-		if (pcf8563_get_datetime(to_i2c_client(dev), &tm))
-			pcf8563_set_datetime(to_i2c_client(dev), &tm);
+		if (pcf8563_rtc_read_time(dev, &tm))
+			pcf8563_rtc_set_time(dev, &tm);
 
 		/* Clear the cached value. */
 		pcf8563->voltage_low = 0;
@@ -316,16 +313,6 @@ static int pcf8563_rtc_ioctl(struct device *dev, unsigned int cmd, unsigned long
 #else
 #define pcf8563_rtc_ioctl NULL
 #endif
-
-static int pcf8563_rtc_read_time(struct device *dev, struct rtc_time *tm)
-{
-	return pcf8563_get_datetime(to_i2c_client(dev), tm);
-}
-
-static int pcf8563_rtc_set_time(struct device *dev, struct rtc_time *tm)
-{
-	return pcf8563_set_datetime(to_i2c_client(dev), tm);
-}
 
 static int pcf8563_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *tm)
 {
@@ -341,14 +328,11 @@ static int pcf8563_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *tm)
 		"%s: raw data is min=%02x, hr=%02x, mday=%02x, wday=%02x\n",
 		__func__, buf[0], buf[1], buf[2], buf[3]);
 
+	tm->time.tm_sec = 0;
 	tm->time.tm_min = bcd2bin(buf[0] & 0x7F);
 	tm->time.tm_hour = bcd2bin(buf[1] & 0x3F);
 	tm->time.tm_mday = bcd2bin(buf[2] & 0x3F);
 	tm->time.tm_wday = bcd2bin(buf[3] & 0x7);
-	tm->time.tm_mon = -1;
-	tm->time.tm_year = -1;
-	tm->time.tm_yday = -1;
-	tm->time.tm_isdst = -1;
 
 	err = pcf8563_get_alarm_mode(client, &tm->enabled, &tm->pending);
 	if (err < 0)
@@ -390,7 +374,7 @@ static int pcf8563_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *tm)
 	if (err)
 		return err;
 
-	return pcf8563_set_alarm_mode(client, 1);
+	return pcf8563_set_alarm_mode(client, !!tm->enabled);
 }
 
 static int pcf8563_irq_enable(struct device *dev, unsigned int enabled)
@@ -425,7 +409,7 @@ static unsigned long pcf8563_clkout_recalc_rate(struct clk_hw *hw,
 		return 0;
 
 	buf &= PCF8563_REG_CLKO_F_MASK;
-	return clkout_rates[ret];
+	return clkout_rates[buf];
 }
 
 static long pcf8563_clkout_round_rate(struct clk_hw *hw, unsigned long rate,
@@ -533,7 +517,7 @@ static struct clk *pcf8563_clkout_register_clk(struct pcf8563 *pcf8563)
 
 	init.name = "pcf8563-clkout";
 	init.ops = &pcf8563_clkout_ops;
-	init.flags = CLK_IS_ROOT;
+	init.flags = 0;
 	init.parent_names = NULL;
 	init.num_parents = 0;
 	pcf8563->clkout_hw.init = &init;
@@ -566,7 +550,6 @@ static int pcf8563_probe(struct i2c_client *client,
 	struct pcf8563 *pcf8563;
 	int err;
 	unsigned char buf;
-	unsigned char alm_pending;
 
 	dev_dbg(&client->dev, "%s\n", __func__);
 
@@ -577,8 +560,6 @@ static int pcf8563_probe(struct i2c_client *client,
 				GFP_KERNEL);
 	if (!pcf8563)
 		return -ENOMEM;
-
-	dev_info(&client->dev, "chip found, driver version " DRV_VERSION "\n");
 
 	i2c_set_clientdata(client, pcf8563);
 	pcf8563->client = client;
@@ -592,41 +573,45 @@ static int pcf8563_probe(struct i2c_client *client,
 		return err;
 	}
 
-	err = pcf8563_get_alarm_mode(client, NULL, &alm_pending);
-	if (err) {
-		dev_err(&client->dev, "%s: read error\n", __func__);
+	/* Clear flags and disable interrupts */
+	buf = 0;
+	err = pcf8563_write_block_data(client, PCF8563_REG_ST2, 1, &buf);
+	if (err < 0) {
+		dev_err(&client->dev, "%s: write error\n", __func__);
 		return err;
 	}
-	if (alm_pending)
-		pcf8563_set_alarm_mode(client, 0);
 
-	pcf8563->rtc = devm_rtc_device_register(&client->dev,
-				pcf8563_driver.driver.name,
-				&pcf8563_rtc_ops, THIS_MODULE);
-
+	pcf8563->rtc = devm_rtc_allocate_device(&client->dev);
 	if (IS_ERR(pcf8563->rtc))
 		return PTR_ERR(pcf8563->rtc);
+
+	pcf8563->rtc->ops = &pcf8563_rtc_ops;
+	/* the pcf8563 alarm only supports a minute accuracy */
+	pcf8563->rtc->uie_unsupported = 1;
+	pcf8563->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
+	pcf8563->rtc->range_max = RTC_TIMESTAMP_END_2099;
+	pcf8563->rtc->set_start_time = true;
 
 	if (client->irq > 0) {
 		err = devm_request_threaded_irq(&client->dev, client->irq,
 				NULL, pcf8563_irq,
-				IRQF_SHARED|IRQF_ONESHOT|IRQF_TRIGGER_FALLING,
-				pcf8563->rtc->name, client);
+				IRQF_SHARED | IRQF_ONESHOT | IRQF_TRIGGER_LOW,
+				pcf8563_driver.driver.name, client);
 		if (err) {
 			dev_err(&client->dev, "unable to request IRQ %d\n",
 								client->irq);
 			return err;
 		}
-
 	}
+
+	err = rtc_register_device(pcf8563->rtc);
+	if (err)
+		return err;
 
 #ifdef CONFIG_COMMON_CLK
 	/* register clk in common clk framework */
 	pcf8563_clkout_register_clk(pcf8563);
 #endif
-
-	/* the pcf8563 alarm only supports a minute accuracy */
-	pcf8563->rtc->uie_unsupported = 1;
 
 	return 0;
 }
@@ -641,6 +626,8 @@ MODULE_DEVICE_TABLE(i2c, pcf8563_id);
 #ifdef CONFIG_OF
 static const struct of_device_id pcf8563_of_match[] = {
 	{ .compatible = "nxp,pcf8563" },
+	{ .compatible = "epson,rtc8564" },
+	{ .compatible = "microcrystal,rv8564" },
 	{}
 };
 MODULE_DEVICE_TABLE(of, pcf8563_of_match);
@@ -660,4 +647,3 @@ module_i2c_driver(pcf8563_driver);
 MODULE_AUTHOR("Alessandro Zummo <a.zummo@towertech.it>");
 MODULE_DESCRIPTION("Philips PCF8563/Epson RTC8564 RTC driver");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(DRV_VERSION);

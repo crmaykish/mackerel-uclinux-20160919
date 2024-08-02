@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Xtensa Performance Monitor Module driver
  * See Tensilica Debug User's Guide for PMU registers documentation.
  *
  * Copyright (C) 2015 Cadence Design Systems Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/interrupt.h>
@@ -16,17 +13,26 @@
 #include <linux/perf_event.h>
 #include <linux/platform_device.h>
 
+#include <asm/core.h>
 #include <asm/processor.h>
 #include <asm/stacktrace.h>
 
+#define XTENSA_HWVERSION_RG_2015_0	260000
+
+#if XCHAL_HW_MIN_VERSION >= XTENSA_HWVERSION_RG_2015_0
+#define XTENSA_PMU_ERI_BASE		0x00101000
+#else
+#define XTENSA_PMU_ERI_BASE		0x00001000
+#endif
+
 /* Global control/status for all perf counters */
-#define XTENSA_PMU_PMG			0x1000
+#define XTENSA_PMU_PMG			XTENSA_PMU_ERI_BASE
 /* Perf counter values */
-#define XTENSA_PMU_PM(i)		(0x1080 + (i) * 4)
+#define XTENSA_PMU_PM(i)		(XTENSA_PMU_ERI_BASE + 0x80 + (i) * 4)
 /* Perf counter control registers */
-#define XTENSA_PMU_PMCTRL(i)		(0x1100 + (i) * 4)
+#define XTENSA_PMU_PMCTRL(i)		(XTENSA_PMU_ERI_BASE + 0x100 + (i) * 4)
 /* Perf counter status registers */
-#define XTENSA_PMU_PMSTAT(i)		(0x1180 + (i) * 4)
+#define XTENSA_PMU_PMSTAT(i)		(XTENSA_PMU_ERI_BASE + 0x180 + (i) * 4)
 
 #define XTENSA_PMU_PMG_PMEN		0x1
 
@@ -323,23 +329,23 @@ static void xtensa_pmu_read(struct perf_event *event)
 
 static int callchain_trace(struct stackframe *frame, void *data)
 {
-	struct perf_callchain_entry *entry = data;
+	struct perf_callchain_entry_ctx *entry = data;
 
 	perf_callchain_store(entry, frame->pc);
 	return 0;
 }
 
-void perf_callchain_kernel(struct perf_callchain_entry *entry,
+void perf_callchain_kernel(struct perf_callchain_entry_ctx *entry,
 			   struct pt_regs *regs)
 {
-	xtensa_backtrace_kernel(regs, PERF_MAX_STACK_DEPTH,
+	xtensa_backtrace_kernel(regs, entry->max_stack,
 				callchain_trace, NULL, entry);
 }
 
-void perf_callchain_user(struct perf_callchain_entry *entry,
+void perf_callchain_user(struct perf_callchain_entry_ctx *entry,
 			 struct pt_regs *regs)
 {
-	xtensa_backtrace_user(regs, PERF_MAX_STACK_DEPTH,
+	xtensa_backtrace_user(regs, entry->max_stack,
 			      callchain_trace, entry);
 }
 
@@ -404,7 +410,7 @@ static struct pmu xtensa_pmu = {
 	.read = xtensa_pmu_read,
 };
 
-static void xtensa_pmu_setup(void)
+static int xtensa_pmu_setup(unsigned int cpu)
 {
 	unsigned i;
 
@@ -413,21 +419,7 @@ static void xtensa_pmu_setup(void)
 		set_er(0, XTENSA_PMU_PMCTRL(i));
 		set_er(get_er(XTENSA_PMU_PMSTAT(i)), XTENSA_PMU_PMSTAT(i));
 	}
-}
-
-static int xtensa_pmu_notifier(struct notifier_block *self,
-			       unsigned long action, void *data)
-{
-	switch (action & ~CPU_TASKS_FROZEN) {
-	case CPU_STARTING:
-		xtensa_pmu_setup();
-		break;
-
-	default:
-		break;
-	}
-
-	return NOTIFY_OK;
+	return 0;
 }
 
 static int __init xtensa_pmu_init(void)
@@ -435,7 +427,13 @@ static int __init xtensa_pmu_init(void)
 	int ret;
 	int irq = irq_create_mapping(NULL, XCHAL_PROFILING_INTERRUPT);
 
-	perf_cpu_notifier(xtensa_pmu_notifier);
+	ret = cpuhp_setup_state(CPUHP_AP_PERF_XTENSA_STARTING,
+				"perf/xtensa:starting", xtensa_pmu_setup,
+				NULL);
+	if (ret) {
+		pr_err("xtensa_pmu: failed to register CPU-hotplug.\n");
+		return ret;
+	}
 #if XTENSA_FAKE_NMI
 	enable_irq(irq);
 #else

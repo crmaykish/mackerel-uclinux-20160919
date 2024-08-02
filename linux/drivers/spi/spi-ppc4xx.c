@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * SPI_PPC4XX SPI controller driver.
  *
@@ -10,10 +11,6 @@
  * Copyright (c) 2006 Ben Dooks
  * Copyright (c) 2006 Simtec Electronics
  *	Ben Dooks <ben@simtec.co.uk>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  */
 
 /*
@@ -173,10 +170,8 @@ static int spi_ppc4xx_setupxfer(struct spi_device *spi, struct spi_transfer *t)
 	int scr;
 	u8 cdm = 0;
 	u32 speed;
-	u8 bits_per_word;
 
 	/* Start with the generic configuration for this device. */
-	bits_per_word = spi->bits_per_word;
 	speed = spi->max_speed_hz;
 
 	/*
@@ -184,9 +179,6 @@ static int spi_ppc4xx_setupxfer(struct spi_device *spi, struct spi_transfer *t)
 	 * the transfer to overwrite the generic configuration with zeros.
 	 */
 	if (t) {
-		if (t->bits_per_word)
-			bits_per_word = t->bits_per_word;
-
 		if (t->speed_hz)
 			speed = min(t->speed_hz, spi->max_speed_hz);
 	}
@@ -411,7 +403,7 @@ static int spi_ppc4xx_of_probe(struct platform_device *op)
 	if (num_gpios > 0) {
 		int i;
 
-		hw->gpios = kzalloc(sizeof(int) * num_gpios, GFP_KERNEL);
+		hw->gpios = kcalloc(num_gpios, sizeof(*hw->gpios), GFP_KERNEL);
 		if (!hw->gpios) {
 			ret = -ENOMEM;
 			goto free_master;
@@ -428,8 +420,9 @@ static int spi_ppc4xx_of_probe(struct platform_device *op)
 				/* Real CS - set the initial state. */
 				ret = gpio_request(gpio, np->name);
 				if (ret < 0) {
-					dev_err(dev, "can't request gpio "
-							"#%d: %d\n", i, ret);
+					dev_err(dev,
+						"can't request gpio #%d: %d\n",
+						i, ret);
 					goto free_gpios;
 				}
 

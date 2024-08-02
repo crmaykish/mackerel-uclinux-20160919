@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2014 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/irqchip.h>
@@ -72,7 +69,7 @@ static void __init imx6sx_init_machine(void)
 	if (parent == NULL)
 		pr_warn("failed to initialize soc device\n");
 
-	of_platform_populate(NULL, of_default_bus_match_table, NULL, parent);
+	of_platform_default_populate(NULL, NULL, parent);
 
 	imx6sx_enet_init();
 	imx_anatop_init();
@@ -103,6 +100,8 @@ static const char * const imx6sx_dt_compat[] __initconst = {
 };
 
 DT_MACHINE_START(IMX6SX, "Freescale i.MX6 SoloX (Device Tree)")
+	.l2c_aux_val 	= 0,
+	.l2c_aux_mask	= ~0,
 	.init_irq	= imx6sx_init_irq,
 	.init_machine	= imx6sx_init_machine,
 	.dt_compat	= imx6sx_dt_compat,

@@ -60,7 +60,7 @@ static int nfcmrvl_i2c_read(struct nfcmrvl_i2c_drv_data *drv_data,
 		return -ENOMEM;
 
 	/* Copy NCI header into the SKB */
-	memcpy(skb_put(*skb, NCI_CTRL_HDR_SIZE), &nci_hdr, NCI_CTRL_HDR_SIZE);
+	skb_put_data(*skb, &nci_hdr, NCI_CTRL_HDR_SIZE);
 
 	if (nci_hdr.plen) {
 		/* Read the NCI payload */
@@ -151,10 +151,15 @@ static int nfcmrvl_i2c_nci_send(struct nfcmrvl_private *priv,
 			ret = -EREMOTEIO;
 		} else
 			ret = 0;
-		kfree_skb(skb);
 	}
 
-	return ret;
+	if (ret) {
+		kfree_skb(skb);
+		return ret;
+	}
+
+	consume_skb(skb);
+	return 0;
 }
 
 static void nfcmrvl_i2c_nci_update_config(struct nfcmrvl_private *priv,
@@ -186,9 +191,9 @@ static int nfcmrvl_i2c_parse_dt(struct device_node *node,
 		pdata->irq_polarity = IRQF_TRIGGER_RISING;
 
 	ret = irq_of_parse_and_map(node, 0);
-	if (ret < 0) {
-		pr_err("Unable to get irq, error: %d\n", ret);
-		return ret;
+	if (!ret) {
+		pr_err("Unable to get irq\n");
+		return -EINVAL;
 	}
 	pdata->irq = ret;
 
@@ -266,7 +271,7 @@ static const struct of_device_id of_nfcmrvl_i2c_match[] = {
 };
 MODULE_DEVICE_TABLE(of, of_nfcmrvl_i2c_match);
 
-static struct i2c_device_id nfcmrvl_i2c_id_table[] = {
+static const struct i2c_device_id nfcmrvl_i2c_id_table[] = {
 	{ "nfcmrvl_i2c", 0 },
 	{}
 };

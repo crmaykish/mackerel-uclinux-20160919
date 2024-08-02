@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * i740fb - framebuffer driver for Intel740
  * Copyright (c) 2011 Ondrej Zary
@@ -82,7 +83,7 @@ struct i740fb_par {
 #define DACSPEED24_SD	128
 #define DACSPEED32	86
 
-static struct fb_fix_screeninfo i740fb_fix = {
+static const struct fb_fix_screeninfo i740fb_fix = {
 	.id =		"i740fb",
 	.type =		FB_TYPE_PACKED_PIXELS,
 	.visual =	FB_VISUAL_TRUECOLOR,
@@ -346,11 +347,10 @@ static void i740_calc_vclk(u32 freq, struct i740fb_par *par)
 	const u32 err_target = freq / (1000 * I740_RFREQ / I740_FFIX);
 	u32 err_best = 512 * I740_FFIX;
 	u32 f_err, f_vco;
-	int m_best = 0, n_best = 0, p_best = 0, d_best = 0;
+	int m_best = 0, n_best = 0, p_best = 0;
 	int m, n;
 
 	p_best = min(15, ilog2(I740_MAX_VCO_FREQ / (freq / I740_RFREQ_FIX)));
-	d_best = 0;
 	f_vco = (freq * (1 << p_best)) / I740_RFREQ_FIX;
 	freq = freq / I740_RFREQ_FIX;
 
@@ -363,7 +363,7 @@ static void i740_calc_vclk(u32 freq, struct i740fb_par *par)
 			m = 3;
 
 		{
-			u32 f_out = (((m * I740_REF_FREQ * (4 << 2 * d_best))
+			u32 f_out = (((m * I740_REF_FREQ * 4)
 				 / n) + ((1 << p_best) / 2)) / (1 << p_best);
 
 			f_err = (freq - f_out);
@@ -386,8 +386,7 @@ static void i740_calc_vclk(u32 freq, struct i740fb_par *par)
 	par->video_clk2_n = (n_best - 2) & 0xFF;
 	par->video_clk2_mn_msbs = ((((n_best - 2) >> 4) & VCO_N_MSBS)
 				 | (((m_best - 2) >> 8) & VCO_M_MSBS));
-	par->video_clk2_div_sel =
-		((p_best << 4) | (d_best ? 4 : 0) | REF_DIV_1);
+	par->video_clk2_div_sel = ((p_best << 4) | REF_DIV_1);
 }
 
 static int i740fb_decode_var(const struct fb_var_screeninfo *var,
@@ -401,7 +400,7 @@ static int i740fb_decode_var(const struct fb_var_screeninfo *var,
 	u32 xres, right, hslen, left, xtotal;
 	u32 yres, lower, vslen, upper, ytotal;
 	u32 vxres, xoffset, vyres, yoffset;
-	u32 bpp, base, dacspeed24, mem;
+	u32 bpp, base, dacspeed24, mem, freq;
 	u8 r7;
 	int i;
 
@@ -431,6 +430,7 @@ static int i740fb_decode_var(const struct fb_var_screeninfo *var,
 		break;
 	case 9 ... 15:
 		bpp = 15;
+		/* fall through */
 	case 16:
 		if ((1000000 / var->pixclock) > DACSPEED16) {
 			dev_err(info->device, "requested pixclock %i MHz out of range (max. %i MHz at 15/16bpp)\n",
@@ -643,7 +643,12 @@ static int i740fb_decode_var(const struct fb_var_screeninfo *var,
 	par->atc[VGA_ATC_OVERSCAN] = 0;
 
 	/* Calculate VCLK that most closely matches the requested dot clock */
-	i740_calc_vclk((((u32)1e9) / var->pixclock) * (u32)(1e3), par);
+	freq = (((u32)1e9) / var->pixclock) * (u32)(1e3);
+	if (freq < I740_RFREQ_FIX) {
+		fb_dbg(info, "invalid pixclock\n");
+		freq = I740_RFREQ_FIX;
+	}
+	i740_calc_vclk(freq, par);
 
 	/* Since we program the clocks ourselves, always use VCLK2. */
 	par->misc |= 0x0C;
@@ -1006,10 +1011,8 @@ static int i740fb_probe(struct pci_dev *dev, const struct pci_device_id *ent)
 	u8 *edid;
 
 	info = framebuffer_alloc(sizeof(struct i740fb_par), &(dev->dev));
-	if (!info) {
-		dev_err(&(dev->dev), "cannot allocate framebuffer\n");
+	if (!info)
 		return -ENOMEM;
-	}
 
 	par = info->par;
 	mutex_init(&par->open_lock);

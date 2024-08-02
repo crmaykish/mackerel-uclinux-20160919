@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * drivers/usb/host/ehci-orion.c
  *
  * Tzachi Perelstein <tzachi@marvell.com>
- *
- * This file is licensed under  the terms of the GNU General Public
- * License version 2. This program is licensed "as is" without any
- * warranty of any kind, whether express or implied.
  */
 
 #include <linux/kernel.h>
@@ -47,6 +44,18 @@
 #define USB_PHY_IVREF_CTRL	0x440
 #define USB_PHY_TST_GRP_CTRL	0x450
 
+#define USB_SBUSCFG		0x90
+
+/* BAWR = BARD = 3 : Align read/write bursts packets larger than 128 bytes */
+#define USB_SBUSCFG_BAWR_ALIGN_128B	(0x3 << 6)
+#define USB_SBUSCFG_BARD_ALIGN_128B	(0x3 << 3)
+/* AHBBRST = 3	   : Align AHB Burst to INCR16 (64 bytes) */
+#define USB_SBUSCFG_AHBBRST_INCR16	(0x3 << 0)
+
+#define USB_SBUSCFG_DEF_VAL (USB_SBUSCFG_BAWR_ALIGN_128B	\
+			     | USB_SBUSCFG_BARD_ALIGN_128B	\
+			     | USB_SBUSCFG_AHBBRST_INCR16)
+
 #define DRIVER_DESC "EHCI orion driver"
 
 #define hcd_to_orion_priv(h) ((struct orion_ehci_hcd *)hcd_to_ehci(h)->priv)
@@ -59,107 +68,6 @@ struct orion_ehci_hcd {
 static const char hcd_name[] = "ehci-orion";
 
 static struct hc_driver __read_mostly ehci_orion_hc_driver;
-
-#ifdef CONFIG_USB_MARVELL_ERRATA_FE_9049667
-/*
- * In a370 and axp USB UTMI PHY there is an errata which causes
- * error in detection of high speed devices. For certain devices
- * with low pull up values the USB MAC doesnt detect the end of the
- * device chirp K signal and therefore remains stuck in reset
- * state.
- * The workaround solves this issue by modifying the UTMI PHY
- * squelch threshold once a high speed port reset error is detected.
- * Modifying the squelch level enables the MAC to detect the end of
- * device chirp K signal and to come out of reset. Once the MAC
- * comes out of reset a consecutive reset attempt is made by the USB stack.
- * This reset attempt succeeds due to the updated squelch level.
- *
- * Since the optimal squelch level is device dependant the WA
- * toggles between 2 verfied squelch levels 0xA and 0xE.
- */
-#define MAX_EHCI_PORTS		3
-#define PHY_RX_CTRL_REG_OFFSET(x) (0x708 + (0x40 * (x)))
-#define SQUELCH_TH_OFFSET	4
-#define SQUELCH_TH_MASK		0xF
-
-static int hs_wa_applied[MAX_EHCI_PORTS] = {0};
-
-static void ehci_marvell_toggle_squelch(struct ehci_hcd *ehci, int busnum)
-{
-	u32 __iomem *phy_rx_ctrl_reg;
-	u32 val, squelch_th;
-
-	phy_rx_ctrl_reg = (u32 __iomem *)(((u8 __iomem *)ehci->regs)
-			+ PHY_RX_CTRL_REG_OFFSET(busnum - 1));
-
-	val = ehci_readl(ehci, phy_rx_ctrl_reg);
-
-	squelch_th = (val >> SQUELCH_TH_OFFSET) & SQUELCH_TH_MASK;
-	if (squelch_th == 0xA)
-		squelch_th = 0xE;
-	else
-		squelch_th = 0xA;
-
-	val &= ~(SQUELCH_TH_MASK << SQUELCH_TH_OFFSET);
-	val |= (squelch_th & SQUELCH_TH_MASK) << SQUELCH_TH_OFFSET;
-
-	ehci_writel(ehci, val, phy_rx_ctrl_reg);
-}
-
-void ehci_marvell_hs_detect_wa_done(struct usb_device *udev)
-{
-	struct usb_hcd *hcd = bus_to_hcd(udev->bus);
-	struct ehci_hcd	*ehci = hcd_to_ehci(hcd);
-	int busnum = hcd->self.busnum;
-
-	if (hs_wa_applied[busnum])
-		ehci_marvell_toggle_squelch(ehci, busnum);
-
-	hs_wa_applied[busnum] = 0;
-}
-
-int ehci_marvell_hs_detect_wa(struct ehci_hcd *ehci, int busnum)
-{
-	u32 __iomem *portsc_reg;
-	u32 val = 0;
-	u32 timeout;
-
-	/* Apply the WA only once in a reset cycle */
-	if (hs_wa_applied[busnum]++)
-		return 1;
-
-	ehci_marvell_toggle_squelch(ehci, busnum);
-
-	/*
-	 * After the squelch value is replaced we need to
-	 * wait upto 3ms for the MAC to leave reset state.
-	 */
-	portsc_reg = &ehci->regs->port_status[0];
-	timeout = 30;
-	while (timeout--) {
-		udelay(100);
-		val = ehci_readl(ehci, portsc_reg);
-		if ((val & PORT_RESET) == 0)
-			break;
-	}
-
-	/* Return error If the MAC doesn't come out of reset */
-	if (val & PORT_RESET)
-		return 1;
-
-	/*
-	 * Clear Connect Status Change, Port Enable, and Port Enable Change.
-	 * This returns the port status to pre-reset state and allows for
-	 * succesfull consecutive reset.
-	 */
-	val = ehci_readl(ehci, portsc_reg);
-	val = val  & (~PORT_PE);
-	val = (val  & (~PORT_RWC_BITS)) | PORT_CSC | PORT_PEC;
-	ehci_writel(ehci, val, portsc_reg);
-
-	return 0;
-}
-#endif /* CONFIG_USB_MARVELL_ERRATA_FE_9049667 */
 
 /*
  * Implement Orion USB controller specification guidelines
@@ -252,8 +160,48 @@ ehci_orion_conf_mbus_windows(struct usb_hcd *hcd,
 	}
 }
 
+static int ehci_orion_drv_reset(struct usb_hcd *hcd)
+{
+	struct device *dev = hcd->self.controller;
+	int ret;
+
+	ret = ehci_setup(hcd);
+	if (ret)
+		return ret;
+
+	/*
+	 * For SoC without hlock, need to program sbuscfg value to guarantee
+	 * AHB master's burst would not overrun or underrun FIFO.
+	 *
+	 * sbuscfg reg has to be set after usb controller reset, otherwise
+	 * the value would be override to 0.
+	 */
+	if (of_device_is_compatible(dev->of_node, "marvell,armada-3700-ehci"))
+		wrl(USB_SBUSCFG, USB_SBUSCFG_DEF_VAL);
+
+	return ret;
+}
+
+static int __maybe_unused ehci_orion_drv_suspend(struct device *dev)
+{
+	struct usb_hcd *hcd = dev_get_drvdata(dev);
+
+	return ehci_suspend(hcd, device_may_wakeup(dev));
+}
+
+static int __maybe_unused ehci_orion_drv_resume(struct device *dev)
+{
+	struct usb_hcd *hcd = dev_get_drvdata(dev);
+
+	return ehci_resume(hcd, false);
+}
+
+static SIMPLE_DEV_PM_OPS(ehci_orion_pm_ops, ehci_orion_drv_suspend,
+			 ehci_orion_drv_resume);
+
 static const struct ehci_driver_overrides orion_overrides __initconst = {
 	.extra_priv_size =	sizeof(struct orion_ehci_hcd),
+	.reset = ehci_orion_drv_reset,
 };
 
 static int ehci_orion_drv_probe(struct platform_device *pdev)
@@ -275,9 +223,6 @@ static int ehci_orion_drv_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq <= 0) {
-		dev_err(&pdev->dev,
-			"Found HC with no IRQ. Check %s setup!\n",
-			dev_name(&pdev->dev));
 		err = -ENODEV;
 		goto err;
 	}
@@ -319,22 +264,17 @@ static int ehci_orion_drv_probe(struct platform_device *pdev)
 	 * the clock does not exists.
 	 */
 	priv->clk = devm_clk_get(&pdev->dev, NULL);
-	if (!IS_ERR(priv->clk))
-		clk_prepare_enable(priv->clk);
+	if (!IS_ERR(priv->clk)) {
+		err = clk_prepare_enable(priv->clk);
+		if (err)
+			goto err_put_hcd;
+	}
 
 	priv->phy = devm_phy_optional_get(&pdev->dev, "usb");
 	if (IS_ERR(priv->phy)) {
 		err = PTR_ERR(priv->phy);
 		if (err != -ENOSYS)
-			goto err_phy_get;
-	} else {
-		err = phy_init(priv->phy);
-		if (err)
-			goto err_phy_init;
-
-		err = phy_power_on(priv->phy);
-		if (err)
-			goto err_phy_power_on;
+			goto err_dis_clk;
 	}
 
 	/*
@@ -366,21 +306,15 @@ static int ehci_orion_drv_probe(struct platform_device *pdev)
 
 	err = usb_add_hcd(hcd, irq, IRQF_SHARED);
 	if (err)
-		goto err_add_hcd;
+		goto err_dis_clk;
 
 	device_wakeup_enable(hcd->self.controller);
 	return 0;
 
-err_add_hcd:
-	if (!IS_ERR(priv->phy))
-		phy_power_off(priv->phy);
-err_phy_power_on:
-	if (!IS_ERR(priv->phy))
-		phy_exit(priv->phy);
-err_phy_init:
-err_phy_get:
+err_dis_clk:
 	if (!IS_ERR(priv->clk))
 		clk_disable_unprepare(priv->clk);
+err_put_hcd:
 	usb_put_hcd(hcd);
 err:
 	dev_err(&pdev->dev, "init %s fail, %d\n",
@@ -396,11 +330,6 @@ static int ehci_orion_drv_remove(struct platform_device *pdev)
 
 	usb_remove_hcd(hcd);
 
-	if (!IS_ERR(priv->phy)) {
-		phy_power_off(priv->phy);
-		phy_exit(priv->phy);
-	}
-
 	if (!IS_ERR(priv->clk))
 		clk_disable_unprepare(priv->clk);
 
@@ -411,6 +340,7 @@ static int ehci_orion_drv_remove(struct platform_device *pdev)
 
 static const struct of_device_id ehci_orion_dt_ids[] = {
 	{ .compatible = "marvell,orion-ehci", },
+	{ .compatible = "marvell,armada-3700-ehci", },
 	{},
 };
 MODULE_DEVICE_TABLE(of, ehci_orion_dt_ids);
@@ -422,6 +352,7 @@ static struct platform_driver ehci_orion_driver = {
 	.driver = {
 		.name	= "orion-ehci",
 		.of_match_table = ehci_orion_dt_ids,
+		.pm = &ehci_orion_pm_ops,
 	},
 };
 

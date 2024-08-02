@@ -1,8 +1,11 @@
-
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * board initialization code should put one of these into dev->platform_data
  * and place the isp1362 onto platform_bus.
  */
+
+#ifndef __LINUX_USB_ISP1362_H__
+#define __LINUX_USB_ISP1362_H__
 
 struct isp1362_platform_data {
 	/* Enable internal pulldown resistors on downstream ports */
@@ -32,11 +35,13 @@ struct isp1362_platform_data {
 	/* Clock start/stop */
 	void (*clock) (struct device *dev, int start);
 	/* Inter-io delay (ns). The chip is picky about access timings; it
-	   expects at least:
-	   110ns delay between consecutive accesses to DATA_REG,
-	   300ns delay between access to ADDR_REG and DATA_REG (registers)
-	   462ns delay between access to ADDR_REG and DATA_REG (buffer memory)
-	   WE MUST NOT be activated during these intervals (even without CS!)
+	 * expects at least:
+	 * 110ns delay between consecutive accesses to DATA_REG,
+	 * 300ns delay between access to ADDR_REG and DATA_REG (registers)
+	 * 462ns delay between access to ADDR_REG and DATA_REG (buffer memory)
+	 * WE MUST NOT be activated during these intervals (even without CS!)
 	 */
 	void (*delay) (struct device *dev, unsigned int delay);
 };
+
+#endif

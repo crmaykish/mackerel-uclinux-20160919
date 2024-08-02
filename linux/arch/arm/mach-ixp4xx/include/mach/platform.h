@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * arch/arm/mach-ixp4xx/include/mach/platform.h
  *
@@ -130,19 +131,6 @@ extern void ixp4xx_pci_preinit(void);
 struct pci_sys_data;
 extern int ixp4xx_setup(int nr, struct pci_sys_data *sys);
 extern struct pci_ops ixp4xx_ops;
-
-/* GPIO pin types */
-#define IXP4XX_GPIO_OUT			0x1
-#define IXP4XX_GPIO_IN			0x2
-
-/* GPIO signal types */
-#define IXP4XX_GPIO_LOW			0
-#define IXP4XX_GPIO_HIGH		1
-
-void gpio_line_config(u8 line, u32 direction);
-void gpio_line_get(u8 line, int *value);
-void gpio_line_set(u8 line, int value);
-void gpio_line_isr_clear(u8 line);
 
 #endif // __ASSEMBLY__
 

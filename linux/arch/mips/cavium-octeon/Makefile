@@ -12,11 +12,10 @@
 obj-y := cpu.o setup.o octeon-platform.o octeon-irq.o csrc-octeon.o
 obj-y += dma-octeon.o
 obj-y += octeon-memcpy.o
-obj-y += gpio.o
 obj-y += executive/
 obj-y += crypto/
 
-obj-$(CONFIG_SMP)                         += smp.o
-obj-$(CONFIG_OCTEON_ILM)                  += oct_ilm.o
-obj-$(CONFIG_CAVIUM_OCTEON_BOOTBUS_FLASH) += flash_setup.o
-obj-$(CONFIG_CAVIUM_OCTEON_USB)           += octeon-usb-host.o
+obj-$(CONFIG_MTD)		      += flash_setup.o
+obj-$(CONFIG_SMP)		      += smp.o
+obj-$(CONFIG_OCTEON_ILM)	      += oct_ilm.o
+obj-$(CONFIG_USB)		      += octeon-usb.o

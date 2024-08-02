@@ -1,12 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Code specific to PKUnity SoC and UniCore ISA
  *
  *	Maintained by GUAN Xue-tao <gxt@mprc.pku.edu.cn>
  *	Copyright (C) 2001-2011 Guan Xuetao
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #ifndef _I8042_UNICORE32_H
 #define _I8042_UNICORE32_H
@@ -61,7 +58,7 @@ static inline int i8042_platform_init(void)
 	if (!request_mem_region(I8042_REGION_START, I8042_REGION_SIZE, "i8042"))
 		return -EBUSY;
 
-	i8042_reset = 1;
+	i8042_reset = I8042_RESET_ALWAYS;
 	return 0;
 }
 

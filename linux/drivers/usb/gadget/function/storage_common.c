@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * storage_common.c -- Common definitions for mass storage functionality
  *
  * Copyright (C) 2003-2008 Alan Stern
  * Copyeight (C) 2009 Samsung Electronics
  * Author: Michal Nazarewicz (mina86@mina86.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 /*
@@ -83,9 +79,7 @@ EXPORT_SYMBOL_GPL(fsg_fs_function);
  * USB 2.0 devices need to expose both high speed and full speed
  * descriptors, unless they only run at full speed.
  *
- * That means alternate endpoint descriptors (bigger packets)
- * and a "device qualifier" ... plus more construction options
- * for the configuration descriptor.
+ * That means alternate endpoint descriptors (bigger packets).
  */
 struct usb_endpoint_descriptor fsg_hs_bulk_in_desc = {
 	.bLength =		USB_DT_ENDPOINT_SIZE,
@@ -300,8 +294,10 @@ EXPORT_SYMBOL_GPL(fsg_lun_fsync_sub);
 void store_cdrom_address(u8 *dest, int msf, u32 addr)
 {
 	if (msf) {
-		/* Convert to Minutes-Seconds-Frames */
-		addr >>= 2;		/* Convert to 2048-byte frames */
+		/*
+		 * Convert to Minutes-Seconds-Frames.
+		 * Sector size is already set to 2048 bytes.
+		 */
 		addr += 2*75;		/* Lead-in occupies 2 seconds */
 		dest[3] = addr % 75;	/* Frames */
 		addr /= 75;
@@ -370,6 +366,12 @@ ssize_t fsg_show_removable(struct fsg_lun *curlun, char *buf)
 	return sprintf(buf, "%u\n", curlun->removable);
 }
 EXPORT_SYMBOL_GPL(fsg_show_removable);
+
+ssize_t fsg_show_inquiry_string(struct fsg_lun *curlun, char *buf)
+{
+	return sprintf(buf, "%s\n", curlun->inquiry_string);
+}
+EXPORT_SYMBOL_GPL(fsg_show_inquiry_string);
 
 /*
  * The caller must hold fsg->filesem for reading when calling this function.
@@ -500,5 +502,23 @@ ssize_t fsg_store_removable(struct fsg_lun *curlun, const char *buf,
 	return count;
 }
 EXPORT_SYMBOL_GPL(fsg_store_removable);
+
+ssize_t fsg_store_inquiry_string(struct fsg_lun *curlun, const char *buf,
+				 size_t count)
+{
+	const size_t len = min(count, sizeof(curlun->inquiry_string));
+
+	if (len == 0 || buf[0] == '\n') {
+		curlun->inquiry_string[0] = 0;
+	} else {
+		snprintf(curlun->inquiry_string,
+			 sizeof(curlun->inquiry_string), "%-28s", buf);
+		if (curlun->inquiry_string[len-1] == '\n')
+			curlun->inquiry_string[len-1] = ' ';
+	}
+
+	return count;
+}
+EXPORT_SYMBOL_GPL(fsg_store_inquiry_string);
 
 MODULE_LICENSE("GPL");

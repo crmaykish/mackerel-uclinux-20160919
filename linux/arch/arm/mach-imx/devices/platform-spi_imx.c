@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2009-2010 Pengutronix
  * Uwe Kleine-Koenig <u.kleine-koenig@pengutronix.de>
- *
- * This program is free software; you can redistribute it and/or modify it under
- * the terms of the GNU General Public License version 2 as published by the
- * Free Software Foundation.
  */
 #include "../hardware.h"
 #include "devices-common.h"
@@ -20,15 +17,6 @@
 
 #define imx_spi_imx_data_entry(soc, type, devid, id, hwid, size)	\
 	[id] = imx_spi_imx_data_entry_single(soc, type, devid, id, hwid, size)
-
-#ifdef CONFIG_SOC_IMX1
-const struct imx_spi_imx_data imx1_cspi_data[] __initconst = {
-#define imx1_cspi_data_entry(_id, _hwid) \
-	imx_spi_imx_data_entry(MX1, CSPI, "imx1-cspi", _id, _hwid, SZ_4K)
-	imx1_cspi_data_entry(0, 1),
-	imx1_cspi_data_entry(1, 2),
-};
-#endif
 
 #ifdef CONFIG_SOC_IMX21
 const struct imx_spi_imx_data imx21_cspi_data[] __initconst = {

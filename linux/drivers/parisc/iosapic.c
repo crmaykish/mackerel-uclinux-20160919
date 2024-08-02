@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
 ** I/O Sapic Driver - PCI interrupt line support
 **
 **      (c) Copyright 1999 Grant Grundler
 **      (c) Copyright 1999 Hewlett-Packard Company
 **
-**      This program is free software; you can redistribute it and/or modify
-**      it under the terms of the GNU General Public License as published by
-**      the Free Software Foundation; either version 2 of the License, or
-**      (at your option) any later version.
 **
 ** The I/O sapic driver manages the Interrupt Redirection Table which is
 ** the control logic to convert PCI line based interrupts into a Message
@@ -126,21 +123,10 @@
 **   o disable IRdT - call disable_irq(vector[line]->processor_irq)
 */
 
-
-/* FIXME: determine which include files are really needed */
-#include <linux/types.h>
-#include <linux/kernel.h>
-#include <linux/spinlock.h>
 #include <linux/pci.h>
-#include <linux/init.h>
-#include <linux/slab.h>
-#include <linux/interrupt.h>
 
-#include <asm/byteorder.h>	/* get in-line asm for swab */
 #include <asm/pdc.h>
 #include <asm/pdcpat.h>
-#include <asm/page.h>
-#include <asm/io.h>		/* read/write functions */
 #ifdef CONFIG_SUPERIO
 #include <asm/superio.h>
 #endif
@@ -216,9 +202,9 @@ static inline void iosapic_write(void __iomem *iosapic, unsigned int reg, u32 va
 
 static DEFINE_SPINLOCK(iosapic_lock);
 
-static inline void iosapic_eoi(void __iomem *addr, unsigned int data)
+static inline void iosapic_eoi(__le32 __iomem *addr, __le32 data)
 {
-	__raw_writel(data, addr);
+	__raw_writel((__force u32)data, addr);
 }
 
 /*
@@ -889,6 +875,7 @@ int iosapic_serial_irq(struct parisc_device *dev)
 
 	return vi->txn_irq;
 }
+EXPORT_SYMBOL(iosapic_serial_irq);
 #endif
 
 

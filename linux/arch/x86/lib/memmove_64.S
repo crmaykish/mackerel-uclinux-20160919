@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Normally compiler builtins are used, but sometimes the compiler calls out
  * of line code. Based on asm-i386/string.h.
@@ -6,8 +7,9 @@
  *	- Copyright 2011 Fenghua Yu <fenghua.yu@intel.com>
  */
 #include <linux/linkage.h>
-#include <asm/cpufeature.h>
+#include <asm/cpufeatures.h>
 #include <asm/alternative-asm.h>
+#include <asm/export.h>
 
 #undef memmove
 
@@ -22,9 +24,7 @@
  * Output:
  * rax: dest
  */
-.weak memmove
-
-ENTRY(memmove)
+SYM_FUNC_START_WEAK(memmove)
 ENTRY(__memmove)
 
 	/* Handle more 32 bytes in loop */
@@ -207,3 +207,5 @@ ENTRY(__memmove)
 	retq
 ENDPROC(__memmove)
 ENDPROC(memmove)
+EXPORT_SYMBOL(__memmove)
+EXPORT_SYMBOL(memmove)

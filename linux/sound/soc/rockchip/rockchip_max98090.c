@@ -1,20 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Rockchip machine ASoC driver for boards using a MAX90809 CODEC.
  *
  * Copyright (c) 2014, ROCKCHIP CORPORATION.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 #include <linux/module.h>
@@ -34,13 +22,18 @@
 #define DRV_NAME "rockchip-snd-max98090"
 
 static struct snd_soc_jack headset_jack;
+
+/* Headset jack detection DAPM pins */
 static struct snd_soc_jack_pin headset_jack_pins[] = {
 	{
-		.pin = "Headset Jack",
-		.mask = SND_JACK_HEADPHONE | SND_JACK_MICROPHONE |
-			SND_JACK_BTN_0 | SND_JACK_BTN_1 |
-			SND_JACK_BTN_2 | SND_JACK_BTN_3,
+		.pin = "Headphone",
+		.mask = SND_JACK_HEADPHONE,
 	},
+	{
+		.pin = "Headset Mic",
+		.mask = SND_JACK_MICROPHONE,
+	},
+
 };
 
 static const struct snd_soc_dapm_widget rk_dapm_widgets[] = {
@@ -52,8 +45,7 @@ static const struct snd_soc_dapm_widget rk_dapm_widgets[] = {
 
 static const struct snd_soc_dapm_route rk_audio_map[] = {
 	{"IN34", NULL, "Headset Mic"},
-	{"IN34", NULL, "MICBIAS"},
-	{"MICBIAS", NULL, "Headset Mic"},
+	{"Headset Mic", NULL, "MICBIAS"},
 	{"DMICL", NULL, "Int Mic"},
 	{"Headphone", NULL, "HPL"},
 	{"Headphone", NULL, "HPR"},
@@ -68,6 +60,40 @@ static const struct snd_kcontrol_new rk_mc_controls[] = {
 	SOC_DAPM_PIN_SWITCH("Speaker"),
 };
 
+static int rk_jack_event(struct notifier_block *nb, unsigned long event,
+			 void *data)
+{
+	struct snd_soc_jack *jack = (struct snd_soc_jack *)data;
+	struct snd_soc_dapm_context *dapm = &jack->card->dapm;
+
+	if (event & SND_JACK_MICROPHONE) {
+		snd_soc_dapm_force_enable_pin(dapm, "MICBIAS");
+		snd_soc_dapm_force_enable_pin(dapm, "SHDN");
+	} else {
+		snd_soc_dapm_disable_pin(dapm, "MICBIAS");
+		snd_soc_dapm_disable_pin(dapm, "SHDN");
+	}
+
+	snd_soc_dapm_sync(dapm);
+
+	return 0;
+}
+
+static struct notifier_block rk_jack_nb = {
+	.notifier_call = rk_jack_event,
+};
+
+static int rk_init(struct snd_soc_pcm_runtime *runtime)
+{
+	/*
+	 * The jack has already been created in the rk_98090_headset_init()
+	 * function.
+	 */
+	snd_soc_jack_notifier_register(&headset_jack, &rk_jack_nb);
+
+	return 0;
+}
+
 static int rk_aif1_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_pcm_hw_params *params)
 {
@@ -80,11 +106,17 @@ static int rk_aif1_hw_params(struct snd_pcm_substream *substream,
 	switch (params_rate(params)) {
 	case 8000:
 	case 16000:
+	case 24000:
+	case 32000:
 	case 48000:
+	case 64000:
 	case 96000:
 		mclk = 12288000;
 		break;
+	case 11025:
+	case 22050:
 	case 44100:
+	case 88200:
 		mclk = 11289600;
 		break;
 	default:
@@ -108,41 +140,42 @@ static int rk_aif1_hw_params(struct snd_pcm_substream *substream,
 	return ret;
 }
 
-static int rk_init(struct snd_soc_pcm_runtime *runtime)
+static int rk_aif1_startup(struct snd_pcm_substream *substream)
 {
-	/* Enable Headset and 4 Buttons Jack detection */
-	return snd_soc_card_jack_new(runtime->card, "Headset Jack",
-			       SND_JACK_HEADSET |
-			       SND_JACK_BTN_0 | SND_JACK_BTN_1 |
-			       SND_JACK_BTN_2 | SND_JACK_BTN_3,
-			       &headset_jack,
-			       headset_jack_pins,
-			       ARRAY_SIZE(headset_jack_pins));
+	/*
+	 * Set period size to 240 because pl330 has issue
+	 * dealing with larger period in stress testing.
+	 */
+	return snd_pcm_hw_constraint_minmax(substream->runtime,
+			SNDRV_PCM_HW_PARAM_PERIOD_SIZE, 240, 240);
 }
 
-static int rk_98090_headset_init(struct snd_soc_component *component)
-{
-	return ts3a227e_enable_jack_detect(component, &headset_jack);
-}
-
-static struct snd_soc_ops rk_aif1_ops = {
+static const struct snd_soc_ops rk_aif1_ops = {
 	.hw_params = rk_aif1_hw_params,
+	.startup = rk_aif1_startup,
 };
 
-static struct snd_soc_aux_dev rk_98090_headset_dev = {
-	.name = "Headset Chip",
-	.init = rk_98090_headset_init,
-};
+SND_SOC_DAILINK_DEFS(hifi,
+	DAILINK_COMP_ARRAY(COMP_EMPTY()),
+	DAILINK_COMP_ARRAY(COMP_CODEC(NULL, "HiFi")),
+	DAILINK_COMP_ARRAY(COMP_EMPTY()));
 
 static struct snd_soc_dai_link rk_dailink = {
 	.name = "max98090",
 	.stream_name = "Audio",
-	.codec_dai_name = "HiFi",
 	.init = rk_init,
 	.ops = &rk_aif1_ops,
 	/* set max98090 as slave */
 	.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
 		SND_SOC_DAIFMT_CBS_CFS,
+	SND_SOC_DAILINK_REG(hifi),
+};
+
+static int rk_98090_headset_init(struct snd_soc_component *component);
+
+static struct snd_soc_aux_dev rk_98090_headset_dev = {
+	.dlc = COMP_EMPTY(),
+	.init = rk_98090_headset_init,
 };
 
 static struct snd_soc_card snd_soc_card_rk = {
@@ -160,6 +193,26 @@ static struct snd_soc_card snd_soc_card_rk = {
 	.num_controls = ARRAY_SIZE(rk_mc_controls),
 };
 
+static int rk_98090_headset_init(struct snd_soc_component *component)
+{
+	int ret;
+
+	/* Enable Headset and 4 Buttons Jack detection */
+	ret = snd_soc_card_jack_new(&snd_soc_card_rk, "Headset Jack",
+				    SND_JACK_HEADSET |
+				    SND_JACK_BTN_0 | SND_JACK_BTN_1 |
+				    SND_JACK_BTN_2 | SND_JACK_BTN_3,
+				    &headset_jack,
+				    headset_jack_pins,
+				    ARRAY_SIZE(headset_jack_pins));
+	if (ret)
+		return ret;
+
+	ret = ts3a227e_enable_jack_detect(component, &headset_jack);
+
+	return ret;
+}
+
 static int snd_rk_mc_probe(struct platform_device *pdev)
 {
 	int ret = 0;
@@ -169,27 +222,27 @@ static int snd_rk_mc_probe(struct platform_device *pdev)
 	/* register the soc card */
 	card->dev = &pdev->dev;
 
-	rk_dailink.codec_of_node = of_parse_phandle(np,
+	rk_dailink.codecs->of_node = of_parse_phandle(np,
 			"rockchip,audio-codec", 0);
-	if (!rk_dailink.codec_of_node) {
+	if (!rk_dailink.codecs->of_node) {
 		dev_err(&pdev->dev,
 			"Property 'rockchip,audio-codec' missing or invalid\n");
 		return -EINVAL;
 	}
 
-	rk_dailink.cpu_of_node = of_parse_phandle(np,
+	rk_dailink.cpus->of_node = of_parse_phandle(np,
 			"rockchip,i2s-controller", 0);
-	if (!rk_dailink.cpu_of_node) {
+	if (!rk_dailink.cpus->of_node) {
 		dev_err(&pdev->dev,
 			"Property 'rockchip,i2s-controller' missing or invalid\n");
 		return -EINVAL;
 	}
 
-	rk_dailink.platform_of_node = rk_dailink.cpu_of_node;
+	rk_dailink.platforms->of_node = rk_dailink.cpus->of_node;
 
-	rk_98090_headset_dev.codec_of_node = of_parse_phandle(np,
+	rk_98090_headset_dev.dlc.of_node = of_parse_phandle(np,
 			"rockchip,headset-codec", 0);
-	if (!rk_98090_headset_dev.codec_of_node) {
+	if (!rk_98090_headset_dev.dlc.of_node) {
 		dev_err(&pdev->dev,
 			"Property 'rockchip,headset-codec' missing/invalid\n");
 		return -EINVAL;

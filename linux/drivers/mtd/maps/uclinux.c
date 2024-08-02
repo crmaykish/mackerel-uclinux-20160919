@@ -4,18 +4,19 @@
  *	uclinux.c -- generic memory mapped MTD driver for uclinux
  *
  *	(C) Copyright 2002, Greg Ungerer (gerg@snapgear.com)
+ *
+ *      License: GPL
  */
 
 /****************************************************************************/
 
-#include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/types.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/major.h>
-#include <linux/root_dev.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/map.h>
 #include <linux/mtd/partitions.h>
@@ -24,26 +25,13 @@
 
 /****************************************************************************/
 
-#if defined(CONFIG_MTD_UCLINUX_EBSS)
-#define MAP_NAME	"ram"
-#define CONFIG_MTD_UCLINUX_ADDRESS __bss_stop
-#elif defined(CONFIG_MTD_UCLINUX_RAM)
-#define MAP_NAME	"ram"
-#elif defined(CONFIG_MTD_UCLINUX_ROM)
-#define MAP_NAME	"rom"
+#ifdef CONFIG_MTD_ROM
+#define MAP_NAME "rom"
 #else
-#error "Unknown uClinux map type"
+#define MAP_NAME "ram"
 #endif
 
-/****************************************************************************/
-
-/*
- * Blackfin uses uclinux_ram_map during startup, so it must not be static.
- * Provide a dummy declaration to make sparse happy.
- */
-extern struct map_info uclinux_ram_map;
-
-struct map_info uclinux_ram_map = {
+static struct map_info uclinux_ram_map = {
 	.name = MAP_NAME,
 	.size = 0,
 };
@@ -55,7 +43,7 @@ static struct mtd_info *uclinux_ram_mtdinfo;
 
 /****************************************************************************/
 
-static struct mtd_partition uclinux_romfs[] = {
+static const struct mtd_partition uclinux_romfs[] = {
 	{ .name = "ROMfs" }
 };
 
@@ -83,10 +71,8 @@ static int __init uclinux_mtd_init(void)
 
 	mapp = &uclinux_ram_map;
 
-	printk(KERN_INFO "MTD init address: %X\r", CONFIG_MTD_UCLINUX_ADDRESS);
-
 	if (physaddr == -1)
-		mapp->phys = (resource_size_t) CONFIG_MTD_UCLINUX_ADDRESS;
+		mapp->phys = (resource_size_t)__bss_stop;
 	else
 		mapp->phys = physaddr;
 
@@ -122,36 +108,11 @@ static int __init uclinux_mtd_init(void)
 	mtd->_point = uclinux_point;
 	mtd->priv = mapp;
 
-	printk("uclinux[mtd]: set %s to be root filesystem\n",
-	     	uclinux_romfs[0].name);
-	ROOT_DEV = MKDEV(MTD_BLOCK_MAJOR, 0);
-
 	uclinux_ram_mtdinfo = mtd;
 	mtd_device_register(mtd, uclinux_romfs, NUM_PARTITIONS);
 
 	return(0);
 }
-
-/****************************************************************************/
-
-static void __exit uclinux_mtd_cleanup(void)
-{
-	if (uclinux_ram_mtdinfo) {
-		mtd_device_unregister(uclinux_ram_mtdinfo);
-		map_destroy(uclinux_ram_mtdinfo);
-		uclinux_ram_mtdinfo = NULL;
-	}
-	if (uclinux_ram_map.virt)
-		uclinux_ram_map.virt = 0;
-}
-
-/****************************************************************************/
-
-module_init(uclinux_mtd_init);
-module_exit(uclinux_mtd_cleanup);
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Greg Ungerer <gerg@snapgear.com>");
-MODULE_DESCRIPTION("Generic MTD for uClinux");
+device_initcall(uclinux_mtd_init);
 
 /****************************************************************************/

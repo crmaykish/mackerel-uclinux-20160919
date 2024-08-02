@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * ARM callchain support
  *
@@ -31,12 +32,12 @@ struct frame_tail {
  */
 static struct frame_tail __user *
 user_backtrace(struct frame_tail __user *tail,
-	       struct perf_callchain_entry *entry)
+	       struct perf_callchain_entry_ctx *entry)
 {
 	struct frame_tail buftail;
 	unsigned long err;
 
-	if (!access_ok(VERIFY_READ, tail, sizeof(buftail)))
+	if (!access_ok(tail, sizeof(buftail)))
 		return NULL;
 
 	pagefault_disable();
@@ -59,11 +60,12 @@ user_backtrace(struct frame_tail __user *tail,
 }
 
 void
-perf_callchain_user(struct perf_callchain_entry *entry, struct pt_regs *regs)
+perf_callchain_user(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs)
 {
+	struct perf_guest_info_callbacks *guest_cbs = perf_get_guest_cbs();
 	struct frame_tail __user *tail;
 
-	if (perf_guest_cbs && perf_guest_cbs->is_in_guest()) {
+	if (guest_cbs && guest_cbs->is_in_guest()) {
 		/* We don't support guest os callchain now */
 		return;
 	}
@@ -75,7 +77,7 @@ perf_callchain_user(struct perf_callchain_entry *entry, struct pt_regs *regs)
 
 	tail = (struct frame_tail __user *)regs->ARM_fp - 1;
 
-	while ((entry->nr < PERF_MAX_STACK_DEPTH) &&
+	while ((entry->nr < entry->max_stack) &&
 	       tail && !((unsigned long)tail & 0x3))
 		tail = user_backtrace(tail, entry);
 }
@@ -89,17 +91,18 @@ static int
 callchain_trace(struct stackframe *fr,
 		void *data)
 {
-	struct perf_callchain_entry *entry = data;
+	struct perf_callchain_entry_ctx *entry = data;
 	perf_callchain_store(entry, fr->pc);
 	return 0;
 }
 
 void
-perf_callchain_kernel(struct perf_callchain_entry *entry, struct pt_regs *regs)
+perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs)
 {
+	struct perf_guest_info_callbacks *guest_cbs = perf_get_guest_cbs();
 	struct stackframe fr;
 
-	if (perf_guest_cbs && perf_guest_cbs->is_in_guest()) {
+	if (guest_cbs && guest_cbs->is_in_guest()) {
 		/* We don't support guest os callchain now */
 		return;
 	}
@@ -110,18 +113,21 @@ perf_callchain_kernel(struct perf_callchain_entry *entry, struct pt_regs *regs)
 
 unsigned long perf_instruction_pointer(struct pt_regs *regs)
 {
-	if (perf_guest_cbs && perf_guest_cbs->is_in_guest())
-		return perf_guest_cbs->get_guest_ip();
+	struct perf_guest_info_callbacks *guest_cbs = perf_get_guest_cbs();
+
+	if (guest_cbs && guest_cbs->is_in_guest())
+		return guest_cbs->get_guest_ip();
 
 	return instruction_pointer(regs);
 }
 
 unsigned long perf_misc_flags(struct pt_regs *regs)
 {
+	struct perf_guest_info_callbacks *guest_cbs = perf_get_guest_cbs();
 	int misc = 0;
 
-	if (perf_guest_cbs && perf_guest_cbs->is_in_guest()) {
-		if (perf_guest_cbs->is_user_mode())
+	if (guest_cbs && guest_cbs->is_in_guest()) {
+		if (guest_cbs->is_user_mode())
 			misc |= PERF_RECORD_MISC_GUEST_USER;
 		else
 			misc |= PERF_RECORD_MISC_GUEST_KERNEL;

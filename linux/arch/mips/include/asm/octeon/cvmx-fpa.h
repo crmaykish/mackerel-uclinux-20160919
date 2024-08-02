@@ -36,6 +36,8 @@
 #ifndef __CVMX_FPA_H__
 #define __CVMX_FPA_H__
 
+#include <linux/delay.h>
+
 #include <asm/octeon/cvmx-address.h>
 #include <asm/octeon/cvmx-fpa-defs.h>
 
@@ -165,18 +167,13 @@ static inline void cvmx_fpa_enable(void)
 		}
 
 		/* Enforce a 10 cycle delay between config and enable */
-		cvmx_wait(10);
+		__delay(10);
 	}
 
 	/* FIXME: CVMX_FPA_CTL_STATUS read is unmodelled */
 	status.u64 = 0;
 	status.s.enb = 1;
 	cvmx_write_csr(CVMX_FPA_CTL_STATUS, status.u64);
-}
-
-static inline void cvmx_fpa_disable(void)
-{
-	cvmx_write_csr(CVMX_FPA_CTL_STATUS, 0);
 }
 
 /**

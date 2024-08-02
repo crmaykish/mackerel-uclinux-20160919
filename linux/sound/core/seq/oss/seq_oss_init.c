@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * OSS compatible sequencer driver
  *
  * open/close and reset interface
  *
  * Copyright (C) 1998-1999 Takashi Iwai <tiwai@suse.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #include "seq_oss_device.h"
@@ -202,7 +189,7 @@ snd_seq_oss_open(struct file *file, int level)
 
 	dp->index = i;
 	if (i >= SNDRV_SEQ_OSS_MAX_CLIENTS) {
-		pr_err("ALSA: seq_oss: too many applications\n");
+		pr_debug("ALSA: seq_oss: too many applications\n");
 		rc = -ENOMEM;
 		goto _error;
 	}
@@ -432,22 +419,6 @@ snd_seq_oss_release(struct seq_oss_devinfo *dp)
 	if (dp->port >= 0)
 		delete_port(dp);
 	delete_seq_queue(queue);
-}
-
-
-/*
- * Wait until the queue is empty (if we don't have nonblock)
- */
-void
-snd_seq_oss_drain_write(struct seq_oss_devinfo *dp)
-{
-	if (! dp->timer->running)
-		return;
-	if (is_write_mode(dp->file_mode) && !is_nonblock_mode(dp->file_mode) &&
-	    dp->writeq) {
-		while (snd_seq_oss_writeq_sync(dp->writeq))
-			;
-	}
 }
 
 

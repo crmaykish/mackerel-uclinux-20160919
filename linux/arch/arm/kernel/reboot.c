@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Copyright (C) 1996-2000 Russell King - Converted to ARM.
  *  Original Copyright (C) 1995  Linus Torvalds
- * 
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/cpu.h>
 #include <linux/delay.h>
@@ -12,10 +9,11 @@
 
 #include <asm/cacheflush.h>
 #include <asm/idmap.h>
+#include <asm/virt.h>
 
 #include "reboot.h"
 
-typedef void (*phys_reset_t)(unsigned long);
+typedef void (*phys_reset_t)(unsigned long, bool);
 
 /*
  * Function pointers to optional machine specific functions
@@ -50,8 +48,10 @@ static void __soft_restart(void *addr)
 	flush_cache_all();
 
 	/* Switch to the identity mapping. */
-	phys_reset = (phys_reset_t)(unsigned long)virt_to_idmap(cpu_reset);
-	phys_reset((unsigned long)addr);
+	phys_reset = (phys_reset_t)virt_to_idmap(cpu_reset);
+
+	/* original stub should be restored by kvm */
+	phys_reset((unsigned long)addr, is_hyp_mode_available());
 
 	/* Should never get here. */
 	BUG();
@@ -104,14 +104,7 @@ void machine_halt(void)
 {
 	local_irq_disable();
 	smp_send_stop();
-
-	local_irq_disable();
-	while (1) {
-#ifdef CONFIG_SNAPDOG
-		extern void snapdog_service(void);
-		snapdog_service();
-#endif
-	}
+	while (1);
 }
 
 /*
@@ -155,6 +148,5 @@ void machine_restart(char *cmd)
 
 	/* Whoops - the platform was unable to reboot. Tell the user! */
 	printk("Reboot failed -- System halted\n");
-	local_irq_disable();
 	while (1);
 }

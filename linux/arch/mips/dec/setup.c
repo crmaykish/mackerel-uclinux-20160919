@@ -6,15 +6,16 @@
  * for more details.
  *
  * Copyright (C) 1998 Harald Koerfgen
- * Copyright (C) 2000, 2001, 2002, 2003, 2005  Maciej W. Rozycki
+ * Copyright (C) 2000, 2001, 2002, 2003, 2005, 2020  Maciej W. Rozycki
  */
 #include <linux/console.h>
+#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/irq.h>
 #include <linux/irqnr.h>
-#include <linux/module.h>
+#include <linux/memblock.h>
 #include <linux/param.h>
 #include <linux/percpu-defs.h>
 #include <linux/sched.h>
@@ -22,6 +23,7 @@
 #include <linux/types.h>
 #include <linux/pm.h>
 
+#include <asm/addrspace.h>
 #include <asm/bootinfo.h>
 #include <asm/cpu.h>
 #include <asm/cpu-features.h>
@@ -29,7 +31,9 @@
 #include <asm/irq.h>
 #include <asm/irq_cpu.h>
 #include <asm/mipsregs.h>
+#include <asm/page.h>
 #include <asm/reboot.h>
+#include <asm/sections.h>
 #include <asm/time.h>
 #include <asm/traps.h>
 #include <asm/wbflush.h>
@@ -60,6 +64,7 @@ EXPORT_SYMBOL(dec_kn_slot_size);
 int dec_tc_bus;
 
 DEFINE_SPINLOCK(ioasic_ssr_lock);
+EXPORT_SYMBOL(ioasic_ssr_lock);
 
 volatile u32 *ioasic_base;
 
@@ -165,6 +170,9 @@ void __init plat_mem_setup(void)
 
 	ioport_resource.start = ~0UL;
 	ioport_resource.end = 0UL;
+
+	/* Stay away from the firmware working memory area for now. */
+	memblock_reserve(PHYS_OFFSET, __pa_symbol(&_text) - PHYS_OFFSET);
 }
 
 /*
@@ -758,7 +766,8 @@ void __init arch_init_irq(void)
 		dec_interrupt[DEC_IRQ_HALT] = -1;
 
 	/* Register board interrupts: FPU and cascade. */
-	if (dec_interrupt[DEC_IRQ_FPU] >= 0 && cpu_has_fpu) {
+	if (IS_ENABLED(CONFIG_MIPS_FP_SUPPORT) &&
+	    dec_interrupt[DEC_IRQ_FPU] >= 0 && cpu_has_fpu) {
 		struct irq_desc *desc_fpu;
 		int irq_fpu;
 

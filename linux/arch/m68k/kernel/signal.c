@@ -42,11 +42,11 @@
 #include <linux/personality.h>
 #include <linux/tty.h>
 #include <linux/binfmts.h>
-#include <linux/module.h>
+#include <linux/extable.h>
 #include <linux/tracehook.h>
 
 #include <asm/setup.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/traps.h>
 #include <asm/ucontext.h>
@@ -88,7 +88,7 @@ static inline int frame_extra_sizes(int f)
 	return frame_size_change[f];
 }
 
-int handle_kernel_fault(struct pt_regs *regs)
+int fixup_exception(struct pt_regs *regs)
 {
 	const struct exception_table_entry *fixup;
 	struct pt_regs *tregs;
@@ -107,22 +107,6 @@ int handle_kernel_fault(struct pt_regs *regs)
 	tregs->sr = regs->sr;
 
 	return 1;
-}
-
-void ptrace_signal_deliver(void)
-{
-	struct pt_regs *regs = signal_pt_regs();
-	if (regs->orig_d0 < 0)
-		return;
-	switch (regs->d0) {
-	case -ERESTARTNOHAND:
-	case -ERESTARTSYS:
-	case -ERESTARTNOINTR:
-		regs->d0 = regs->orig_d0;
-		regs->orig_d0 = -1;
-		regs->pc -= 2;
-		break;
-	}
 }
 
 static inline void push_cache (unsigned long vaddr)
@@ -464,7 +448,7 @@ static inline void save_fpu_state(struct sigcontext *sc, struct pt_regs *regs)
 
 	if (CPU_IS_060 ? sc->sc_fpstate[2] : sc->sc_fpstate[0]) {
 		fpu_version = sc->sc_fpstate[0];
-		if (CPU_IS_020_OR_030 &&
+		if (CPU_IS_020_OR_030 && !regs->stkadj &&
 		    regs->vector >= (VEC_FPBRUC * 4) &&
 		    regs->vector <= (VEC_FPNAN * 4)) {
 			/* Clear pending exception in 68882 idle frame */
@@ -527,7 +511,7 @@ static inline int rt_save_fpu_state(struct ucontext __user *uc, struct pt_regs *
 		if (!(CPU_IS_060 || CPU_IS_COLDFIRE))
 			context_size = fpstate[1];
 		fpu_version = fpstate[0];
-		if (CPU_IS_020_OR_030 &&
+		if (CPU_IS_020_OR_030 && !regs->stkadj &&
 		    regs->vector >= (VEC_FPBRUC * 4) &&
 		    regs->vector <= (VEC_FPNAN * 4)) {
 			/* Clear pending exception in 68882 idle frame */
@@ -590,6 +574,67 @@ static inline int rt_save_fpu_state(struct ucontext __user *uc, struct pt_regs *
 
 #endif /* CONFIG_FPU */
 
+static inline void siginfo_build_tests(void)
+{
+	/*
+	 * This needs to be tested on m68k as it has a lesser
+	 * alignment requirement than x86 and that can cause surprises.
+	 */
+
+	/* This is part of the ABI and can never change in size: */
+	BUILD_BUG_ON(sizeof(siginfo_t) != 128);
+
+	/* Ensure the known fields never change in location */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_signo) != 0);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_errno) != 4);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_code)  != 8);
+
+	/* _kill */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_pid) != 0x0c);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_uid) != 0x10);
+
+	/* _timer */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_tid)     != 0x0c);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_overrun) != 0x10);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_value)   != 0x14);
+
+	/* _rt */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_pid)   != 0x0c);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_uid)   != 0x10);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_value) != 0x14);
+
+	/* _sigchld */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_pid)    != 0x0c);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_uid)    != 0x10);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_status) != 0x14);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_utime)  != 0x18);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_stime)  != 0x1c);
+
+	/* _sigfault */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_addr) != 0x0c);
+
+	/* _sigfault._mcerr */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_addr_lsb) != 0x10);
+
+	/* _sigfault._addr_bnd */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_lower) != 0x12);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_upper) != 0x16);
+
+	/* _sigfault._addr_pkey */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_pkey) != 0x12);
+
+	/* _sigpoll */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_band)   != 0x0c);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_fd)     != 0x10);
+
+	/* _sigsys */
+	BUILD_BUG_ON(offsetof(siginfo_t, si_call_addr) != 0x0c);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_syscall)   != 0x10);
+	BUILD_BUG_ON(offsetof(siginfo_t, si_arch)      != 0x14);
+
+	/* any new si_fields should be added here */
+}
+
 static int mangle_kernel_stack(struct pt_regs *regs, int formatvec,
 			       void __user *fp)
 {
@@ -598,9 +643,7 @@ static int mangle_kernel_stack(struct pt_regs *regs, int formatvec,
 		/*
 		 * user process trying to return with weird frame format
 		 */
-#ifdef DEBUG
-		printk("user process returning with weird frame format\n");
-#endif
+		pr_debug("user process returning with weird frame format\n");
 		return 1;
 	}
 	if (!fsize) {
@@ -608,7 +651,8 @@ static int mangle_kernel_stack(struct pt_regs *regs, int formatvec,
 		regs->vector = formatvec & 0xfff;
 	} else {
 		struct switch_stack *sw = (struct switch_stack *)regs - 1;
-		unsigned long buf[fsize / 2]; /* yes, twice as much */
+		/* yes, twice as much as max(sizeof(frame.un.fmt<x>)) */
+		unsigned long buf[sizeof(((struct frame *)0)->un) / 2];
 
 		/* that'll make sure that expansion won't crap over data */
 		if (copy_from_user(buf + fsize / 4, fp, fsize))
@@ -652,6 +696,8 @@ restore_sigcontext(struct pt_regs *regs, struct sigcontext __user *usc, void __u
 	int formatvec;
 	struct sigcontext context;
 	int err = 0;
+
+	siginfo_build_tests();
 
 	/* Always make any pending restarted system calls return -EINTR */
 	current->restart_block.fn = do_no_restart_syscall;
@@ -742,7 +788,7 @@ asmlinkage int do_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
 	struct sigframe __user *frame = (struct sigframe __user *)(usp - 4);
 	sigset_t set;
 
-	if (!access_ok(VERIFY_READ, frame, sizeof(*frame)))
+	if (!access_ok(frame, sizeof(*frame)))
 		goto badframe;
 	if (__get_user(set.sig[0], &frame->sc.sc_mask) ||
 	    (_NSIG_WORDS > 1 &&
@@ -757,7 +803,7 @@ asmlinkage int do_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
 	return regs->d0;
 
 badframe:
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 	return 0;
 }
 
@@ -767,7 +813,7 @@ asmlinkage int do_rt_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
 	struct rt_sigframe __user *frame = (struct rt_sigframe __user *)(usp - 4);
 	sigset_t set;
 
-	if (!access_ok(VERIFY_READ, frame, sizeof(*frame)))
+	if (!access_ok(frame, sizeof(*frame)))
 		goto badframe;
 	if (__copy_from_user(&set, &frame->uc.uc_sigmask, sizeof(set)))
 		goto badframe;
@@ -779,22 +825,28 @@ asmlinkage int do_rt_sigreturn(struct pt_regs *regs, struct switch_stack *sw)
 	return regs->d0;
 
 badframe:
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 	return 0;
+}
+
+static inline struct pt_regs *rte_regs(struct pt_regs *regs)
+{
+	return (void *)regs + regs->stkadj;
 }
 
 static void setup_sigcontext(struct sigcontext *sc, struct pt_regs *regs,
 			     unsigned long mask)
 {
+	struct pt_regs *tregs = rte_regs(regs);
 	sc->sc_mask = mask;
 	sc->sc_usp = rdusp();
 	sc->sc_d0 = regs->d0;
 	sc->sc_d1 = regs->d1;
 	sc->sc_a0 = regs->a0;
 	sc->sc_a1 = regs->a1;
-	sc->sc_sr = regs->sr;
-	sc->sc_pc = regs->pc;
-	sc->sc_formatvec = regs->format << 12 | regs->vector;
+	sc->sc_sr = tregs->sr;
+	sc->sc_pc = tregs->pc;
+	sc->sc_formatvec = tregs->format << 12 | tregs->vector;
 	save_a5_state(sc, regs);
 	save_fpu_state(sc, regs);
 }
@@ -802,6 +854,7 @@ static void setup_sigcontext(struct sigcontext *sc, struct pt_regs *regs,
 static inline int rt_setup_ucontext(struct ucontext __user *uc, struct pt_regs *regs)
 {
 	struct switch_stack *sw = (struct switch_stack *)regs - 1;
+	struct pt_regs *tregs = rte_regs(regs);
 	greg_t __user *gregs = uc->uc_mcontext.gregs;
 	int err = 0;
 
@@ -822,45 +875,50 @@ static inline int rt_setup_ucontext(struct ucontext __user *uc, struct pt_regs *
 	err |= __put_user(sw->a5, &gregs[13]);
 	err |= __put_user(sw->a6, &gregs[14]);
 	err |= __put_user(rdusp(), &gregs[15]);
-	err |= __put_user(regs->pc, &gregs[16]);
-	err |= __put_user(regs->sr, &gregs[17]);
-	err |= __put_user((regs->format << 12) | regs->vector, &uc->uc_formatvec);
+	err |= __put_user(tregs->pc, &gregs[16]);
+	err |= __put_user(tregs->sr, &gregs[17]);
+	err |= __put_user((tregs->format << 12) | tregs->vector, &uc->uc_formatvec);
 	err |= rt_save_fpu_state(uc, regs);
 	return err;
 }
 
 static inline void __user *
-get_sigframe(struct ksignal *ksig, size_t frame_size)
+get_sigframe(struct ksignal *ksig, struct pt_regs *tregs, size_t frame_size)
 {
 	unsigned long usp = sigsp(rdusp(), ksig);
+	unsigned long gap = 0;
 
-	return (void __user *)((usp - frame_size) & -8UL);
+	if (CPU_IS_020_OR_030 && tregs->format == 0xb) {
+		/* USP is unreliable so use worst-case value */
+		gap = 256;
+	}
+
+	return (void __user *)((usp - gap - frame_size) & -8UL);
 }
 
 static int setup_frame(struct ksignal *ksig, sigset_t *set,
 			struct pt_regs *regs)
 {
 	struct sigframe __user *frame;
-	int fsize = frame_extra_sizes(regs->format);
+	struct pt_regs *tregs = rte_regs(regs);
+	int fsize = frame_extra_sizes(tregs->format);
 	struct sigcontext context;
 	int err = 0, sig = ksig->sig;
 
 	if (fsize < 0) {
-#ifdef DEBUG
-		printk ("setup_frame: Unknown frame format %#x\n",
-			regs->format);
-#endif
+		pr_debug("setup_frame: Unknown frame format %#x\n",
+			 tregs->format);
 		return -EFAULT;
 	}
 
-	frame = get_sigframe(ksig, sizeof(*frame) + fsize);
+	frame = get_sigframe(ksig, tregs, sizeof(*frame) + fsize);
 
 	if (fsize)
 		err |= copy_to_user (frame + 1, regs + 1, fsize);
 
 	err |= __put_user(sig, &frame->sig);
 
-	err |= __put_user(regs->vector, &frame->code);
+	err |= __put_user(tregs->vector, &frame->code);
 	err |= __put_user(&frame->sc, &frame->psc);
 
 	if (_NSIG_WORDS > 1)
@@ -886,35 +944,27 @@ static int setup_frame(struct ksignal *ksig, sigset_t *set,
 	push_cache ((unsigned long) &frame->retcode);
 
 	/*
-	 * Set up registers for signal handler.  All the state we are about
-	 * to destroy is successfully copied to sigframe.
-	 */
-	wrusp ((unsigned long) frame);
-	regs->pc = (unsigned long) ksig->ka.sa.sa_handler;
-	adjustformat(regs);
-
-	/*
 	 * This is subtle; if we build more than one sigframe, all but the
 	 * first one will see frame format 0 and have fsize == 0, so we won't
 	 * screw stkadj.
 	 */
-	if (fsize)
+	if (fsize) {
 		regs->stkadj = fsize;
-
-	/* Prepare to skip over the extra stuff in the exception frame.  */
-	if (regs->stkadj) {
-		struct pt_regs *tregs =
-			(struct pt_regs *)((ulong)regs + regs->stkadj);
-#ifdef DEBUG
-		printk("Performing stackadjust=%04x\n", regs->stkadj);
-#endif
-		/* This must be copied with decreasing addresses to
-                   handle overlaps.  */
+		tregs = rte_regs(regs);
+		pr_debug("Performing stackadjust=%04lx\n", regs->stkadj);
 		tregs->vector = 0;
 		tregs->format = 0;
-		tregs->pc = regs->pc;
 		tregs->sr = regs->sr;
 	}
+
+	/*
+	 * Set up registers for signal handler.  All the state we are about
+	 * to destroy is successfully copied to sigframe.
+	 */
+	wrusp ((unsigned long) frame);
+	tregs->pc = (unsigned long) ksig->ka.sa.sa_handler;
+	adjustformat(regs);
+
 	return 0;
 }
 
@@ -922,18 +972,17 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 			   struct pt_regs *regs)
 {
 	struct rt_sigframe __user *frame;
-	int fsize = frame_extra_sizes(regs->format);
+	struct pt_regs *tregs = rte_regs(regs);
+	int fsize = frame_extra_sizes(tregs->format);
 	int err = 0, sig = ksig->sig;
 
 	if (fsize < 0) {
-#ifdef DEBUG
-		printk ("setup_frame: Unknown frame format %#x\n",
-			regs->format);
-#endif
+		pr_debug("setup_frame: Unknown frame format %#x\n",
+			 regs->format);
 		return -EFAULT;
 	}
 
-	frame = get_sigframe(ksig, sizeof(*frame));
+	frame = get_sigframe(ksig, tregs, sizeof(*frame));
 
 	if (fsize)
 		err |= copy_to_user (&frame->uc.uc_extra, regs + 1, fsize);
@@ -974,35 +1023,26 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 	push_cache ((unsigned long) &frame->retcode);
 
 	/*
-	 * Set up registers for signal handler.  All the state we are about
-	 * to destroy is successfully copied to sigframe.
-	 */
-	wrusp ((unsigned long) frame);
-	regs->pc = (unsigned long) ksig->ka.sa.sa_handler;
-	adjustformat(regs);
-
-	/*
 	 * This is subtle; if we build more than one sigframe, all but the
 	 * first one will see frame format 0 and have fsize == 0, so we won't
 	 * screw stkadj.
 	 */
-	if (fsize)
+	if (fsize) {
 		regs->stkadj = fsize;
-
-	/* Prepare to skip over the extra stuff in the exception frame.  */
-	if (regs->stkadj) {
-		struct pt_regs *tregs =
-			(struct pt_regs *)((ulong)regs + regs->stkadj);
-#ifdef DEBUG
-		printk("Performing stackadjust=%04x\n", regs->stkadj);
-#endif
-		/* This must be copied with decreasing addresses to
-                   handle overlaps.  */
+		tregs = rte_regs(regs);
+		pr_debug("Performing stackadjust=%04lx\n", regs->stkadj);
 		tregs->vector = 0;
 		tregs->format = 0;
-		tregs->pc = regs->pc;
 		tregs->sr = regs->sr;
 	}
+
+	/*
+	 * Set up registers for signal handler.  All the state we are about
+	 * to destroy is successfully copied to sigframe.
+	 */
+	wrusp ((unsigned long) frame);
+	tregs->pc = (unsigned long) ksig->ka.sa.sa_handler;
+	adjustformat(regs);
 	return 0;
 }
 

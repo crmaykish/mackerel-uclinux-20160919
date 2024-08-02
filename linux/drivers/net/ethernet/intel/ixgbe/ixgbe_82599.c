@@ -1,30 +1,5 @@
-/*******************************************************************************
-
-  Intel 10 Gigabit PCI Express Linux driver
-  Copyright(c) 1999 - 2015 Intel Corporation.
-
-  This program is free software; you can redistribute it and/or modify it
-  under the terms and conditions of the GNU General Public License,
-  version 2, as published by the Free Software Foundation.
-
-  This program is distributed in the hope it will be useful, but WITHOUT
-  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-  more details.
-
-  You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
-
-  The full GNU General Public License is included in this distribution in
-  the file called "COPYING".
-
-  Contact Information:
-  Linux NICS <linux.nics@intel.com>
-  e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
-  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
-
-*******************************************************************************/
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright(c) 1999 - 2018 Intel Corporation. */
 
 #include <linux/pci.h>
 #include <linux/delay.h>
@@ -142,7 +117,7 @@ static s32 ixgbe_setup_sfp_modules_82599(struct ixgbe_hw *hw)
 		ret_val = hw->mac.ops.acquire_swfw_sync(hw,
 							IXGBE_GSSR_MAC_CSR_SM);
 		if (ret_val)
-			return IXGBE_ERR_SWFW_SYNC;
+			return -EBUSY;
 
 		if (hw->eeprom.ops.read(hw, ++data_offset, &data_value))
 			goto setup_sfp_err;
@@ -169,7 +144,7 @@ static s32 ixgbe_setup_sfp_modules_82599(struct ixgbe_hw *hw)
 
 		if (ret_val) {
 			hw_dbg(hw, " sfp module setup not complete\n");
-			return IXGBE_ERR_SFP_SETUP_NOT_COMPLETE;
+			return -EIO;
 		}
 	}
 
@@ -184,7 +159,7 @@ setup_sfp_err:
 	usleep_range(hw->eeprom.semaphore_delay * 1000,
 		     hw->eeprom.semaphore_delay * 2000);
 	hw_err(hw, "eeprom read at offset %d failed\n", data_offset);
-	return IXGBE_ERR_SFP_SETUP_NOT_COMPLETE;
+	return -EIO;
 }
 
 /**
@@ -209,7 +184,7 @@ static s32 prot_autoc_read_82599(struct ixgbe_hw *hw, bool *locked,
 		ret_val = hw->mac.ops.acquire_swfw_sync(hw,
 					IXGBE_GSSR_MAC_CSR_SM);
 		if (ret_val)
-			return IXGBE_ERR_SWFW_SYNC;
+			return -EBUSY;
 
 		*locked = true;
 	}
@@ -221,7 +196,7 @@ static s32 prot_autoc_read_82599(struct ixgbe_hw *hw, bool *locked,
 /**
  * prot_autoc_write_82599 - Hides MAC differences needed for AUTOC write
  * @hw: pointer to hardware structure
- * @reg_val: value to write to AUTOC
+ * @autoc: value to write to AUTOC
  * @locked: bool to indicate whether the SW/FW lock was already taken by
  *	     previous proc_autoc_read_82599.
  *
@@ -244,7 +219,7 @@ static s32 prot_autoc_write_82599(struct ixgbe_hw *hw, u32 autoc, bool locked)
 		ret_val = hw->mac.ops.acquire_swfw_sync(hw,
 					IXGBE_GSSR_MAC_CSR_SM);
 		if (ret_val)
-			return IXGBE_ERR_SWFW_SYNC;
+			return -EBUSY;
 
 		locked = true;
 	}
@@ -331,8 +306,6 @@ static s32 ixgbe_init_phy_ops_82599(struct ixgbe_hw *hw)
 	case ixgbe_phy_tn:
 		phy->ops.check_link = &ixgbe_check_phy_link_tnx;
 		phy->ops.setup_link = &ixgbe_setup_phy_link_tnx;
-		phy->ops.get_firmware_version =
-			     &ixgbe_get_phy_firmware_version_tnx;
 		break;
 	default:
 		break;
@@ -427,7 +400,7 @@ static s32 ixgbe_get_link_capabilities_82599(struct ixgbe_hw *hw,
 		break;
 
 	default:
-		return IXGBE_ERR_LINK_SETUP;
+		return -EIO;
 	}
 
 	if (hw->phy.multispeed_fiber) {
@@ -568,7 +541,7 @@ static s32 ixgbe_start_mac_link_82599(struct ixgbe_hw *hw,
 				msleep(100);
 			}
 			if (!(links_reg & IXGBE_LINKS_KX_AN_COMP)) {
-				status = IXGBE_ERR_AUTONEG_NOT_COMPLETE;
+				status = -EIO;
 				hw_dbg(hw, "Autoneg did not complete.\n");
 			}
 		}
@@ -821,7 +794,7 @@ static s32 ixgbe_setup_mac_link_82599(struct ixgbe_hw *hw,
 	speed &= link_capabilities;
 
 	if (speed == IXGBE_LINK_SPEED_UNKNOWN)
-		return IXGBE_ERR_LINK_SETUP;
+		return -EINVAL;
 
 	/* Use stored value (EEPROM defaults) of AUTOC to find KR/KX4 support*/
 	if (hw->mac.orig_link_settings_stored)
@@ -888,8 +861,7 @@ static s32 ixgbe_setup_mac_link_82599(struct ixgbe_hw *hw,
 					msleep(100);
 				}
 				if (!(links_reg & IXGBE_LINKS_KX_AN_COMP)) {
-					status =
-						IXGBE_ERR_AUTONEG_NOT_COMPLETE;
+					status = -EIO;
 					hw_dbg(hw, "Autoneg did not complete.\n");
 				}
 			}
@@ -954,7 +926,7 @@ static s32 ixgbe_reset_hw_82599(struct ixgbe_hw *hw)
 	/* Identify PHY and related function pointers */
 	status = hw->phy.ops.init(hw);
 
-	if (status == IXGBE_ERR_SFP_NOT_SUPPORTED)
+	if (status == -EOPNOTSUPP)
 		return status;
 
 	/* Setup SFP module if there is one present. */
@@ -963,7 +935,7 @@ static s32 ixgbe_reset_hw_82599(struct ixgbe_hw *hw)
 		hw->phy.sfp_setup_needed = false;
 	}
 
-	if (status == IXGBE_ERR_SFP_NOT_SUPPORTED)
+	if (status == -EOPNOTSUPP)
 		return status;
 
 	/* Reset PHY */
@@ -990,17 +962,18 @@ mac_reset_top:
 	ctrl |= IXGBE_READ_REG(hw, IXGBE_CTRL);
 	IXGBE_WRITE_REG(hw, IXGBE_CTRL, ctrl);
 	IXGBE_WRITE_FLUSH(hw);
+	usleep_range(1000, 1200);
 
 	/* Poll for reset bit to self-clear indicating reset is complete */
 	for (i = 0; i < 10; i++) {
-		udelay(1);
 		ctrl = IXGBE_READ_REG(hw, IXGBE_CTRL);
 		if (!(ctrl & IXGBE_CTRL_RST_MASK))
 			break;
+		udelay(1);
 	}
 
 	if (ctrl & IXGBE_CTRL_RST_MASK) {
-		status = IXGBE_ERR_RESET_FAILED;
+		status = -EIO;
 		hw_dbg(hw, "Reset polling failed to complete.\n");
 	}
 
@@ -1074,7 +1047,7 @@ mac_reset_top:
 	 * clear the multicast table.  Also reset num_rar_entries to 128,
 	 * since we modify this value when programming the SAN MAC address.
 	 */
-	hw->mac.num_rar_entries = 128;
+	hw->mac.num_rar_entries = IXGBE_82599_RAR_ENTRIES;
 	hw->mac.ops.init_rx_addrs(hw);
 
 	/* Store the permanent SAN mac address */
@@ -1082,11 +1055,15 @@ mac_reset_top:
 
 	/* Add the SAN MAC address to the RAR only if it's a valid address */
 	if (is_valid_ether_addr(hw->mac.san_addr)) {
-		hw->mac.ops.set_rar(hw, hw->mac.num_rar_entries - 1,
-				    hw->mac.san_addr, 0, IXGBE_RAH_AV);
-
 		/* Save the SAN MAC RAR index */
 		hw->mac.san_mac_rar_index = hw->mac.num_rar_entries - 1;
+
+		hw->mac.ops.set_rar(hw, hw->mac.san_mac_rar_index,
+				    hw->mac.san_addr, 0, IXGBE_RAH_AV);
+
+		/* clear VMDq pool/queue selection for this RAR */
+		hw->mac.ops.clear_vmdq(hw, hw->mac.san_mac_rar_index,
+				       IXGBE_CLEAR_VMDQ_ALL);
 
 		/* Reserve the last RAR for the SAN MAC address */
 		hw->mac.num_rar_entries--;
@@ -1115,7 +1092,7 @@ static s32 ixgbe_fdir_check_cmd_complete(struct ixgbe_hw *hw, u32 *fdircmd)
 		udelay(10);
 	}
 
-	return IXGBE_ERR_FDIR_CMD_INCOMPLETE;
+	return -EIO;
 }
 
 /**
@@ -1177,7 +1154,7 @@ s32 ixgbe_reinit_fdir_tables_82599(struct ixgbe_hw *hw)
 	}
 	if (i >= IXGBE_FDIR_INIT_DONE_POLL) {
 		hw_dbg(hw, "Flow Director Signature poll time exceeded!\n");
-		return IXGBE_ERR_FDIR_REINIT_FAILED;
+		return -EIO;
 	}
 
 	/* Clear FDIR statistics registers (read to clear) */
@@ -1291,26 +1268,27 @@ s32 ixgbe_init_fdir_perfect_82599(struct ixgbe_hw *hw, u32 fdirctrl)
 #define IXGBE_COMPUTE_SIG_HASH_ITERATION(_n) \
 do { \
 	u32 n = (_n); \
-	if (IXGBE_ATR_COMMON_HASH_KEY & (0x01 << n)) \
+	if (IXGBE_ATR_COMMON_HASH_KEY & BIT(n)) \
 		common_hash ^= lo_hash_dword >> n; \
-	else if (IXGBE_ATR_BUCKET_HASH_KEY & (0x01 << n)) \
+	else if (IXGBE_ATR_BUCKET_HASH_KEY & BIT(n)) \
 		bucket_hash ^= lo_hash_dword >> n; \
-	else if (IXGBE_ATR_SIGNATURE_HASH_KEY & (0x01 << n)) \
+	else if (IXGBE_ATR_SIGNATURE_HASH_KEY & BIT(n)) \
 		sig_hash ^= lo_hash_dword << (16 - n); \
-	if (IXGBE_ATR_COMMON_HASH_KEY & (0x01 << (n + 16))) \
+	if (IXGBE_ATR_COMMON_HASH_KEY & BIT(n + 16)) \
 		common_hash ^= hi_hash_dword >> n; \
-	else if (IXGBE_ATR_BUCKET_HASH_KEY & (0x01 << (n + 16))) \
+	else if (IXGBE_ATR_BUCKET_HASH_KEY & BIT(n + 16)) \
 		bucket_hash ^= hi_hash_dword >> n; \
-	else if (IXGBE_ATR_SIGNATURE_HASH_KEY & (0x01 << (n + 16))) \
+	else if (IXGBE_ATR_SIGNATURE_HASH_KEY & BIT(n + 16)) \
 		sig_hash ^= hi_hash_dword << (16 - n); \
 } while (0)
 
 /**
  *  ixgbe_atr_compute_sig_hash_82599 - Compute the signature hash
- *  @stream: input bitstream to compute the hash on
+ *  @input: input bitstream to compute the hash on
+ *  @common: compressed common input dword
  *
  *  This function is almost identical to the function above but contains
- *  several optomizations such as unwinding all of the loops, letting the
+ *  several optimizations such as unwinding all of the loops, letting the
  *  compiler work out all of the conditional ifs since the keys are static
  *  defines, and computing two keys at once since the hashed dword stream
  *  will be the same for both keys.
@@ -1408,7 +1386,7 @@ s32 ixgbe_fdir_add_signature_filter_82599(struct ixgbe_hw *hw,
 		break;
 	default:
 		hw_dbg(hw, " Error on flow type input\n");
-		return IXGBE_ERR_CONFIG;
+		return -EIO;
 	}
 
 	/* configure FDIRCMD register */
@@ -1435,18 +1413,18 @@ s32 ixgbe_fdir_add_signature_filter_82599(struct ixgbe_hw *hw,
 #define IXGBE_COMPUTE_BKT_HASH_ITERATION(_n) \
 do { \
 	u32 n = (_n); \
-	if (IXGBE_ATR_BUCKET_HASH_KEY & (0x01 << n)) \
+	if (IXGBE_ATR_BUCKET_HASH_KEY & BIT(n)) \
 		bucket_hash ^= lo_hash_dword >> n; \
-	if (IXGBE_ATR_BUCKET_HASH_KEY & (0x01 << (n + 16))) \
+	if (IXGBE_ATR_BUCKET_HASH_KEY & BIT(n + 16)) \
 		bucket_hash ^= hi_hash_dword >> n; \
 } while (0)
 
 /**
  *  ixgbe_atr_compute_perfect_hash_82599 - Compute the perfect filter hash
- *  @atr_input: input bitstream to compute the hash on
+ *  @input: input bitstream to compute the hash on
  *  @input_mask: mask for the input bitstream
  *
- *  This function serves two main purposes.  First it applys the input_mask
+ *  This function serves two main purposes.  First it applies the input_mask
  *  to the atr_input resulting in a cleaned up atr_input data stream.
  *  Secondly it computes the hash and stores it in the bkt_hash field at
  *  the end of the input byte stream.  This way it will be available for
@@ -1457,7 +1435,8 @@ void ixgbe_atr_compute_perfect_hash_82599(union ixgbe_atr_input *input,
 {
 
 	u32 hi_hash_dword, lo_hash_dword, flow_vm_vlan;
-	u32 bucket_hash = 0, hi_dword = 0;
+	u32 bucket_hash = 0;
+	__be32 hi_dword = 0;
 	int i;
 
 	/* Apply masks to input data */
@@ -1496,7 +1475,7 @@ void ixgbe_atr_compute_perfect_hash_82599(union ixgbe_atr_input *input,
 	 * Limit hash to 13 bits since max bucket count is 8K.
 	 * Store result at the end of the input stream.
 	 */
-	input->formatted.bkt_hash = bucket_hash & 0x1FFF;
+	input->formatted.bkt_hash = (__force __be16)(bucket_hash & 0x1FFF);
 }
 
 /**
@@ -1566,7 +1545,7 @@ s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 		break;
 	default:
 		hw_dbg(hw, " Error on vm pool mask\n");
-		return IXGBE_ERR_CONFIG;
+		return -EIO;
 	}
 
 	switch (input_mask->formatted.flow_type & IXGBE_ATR_L4TYPE_MASK) {
@@ -1575,43 +1554,46 @@ s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 		if (input_mask->formatted.dst_port ||
 		    input_mask->formatted.src_port) {
 			hw_dbg(hw, " Error on src/dst port mask\n");
-			return IXGBE_ERR_CONFIG;
+			return -EIO;
 		}
 	case IXGBE_ATR_L4TYPE_MASK:
 		break;
 	default:
 		hw_dbg(hw, " Error on flow type mask\n");
-		return IXGBE_ERR_CONFIG;
+		return -EIO;
 	}
 
 	switch (ntohs(input_mask->formatted.vlan_id) & 0xEFFF) {
 	case 0x0000:
-		/* mask VLAN ID, fall through to mask VLAN priority */
+		/* mask VLAN ID */
 		fdirm |= IXGBE_FDIRM_VLANID;
+		/* fall through */
 	case 0x0FFF:
 		/* mask VLAN priority */
 		fdirm |= IXGBE_FDIRM_VLANP;
 		break;
 	case 0xE000:
-		/* mask VLAN ID only, fall through */
+		/* mask VLAN ID only */
 		fdirm |= IXGBE_FDIRM_VLANID;
+		/* fall through */
 	case 0xEFFF:
 		/* no VLAN fields masked */
 		break;
 	default:
 		hw_dbg(hw, " Error on VLAN mask\n");
-		return IXGBE_ERR_CONFIG;
+		return -EIO;
 	}
 
-	switch (input_mask->formatted.flex_bytes & 0xFFFF) {
+	switch ((__force u16)input_mask->formatted.flex_bytes & 0xFFFF) {
 	case 0x0000:
-		/* Mask Flex Bytes, fall through */
+		/* Mask Flex Bytes */
 		fdirm |= IXGBE_FDIRM_FLEX;
+		/* fall through */
 	case 0xFFFF:
 		break;
 	default:
 		hw_dbg(hw, " Error on flexible byte mask\n");
-		return IXGBE_ERR_CONFIG;
+		return -EIO;
 	}
 
 	/* Now mask VM pool and destination IPv6 - bits 5 and 2 */
@@ -1628,6 +1610,7 @@ s32 ixgbe_fdir_set_input_mask_82599(struct ixgbe_hw *hw,
 	switch (hw->mac.type) {
 	case ixgbe_mac_X550:
 	case ixgbe_mac_X550EM_x:
+	case ixgbe_mac_x550em_a:
 		IXGBE_WRITE_REG(hw, IXGBE_FDIRSCTPM, ~fdirtcpm);
 		break;
 	default:
@@ -1671,13 +1654,13 @@ s32 ixgbe_fdir_write_perfect_filter_82599(struct ixgbe_hw *hw,
 	IXGBE_WRITE_REG(hw, IXGBE_FDIRPORT, fdirport);
 
 	/* record vlan (little-endian) and flex_bytes(big-endian) */
-	fdirvlan = IXGBE_STORE_AS_BE16(input->formatted.flex_bytes);
+	fdirvlan = IXGBE_STORE_AS_BE16((__force u16)input->formatted.flex_bytes);
 	fdirvlan <<= IXGBE_FDIRVLAN_FLEX_SHIFT;
 	fdirvlan |= ntohs(input->formatted.vlan_id);
 	IXGBE_WRITE_REG(hw, IXGBE_FDIRVLAN, fdirvlan);
 
 	/* configure FDIRHASH register */
-	fdirhash = input->formatted.bkt_hash;
+	fdirhash = (__force u32)input->formatted.bkt_hash;
 	fdirhash |= soft_id << IXGBE_FDIRHASH_SIG_SW_INDEX_SHIFT;
 	IXGBE_WRITE_REG(hw, IXGBE_FDIRHASH, fdirhash);
 
@@ -1715,7 +1698,7 @@ s32 ixgbe_fdir_erase_perfect_filter_82599(struct ixgbe_hw *hw,
 	s32 err;
 
 	/* configure FDIRHASH register */
-	fdirhash = input->formatted.bkt_hash;
+	fdirhash = (__force u32)input->formatted.bkt_hash;
 	fdirhash |= soft_id << IXGBE_FDIRHASH_SIG_SW_INDEX_SHIFT;
 	IXGBE_WRITE_REG(hw, IXGBE_FDIRHASH, fdirhash);
 
@@ -1807,9 +1790,6 @@ static s32 ixgbe_start_hw_82599(struct ixgbe_hw *hw)
 	/* We need to run link autotry after the driver loads */
 	hw->mac.autotry_restart = true;
 
-	if (ret_val)
-		return ret_val;
-
 	return ixgbe_verify_fw_version_82599(hw);
 }
 
@@ -1842,7 +1822,7 @@ static s32 ixgbe_identify_phy_82599(struct ixgbe_hw *hw)
 
 	/* Return error if SFP module has been detected but is not supported */
 	if (hw->phy.type == ixgbe_phy_sfp_unsupported)
-		return IXGBE_ERR_SFP_NOT_SUPPORTED;
+		return -EOPNOTSUPP;
 
 	return status;
 }
@@ -1881,13 +1861,13 @@ static s32 ixgbe_enable_rx_dma_82599(struct ixgbe_hw *hw, u32 regval)
  *  Verifies that installed the firmware version is 0.6 or higher
  *  for SFI devices. All 82599 SFI devices should have version 0.6 or higher.
  *
- *  Returns IXGBE_ERR_EEPROM_VERSION if the FW is not present or
- *  if the FW version is not supported.
+ *  Return: -EACCES if the FW is not present or if the FW version is
+ *  not supported.
  **/
 static s32 ixgbe_verify_fw_version_82599(struct ixgbe_hw *hw)
 {
-	s32 status = IXGBE_ERR_EEPROM_VERSION;
 	u16 fw_offset, fw_ptp_cfg_offset;
+	s32 status = -EACCES;
 	u16 offset;
 	u16 fw_version = 0;
 
@@ -1901,7 +1881,7 @@ static s32 ixgbe_verify_fw_version_82599(struct ixgbe_hw *hw)
 		goto fw_version_err;
 
 	if (fw_offset == 0 || fw_offset == 0xFFFF)
-		return IXGBE_ERR_EEPROM_VERSION;
+		return -EACCES;
 
 	/* get the offset to the Pass Through Patch Configuration block */
 	offset = fw_offset + IXGBE_FW_PASSTHROUGH_PATCH_CONFIG_PTR;
@@ -1909,7 +1889,7 @@ static s32 ixgbe_verify_fw_version_82599(struct ixgbe_hw *hw)
 		goto fw_version_err;
 
 	if (fw_ptp_cfg_offset == 0 || fw_ptp_cfg_offset == 0xFFFF)
-		return IXGBE_ERR_EEPROM_VERSION;
+		return -EACCES;
 
 	/* get the firmware version */
 	offset = fw_ptp_cfg_offset + IXGBE_FW_PATCH_VERSION_4;
@@ -1923,7 +1903,7 @@ static s32 ixgbe_verify_fw_version_82599(struct ixgbe_hw *hw)
 
 fw_version_err:
 	hw_err(hw, "eeprom read at offset %d failed\n", offset);
-	return IXGBE_ERR_EEPROM_VERSION;
+	return -EACCES;
 }
 
 /**
@@ -2056,7 +2036,7 @@ static s32 ixgbe_reset_pipeline_82599(struct ixgbe_hw *hw)
 
 	if (!(anlp1_reg & IXGBE_ANLP1_AN_STATE_MASK)) {
 		hw_dbg(hw, "auto negotiation not completed\n");
-		ret_val = IXGBE_ERR_RESET_FAILED;
+		ret_val = -EIO;
 		goto reset_pipeline_out;
 	}
 
@@ -2074,6 +2054,7 @@ reset_pipeline_out:
  *  ixgbe_read_i2c_byte_82599 - Reads 8 bit word over I2C
  *  @hw: pointer to hardware structure
  *  @byte_offset: byte offset to read
+ *  @dev_addr: address to read from
  *  @data: value read
  *
  *  Performs byte read operation to SFP module's EEPROM over I2C interface at
@@ -2104,7 +2085,7 @@ static s32 ixgbe_read_i2c_byte_82599(struct ixgbe_hw *hw, u8 byte_offset,
 
 		if (!timeout) {
 			hw_dbg(hw, "Driver can't access resource, acquiring I2C bus timeout.\n");
-			status = IXGBE_ERR_I2C;
+			status = -EIO;
 			goto release_i2c_access;
 		}
 	}
@@ -2127,6 +2108,7 @@ release_i2c_access:
  *  ixgbe_write_i2c_byte_82599 - Writes 8 bit word over I2C
  *  @hw: pointer to hardware structure
  *  @byte_offset: byte offset to write
+ *  @dev_addr: address to write to
  *  @data: value to write
  *
  *  Performs byte write operation to SFP module's EEPROM over I2C interface at
@@ -2157,7 +2139,7 @@ static s32 ixgbe_write_i2c_byte_82599(struct ixgbe_hw *hw, u8 byte_offset,
 
 		if (!timeout) {
 			hw_dbg(hw, "Driver can't access resource, acquiring I2C bus timeout.\n");
-			status = IXGBE_ERR_I2C;
+			status = -EIO;
 			goto release_i2c_access;
 		}
 	}
@@ -2176,7 +2158,7 @@ release_i2c_access:
 	return status;
 }
 
-static struct ixgbe_mac_operations mac_ops_82599 = {
+static const struct ixgbe_mac_operations mac_ops_82599 = {
 	.init_hw                = &ixgbe_init_hw_generic,
 	.reset_hw               = &ixgbe_reset_hw_82599,
 	.start_hw               = &ixgbe_start_hw_82599,
@@ -2201,6 +2183,7 @@ static struct ixgbe_mac_operations mac_ops_82599 = {
 	.get_link_capabilities  = &ixgbe_get_link_capabilities_82599,
 	.led_on                 = &ixgbe_led_on_generic,
 	.led_off                = &ixgbe_led_off_generic,
+	.init_led_link_act	= ixgbe_init_led_link_act_generic,
 	.blink_led_start        = &ixgbe_blink_led_start_generic,
 	.blink_led_stop         = &ixgbe_blink_led_stop_generic,
 	.set_rar                = &ixgbe_set_rar_generic,
@@ -2215,6 +2198,8 @@ static struct ixgbe_mac_operations mac_ops_82599 = {
 	.clear_vfta             = &ixgbe_clear_vfta_generic,
 	.set_vfta               = &ixgbe_set_vfta_generic,
 	.fc_enable              = &ixgbe_fc_enable_generic,
+	.setup_fc		= ixgbe_setup_fc_generic,
+	.fc_autoneg		= ixgbe_fc_autoneg,
 	.set_fw_drv_ver         = &ixgbe_set_fw_drv_ver_generic,
 	.init_uta_tables        = &ixgbe_init_uta_tables_generic,
 	.setup_sfp              = &ixgbe_setup_sfp_modules_82599,
@@ -2222,6 +2207,7 @@ static struct ixgbe_mac_operations mac_ops_82599 = {
 	.set_vlan_anti_spoofing = &ixgbe_set_vlan_anti_spoofing,
 	.acquire_swfw_sync      = &ixgbe_acquire_swfw_sync,
 	.release_swfw_sync      = &ixgbe_release_swfw_sync,
+	.init_swfw_sync		= NULL,
 	.get_thermal_sensor_data = &ixgbe_get_thermal_sensor_data_generic,
 	.init_thermal_sensor_thresh = &ixgbe_init_thermal_sensor_thresh_generic,
 	.prot_autoc_read	= &prot_autoc_read_82599,
@@ -2230,7 +2216,7 @@ static struct ixgbe_mac_operations mac_ops_82599 = {
 	.disable_rx		= &ixgbe_disable_rx_generic,
 };
 
-static struct ixgbe_eeprom_operations eeprom_ops_82599 = {
+static const struct ixgbe_eeprom_operations eeprom_ops_82599 = {
 	.init_params		= &ixgbe_init_eeprom_params_generic,
 	.read			= &ixgbe_read_eeprom_82599,
 	.read_buffer		= &ixgbe_read_eeprom_buffer_82599,
@@ -2241,7 +2227,7 @@ static struct ixgbe_eeprom_operations eeprom_ops_82599 = {
 	.update_checksum	= &ixgbe_update_eeprom_checksum_generic,
 };
 
-static struct ixgbe_phy_operations phy_ops_82599 = {
+static const struct ixgbe_phy_operations phy_ops_82599 = {
 	.identify		= &ixgbe_identify_phy_82599,
 	.identify_sfp		= &ixgbe_identify_module_generic,
 	.init			= &ixgbe_init_phy_ops_82599,
@@ -2258,7 +2244,7 @@ static struct ixgbe_phy_operations phy_ops_82599 = {
 	.check_overtemp		= &ixgbe_tn_check_overtemp,
 };
 
-struct ixgbe_info ixgbe_82599_info = {
+const struct ixgbe_info ixgbe_82599_info = {
 	.mac                    = ixgbe_mac_82599EB,
 	.get_invariants         = &ixgbe_get_invariants_82599,
 	.mac_ops                = &mac_ops_82599,

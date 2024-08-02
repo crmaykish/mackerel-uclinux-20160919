@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for Samsung S5K4ECGX 1/4" 5Mp CMOS Image Sensor SoC
  * with an Embedded Image Signal Processor.
@@ -7,11 +8,6 @@
  *
  * Based on s5k6aa and noon010pc30 driver
  * Copyright (C) 2011, Samsung Electronics Co., Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -27,7 +23,7 @@
 #include <asm/unaligned.h>
 
 #include <media/media-entity.h>
-#include <media/s5k4ecgx.h>
+#include <media/i2c/s5k4ecgx.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-mediabus.h>
@@ -177,7 +173,7 @@ static const char * const s5k4ecgx_supply_names[] = {
 
 enum s5k4ecgx_gpio_id {
 	STBY,
-	RST,
+	RSET,
 	GPIO_NUM,
 };
 
@@ -263,8 +259,6 @@ static int s5k4ecgx_read(struct i2c_client *client, u32 addr, u16 *val)
 		ret = s5k4ecgx_i2c_write(client, REG_CMDRD_ADDRL, low);
 	if (!ret)
 		ret = s5k4ecgx_i2c_read(client, REG_CMDBUF0_ADDR, val);
-	if (!ret)
-		dev_err(&client->dev, "Failed to execute read command\n");
 
 	return ret;
 }
@@ -482,7 +476,7 @@ static int __s5k4ecgx_power_on(struct s5k4ecgx *priv)
 	if (s5k4ecgx_gpio_set_value(priv, STBY, priv->gpio[STBY].level))
 		usleep_range(30, 50);
 
-	if (s5k4ecgx_gpio_set_value(priv, RST, priv->gpio[RST].level))
+	if (s5k4ecgx_gpio_set_value(priv, RSET, priv->gpio[RSET].level))
 		usleep_range(30, 50);
 
 	return 0;
@@ -490,7 +484,7 @@ static int __s5k4ecgx_power_on(struct s5k4ecgx *priv)
 
 static int __s5k4ecgx_power_off(struct s5k4ecgx *priv)
 {
-	if (s5k4ecgx_gpio_set_value(priv, RST, !priv->gpio[RST].level))
+	if (s5k4ecgx_gpio_set_value(priv, RSET, !priv->gpio[RSET].level))
 		usleep_range(30, 50);
 
 	if (s5k4ecgx_gpio_set_value(priv, STBY, !priv->gpio[STBY].level))
@@ -878,7 +872,7 @@ static int s5k4ecgx_config_gpios(struct s5k4ecgx *priv,
 	int ret;
 
 	priv->gpio[STBY].gpio = -EINVAL;
-	priv->gpio[RST].gpio  = -EINVAL;
+	priv->gpio[RSET].gpio  = -EINVAL;
 
 	ret = s5k4ecgx_config_gpio(gpio->gpio, gpio->level, "S5K4ECGX_STBY");
 
@@ -897,7 +891,7 @@ static int s5k4ecgx_config_gpios(struct s5k4ecgx *priv,
 		s5k4ecgx_free_gpios(priv);
 		return ret;
 	}
-	priv->gpio[RST] = *gpio;
+	priv->gpio[RSET] = *gpio;
 	if (gpio_is_valid(gpio->gpio))
 		gpio_set_value(gpio->gpio, 0);
 
@@ -954,15 +948,16 @@ static int s5k4ecgx_probe(struct i2c_client *client,
 	sd = &priv->sd;
 	/* Registering subdev */
 	v4l2_i2c_subdev_init(sd, client, &s5k4ecgx_ops);
-	strlcpy(sd->name, S5K4ECGX_DRIVER_NAME, sizeof(sd->name));
+	/* Static name; NEVER use in new drivers! */
+	strscpy(sd->name, S5K4ECGX_DRIVER_NAME, sizeof(sd->name));
 
 	sd->internal_ops = &s5k4ecgx_subdev_internal_ops;
 	/* Support v4l2 sub-device user space API */
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 
 	priv->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
-	ret = media_entity_init(&sd->entity, 1, &priv->pad, 0);
+	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
+	ret = media_entity_pads_init(&sd->entity, 1, &priv->pad);
 	if (ret)
 		return ret;
 
@@ -1019,7 +1014,6 @@ MODULE_DEVICE_TABLE(i2c, s5k4ecgx_id);
 
 static struct i2c_driver v4l2_i2c_driver = {
 	.driver = {
-		.owner	= THIS_MODULE,
 		.name = S5K4ECGX_DRIVER_NAME,
 	},
 	.probe = s5k4ecgx_probe,

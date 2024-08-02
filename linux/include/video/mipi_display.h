@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Defines for Mobile Industry Processor Interface (MIPI(R))
  * Display Working Group standards: DSI, DCS, DBI, DPI
@@ -5,10 +6,6 @@
  * Copyright (C) 2010 Guennadi Liakhovetski <g.liakhovetski@gmx.de>
  * Copyright (C) 2006 Nokia Corporation
  * Author: Imre Deak <imre.deak@nokia.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #ifndef MIPI_DISPLAY_H
 #define MIPI_DISPLAY_H
@@ -37,6 +34,9 @@ enum {
 	MIPI_DSI_DCS_SHORT_WRITE_PARAM			= 0x15,
 
 	MIPI_DSI_DCS_READ				= 0x06,
+
+	MIPI_DSI_DCS_COMPRESSION_MODE                   = 0x07,
+	MIPI_DSI_PPS_LONG_WRITE                         = 0x0A,
 
 	MIPI_DSI_SET_MAXIMUM_RETURN_PACKET_SIZE		= 0x37,
 
@@ -115,6 +115,14 @@ enum {
 	MIPI_DCS_READ_MEMORY_CONTINUE	= 0x3E,
 	MIPI_DCS_SET_TEAR_SCANLINE	= 0x44,
 	MIPI_DCS_GET_SCANLINE		= 0x45,
+	MIPI_DCS_SET_DISPLAY_BRIGHTNESS = 0x51,		/* MIPI DCS 1.3 */
+	MIPI_DCS_GET_DISPLAY_BRIGHTNESS = 0x52,		/* MIPI DCS 1.3 */
+	MIPI_DCS_WRITE_CONTROL_DISPLAY  = 0x53,		/* MIPI DCS 1.3 */
+	MIPI_DCS_GET_CONTROL_DISPLAY	= 0x54,		/* MIPI DCS 1.3 */
+	MIPI_DCS_WRITE_POWER_SAVE	= 0x55,		/* MIPI DCS 1.3 */
+	MIPI_DCS_GET_POWER_SAVE		= 0x56,		/* MIPI DCS 1.3 */
+	MIPI_DCS_SET_CABC_MIN_BRIGHTNESS = 0x5E,	/* MIPI DCS 1.3 */
+	MIPI_DCS_GET_CABC_MIN_BRIGHTNESS = 0x5F,	/* MIPI DCS 1.3 */
 	MIPI_DCS_READ_DDB_START		= 0xA1,
 	MIPI_DCS_READ_DDB_CONTINUE	= 0xA8,
 };

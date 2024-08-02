@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2010-2011 Canonical Ltd <jeremy.kerr@canonical.com>
  * Copyright (C) 2011-2012 Mike Turquette, Linaro Ltd <mturquette@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Gated clock implementation
  */
@@ -31,6 +28,7 @@ struct clk_gate2 {
 	struct clk_hw hw;
 	void __iomem	*reg;
 	u8		bit_idx;
+	u8		cgr_val;
 	u8		flags;
 	spinlock_t	*lock;
 	unsigned int	*share_count;
@@ -50,7 +48,8 @@ static int clk_gate2_enable(struct clk_hw *hw)
 		goto out;
 
 	reg = readl(gate->reg);
-	reg |= 3 << gate->bit_idx;
+	reg &= ~(3 << gate->bit_idx);
+	reg |= gate->cgr_val << gate->bit_idx;
 	writel(reg, gate->reg);
 
 out:
@@ -116,22 +115,23 @@ static void clk_gate2_disable_unused(struct clk_hw *hw)
 	spin_unlock_irqrestore(gate->lock, flags);
 }
 
-static struct clk_ops clk_gate2_ops = {
+static const struct clk_ops clk_gate2_ops = {
 	.enable = clk_gate2_enable,
 	.disable = clk_gate2_disable,
 	.disable_unused = clk_gate2_disable_unused,
 	.is_enabled = clk_gate2_is_enabled,
 };
 
-struct clk *clk_register_gate2(struct device *dev, const char *name,
+struct clk_hw *clk_hw_register_gate2(struct device *dev, const char *name,
 		const char *parent_name, unsigned long flags,
-		void __iomem *reg, u8 bit_idx,
+		void __iomem *reg, u8 bit_idx, u8 cgr_val,
 		u8 clk_gate2_flags, spinlock_t *lock,
 		unsigned int *share_count)
 {
 	struct clk_gate2 *gate;
-	struct clk *clk;
+	struct clk_hw *hw;
 	struct clk_init_data init;
+	int ret;
 
 	gate = kzalloc(sizeof(struct clk_gate2), GFP_KERNEL);
 	if (!gate)
@@ -140,6 +140,7 @@ struct clk *clk_register_gate2(struct device *dev, const char *name,
 	/* struct clk_gate2 assignments */
 	gate->reg = reg;
 	gate->bit_idx = bit_idx;
+	gate->cgr_val = cgr_val;
 	gate->flags = clk_gate2_flags;
 	gate->lock = lock;
 	gate->share_count = share_count;
@@ -151,10 +152,13 @@ struct clk *clk_register_gate2(struct device *dev, const char *name,
 	init.num_parents = parent_name ? 1 : 0;
 
 	gate->hw.init = &init;
+	hw = &gate->hw;
 
-	clk = clk_register(dev, &gate->hw);
-	if (IS_ERR(clk))
+	ret = clk_hw_register(NULL, hw);
+	if (ret) {
 		kfree(gate);
+		return ERR_PTR(ret);
+	}
 
-	return clk;
+	return hw;
 }

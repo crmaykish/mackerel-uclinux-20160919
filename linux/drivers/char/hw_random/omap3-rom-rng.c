@@ -17,9 +17,11 @@
 #include <linux/init.h>
 #include <linux/random.h>
 #include <linux/hw_random.h>
-#include <linux/timer.h>
+#include <linux/workqueue.h>
 #include <linux/clk.h>
 #include <linux/err.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/platform_device.h>
 
 #define RNG_RESET			0x01
@@ -29,11 +31,11 @@
 /* param1: ptr, param2: count, param3: flag */
 static u32 (*omap3_rom_rng_call)(u32, u32, u32);
 
-static struct timer_list idle_timer;
+static struct delayed_work idle_work;
 static int rng_idle;
 static struct clk *rng_clk;
 
-static void omap3_rom_rng_idle(unsigned long data)
+static void omap3_rom_rng_idle(struct work_struct *work)
 {
 	int r;
 
@@ -51,9 +53,12 @@ static int omap3_rom_rng_get_random(void *buf, unsigned int count)
 	u32 r;
 	u32 ptr;
 
-	del_timer_sync(&idle_timer);
+	cancel_delayed_work_sync(&idle_work);
 	if (rng_idle) {
-		clk_prepare_enable(rng_clk);
+		r = clk_prepare_enable(rng_clk);
+		if (r)
+			return r;
+
 		r = omap3_rom_rng_call(0, 0, RNG_GEN_PRNG_HW_INIT);
 		if (r != 0) {
 			clk_disable_unprepare(rng_clk);
@@ -65,18 +70,13 @@ static int omap3_rom_rng_get_random(void *buf, unsigned int count)
 
 	ptr = virt_to_phys(buf);
 	r = omap3_rom_rng_call(ptr, count, RNG_GEN_HW);
-	mod_timer(&idle_timer, jiffies + msecs_to_jiffies(500));
+	schedule_delayed_work(&idle_work, msecs_to_jiffies(500));
 	if (r != 0)
 		return -EINVAL;
 	return 0;
 }
 
-static int omap3_rom_rng_data_present(struct hwrng *rng, int wait)
-{
-	return 1;
-}
-
-static int omap3_rom_rng_data_read(struct hwrng *rng, u32 *data)
+static int omap3_rom_rng_read(struct hwrng *rng, void *data, size_t max, bool w)
 {
 	int r;
 
@@ -88,13 +88,18 @@ static int omap3_rom_rng_data_read(struct hwrng *rng, u32 *data)
 
 static struct hwrng omap3_rom_rng_ops = {
 	.name		= "omap3-rom",
-	.data_present	= omap3_rom_rng_data_present,
-	.data_read	= omap3_rom_rng_data_read,
 };
 
 static int omap3_rom_rng_probe(struct platform_device *pdev)
 {
-	pr_info("initializing\n");
+	int ret = 0;
+
+	omap3_rom_rng_ops.read = of_device_get_match_data(&pdev->dev);
+	if (!omap3_rom_rng_ops.read) {
+		dev_err(&pdev->dev, "missing rom code handler\n");
+
+		return -ENODEV;
+	}
 
 	omap3_rom_rng_call = pdev->dev.platform_data;
 	if (!omap3_rom_rng_call) {
@@ -102,7 +107,7 @@ static int omap3_rom_rng_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	setup_timer(&idle_timer, omap3_rom_rng_idle, 0);
+	INIT_DELAYED_WORK(&idle_work, omap3_rom_rng_idle);
 	rng_clk = devm_clk_get(&pdev->dev, "ick");
 	if (IS_ERR(rng_clk)) {
 		pr_err("unable to get RNG clock\n");
@@ -110,7 +115,9 @@ static int omap3_rom_rng_probe(struct platform_device *pdev)
 	}
 
 	/* Leave the RNG in reset state. */
-	clk_prepare_enable(rng_clk);
+	ret = clk_prepare_enable(rng_clk);
+	if (ret)
+		return ret;
 	omap3_rom_rng_idle(0);
 
 	return hwrng_register(&omap3_rom_rng_ops);
@@ -118,14 +125,23 @@ static int omap3_rom_rng_probe(struct platform_device *pdev)
 
 static int omap3_rom_rng_remove(struct platform_device *pdev)
 {
+	cancel_delayed_work_sync(&idle_work);
 	hwrng_unregister(&omap3_rom_rng_ops);
-	clk_disable_unprepare(rng_clk);
+	if (!rng_idle)
+		clk_disable_unprepare(rng_clk);
 	return 0;
 }
+
+static const struct of_device_id omap_rom_rng_match[] = {
+	{ .compatible = "nokia,n900-rom-rng", .data = omap3_rom_rng_read, },
+	{ /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(of, omap_rom_rng_match);
 
 static struct platform_driver omap3_rom_rng_driver = {
 	.driver = {
 		.name		= "omap3-rom-rng",
+		.of_match_table = omap_rom_rng_match,
 	},
 	.probe		= omap3_rom_rng_probe,
 	.remove		= omap3_rom_rng_remove,

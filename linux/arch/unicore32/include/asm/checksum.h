@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * linux/arch/unicore32/include/asm/checksum.h
  *
  * Code specific to PKUnity SoC and UniCore ISA
  *
  * Copyright (C) 2001-2010 GUAN Xue-tao
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * IP checksum routines
  */
@@ -20,8 +17,8 @@
  */
 
 static inline __wsum
-csum_tcpudp_nofold(__be32 saddr, __be32 daddr, unsigned short len,
-		   unsigned short proto, __wsum sum)
+csum_tcpudp_nofold(__be32 saddr, __be32 daddr, __u32 len,
+		   __u8 proto, __wsum sum)
 {
 	__asm__(
 	"add.a	%0, %1, %2\n"

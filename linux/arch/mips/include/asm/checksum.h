@@ -17,9 +17,8 @@
 #else
 
 #include <linux/in6.h>
-#include <linux/unaligned/packed_struct.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 /*
  * computes the checksum of a memory block at buff, length len,
@@ -51,7 +50,7 @@ __wsum csum_partial_copy_from_user(const void __user *src, void *dst, int len,
 				   __wsum sum, int *err_ptr)
 {
 	might_fault();
-	if (segment_eq(get_fs(), get_ds()))
+	if (uaccess_kernel())
 		return __csum_partial_copy_kernel((__force void *)src, dst,
 						  len, sum, err_ptr);
 	else
@@ -64,7 +63,7 @@ static inline
 __wsum csum_and_copy_from_user(const void __user *src, void *dst,
 			       int len, __wsum sum, int *err_ptr)
 {
-	if (access_ok(VERIFY_READ, src, len))
+	if (access_ok(src, len))
 		return csum_partial_copy_from_user(src, dst, len, sum,
 						   err_ptr);
 	if (len)
@@ -82,8 +81,8 @@ __wsum csum_and_copy_to_user(const void *src, void __user *dst, int len,
 			     __wsum sum, int *err_ptr)
 {
 	might_fault();
-	if (access_ok(VERIFY_WRITE, dst, len)) {
-		if (segment_eq(get_fs(), get_ds()))
+	if (access_ok(dst, len)) {
+		if (uaccess_kernel())
 			return __csum_partial_copy_kernel(src,
 							  (__force void *)dst,
 							  len, sum, err_ptr);
@@ -111,7 +110,7 @@ __wsum csum_partial_copy_nocheck(const void *src, void *dst,
  */
 static inline __sum16 csum_fold(__wsum csum)
 {
-	u32 sum = (__force u32)csum;;
+	u32 sum = (__force u32)csum;
 
 	sum += (sum << 16);
 	csum = (sum < csum);
@@ -135,39 +134,35 @@ static inline __sum16 ip_fast_csum(const void *iph, unsigned int ihl)
 	const unsigned int *stop = word + ihl;
 	unsigned int csum;
 	int carry;
-	unsigned int w;
 
-	csum = __get_unaligned_cpu32(word++);
-
-	w = __get_unaligned_cpu32(word++);
-	csum += w;
-	carry = (csum < w);
+	csum = word[0];
+	csum += word[1];
+	carry = (csum < word[1]);
 	csum += carry;
 
-	w = __get_unaligned_cpu32(word++);
-	csum += w;
-	carry = (csum < w);
+	csum += word[2];
+	carry = (csum < word[2]);
 	csum += carry;
 
-	w = __get_unaligned_cpu32(word++);
-	csum += w;
-	carry = (csum < w);
+	csum += word[3];
+	carry = (csum < word[3]);
 	csum += carry;
 
+	word += 4;
 	do {
-		w = __get_unaligned_cpu32(word++);
-		csum += w;
-		carry = (csum < w);
+		csum += *word;
+		carry = (csum < *word);
 		csum += carry;
+		word++;
 	} while (word != stop);
 
 	return csum_fold(csum);
 }
 #define ip_fast_csum ip_fast_csum
 
-static inline __wsum csum_tcpudp_nofold(__be32 saddr,
-	__be32 daddr, unsigned short len, unsigned short proto,
-	__wsum sum)
+static inline __wsum csum_tcpudp_nofold(__be32 saddr, __be32 daddr,
+					__u32 len, __u8 proto,
+					__wsum sum)
 {
 	__asm__(
 	"	.set	push		# csum_tcpudp_nofold\n"
@@ -191,7 +186,9 @@ static inline __wsum csum_tcpudp_nofold(__be32 saddr,
 	"	daddu	%0, %4		\n"
 	"	dsll32	$1, %0, 0	\n"
 	"	daddu	%0, $1		\n"
+	"	sltu	$1, %0, $1	\n"
 	"	dsra32	%0, %0, 0	\n"
+	"	addu	%0, $1		\n"
 #endif
 	"	.set	pop"
 	: "=r" (sum)
@@ -220,7 +217,7 @@ static inline __sum16 ip_compute_csum(const void *buff, int len)
 #define _HAVE_ARCH_IPV6_CSUM
 static __inline__ __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
 					  const struct in6_addr *daddr,
-					  __u32 len, unsigned short proto,
+					  __u32 len, __u8 proto,
 					  __wsum sum)
 {
 	__wsum tmp;
@@ -279,7 +276,8 @@ static __inline__ __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
 	"	.set	pop"
 	: "=&r" (sum), "=&r" (tmp)
 	: "r" (saddr), "r" (daddr),
-	  "0" (htonl(len)), "r" (htonl(proto)), "r" (sum));
+	  "0" (htonl(len)), "r" (htonl(proto)), "r" (sum)
+	: "memory");
 
 	return csum_fold(sum);
 }

@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Driver for Quantek QT1010 silicon tuner
  *
  *  Copyright (C) 2006 Antti Palosaari <crope@iki.fi>
  *                     Aapo Tahkola <aet@rasterburn.org>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 #include "qt1010.h"
 #include "qt1010_priv.h"
@@ -355,11 +342,12 @@ static int qt1010_init(struct dvb_frontend *fe)
 			else
 				valptr = &tmpval;
 
-			BUG_ON(i >= ARRAY_SIZE(i2c_data) - 1);
-
-			err = qt1010_init_meas1(priv, i2c_data[i+1].reg,
-						i2c_data[i].reg,
-						i2c_data[i].val, valptr);
+			if (i >= ARRAY_SIZE(i2c_data) - 1)
+				err = -EIO;
+			else
+				err = qt1010_init_meas1(priv, i2c_data[i + 1].reg,
+							i2c_data[i].reg,
+							i2c_data[i].val, valptr);
 			i++;
 			break;
 		}
@@ -377,11 +365,10 @@ static int qt1010_init(struct dvb_frontend *fe)
 	return qt1010_set_params(fe);
 }
 
-static int qt1010_release(struct dvb_frontend *fe)
+static void qt1010_release(struct dvb_frontend *fe)
 {
 	kfree(fe->tuner_priv);
 	fe->tuner_priv = NULL;
-	return 0;
 }
 
 static int qt1010_get_frequency(struct dvb_frontend *fe, u32 *frequency)
@@ -399,10 +386,10 @@ static int qt1010_get_if_frequency(struct dvb_frontend *fe, u32 *frequency)
 
 static const struct dvb_tuner_ops qt1010_tuner_ops = {
 	.info = {
-		.name           = "Quantek QT1010",
-		.frequency_min  = QT1010_MIN_FREQ,
-		.frequency_max  = QT1010_MAX_FREQ,
-		.frequency_step = QT1010_STEP,
+		.name              = "Quantek QT1010",
+		.frequency_min_hz  = QT1010_MIN_FREQ,
+		.frequency_max_hz  = QT1010_MAX_FREQ,
+		.frequency_step_hz = QT1010_STEP,
 	},
 
 	.release       = qt1010_release,
@@ -451,7 +438,7 @@ struct dvb_frontend * qt1010_attach(struct dvb_frontend *fe,
 	fe->tuner_priv = priv;
 	return fe;
 }
-EXPORT_SYMBOL(qt1010_attach);
+EXPORT_SYMBOL_GPL(qt1010_attach);
 
 MODULE_DESCRIPTION("Quantek QT1010 silicon tuner driver");
 MODULE_AUTHOR("Antti Palosaari <crope@iki.fi>");

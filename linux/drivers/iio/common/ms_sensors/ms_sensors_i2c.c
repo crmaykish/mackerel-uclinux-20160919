@@ -1,9 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Measurements Specialties driver common i2c functions
  *
  * Copyright (c) 2015 Measurement-Specialties
- *
- * Licensed under the GPL-2.
  */
 
 #include <linux/module.h>
@@ -16,8 +15,8 @@
 /* Conversion times in us */
 static const u16 ms_sensors_ht_t_conversion_time[] = { 50000, 25000,
 						       13000, 7000 };
-static const u16 ms_sensors_ht_h_conversion_time[] = { 16000, 3000,
-						       5000, 8000 };
+static const u16 ms_sensors_ht_h_conversion_time[] = { 16000, 5000,
+						       3000, 8000 };
 static const u16 ms_sensors_tp_conversion_time[] = { 500, 1100, 2100,
 						     4100, 8220, 16440 };
 
@@ -74,7 +73,7 @@ EXPORT_SYMBOL(ms_sensors_reset);
 int ms_sensors_read_prom_word(void *cli, int cmd, u16 *word)
 {
 	int ret;
-	struct i2c_client *client = (struct i2c_client *)cli;
+	struct i2c_client *client = cli;
 
 	ret = i2c_smbus_read_word_swapped(client, cmd);
 	if (ret < 0) {
@@ -106,8 +105,8 @@ int ms_sensors_convert_and_read(void *cli, u8 conv, u8 rd,
 				unsigned int delay, u32 *adc)
 {
 	int ret;
-        __be32 buf = 0;
-	struct i2c_client *client = (struct i2c_client *)cli;
+	__be32 buf = 0;
+	struct i2c_client *client = cli;
 
 	/* Trigger conversion */
 	ret = i2c_smbus_write_byte(client, conv);

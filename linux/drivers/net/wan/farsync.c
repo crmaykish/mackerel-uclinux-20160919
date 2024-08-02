@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *      FarSync WAN driver for Linux (2.6.x kernel version)
  *
@@ -5,11 +6,6 @@
  *
  *      Copyright (C) 2001-2004 FarSite Communications Ltd.
  *      www.farsite.co.uk
- *
- *      This program is free software; you can redistribute it and/or
- *      modify it under the terms of the GNU General Public License
- *      as published by the Free Software Foundation; either version
- *      2 of the License, or (at your option) any later version.
  *
  *      Author:      R.J.Dunlop    <bob.dunlop@farsite.co.uk>
  *      Maintainer:  Kevin Curtis  <kevin.curtis@farsite.co.uk>
@@ -30,7 +26,7 @@
 #include <linux/if.h>
 #include <linux/hdlc.h>
 #include <asm/io.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include "farsync.h"
 
@@ -573,8 +569,8 @@ static void do_bottom_half_rx(struct fst_card_info *card);
 static void fst_process_tx_work_q(unsigned long work_q);
 static void fst_process_int_work_q(unsigned long work_q);
 
-static DECLARE_TASKLET(fst_tx_task, fst_process_tx_work_q, 0);
-static DECLARE_TASKLET(fst_int_task, fst_process_int_work_q, 0);
+static DECLARE_TASKLET_OLD(fst_tx_task, fst_process_tx_work_q);
+static DECLARE_TASKLET_OLD(fst_int_task, fst_process_int_work_q);
 
 static struct fst_card_info *fst_card_array[FST_MAX_CARDS];
 static spinlock_t fst_work_q_lock;
@@ -831,7 +827,7 @@ fst_tx_dma_complete(struct fst_card_info *card, struct fst_port_info *port,
 		DMA_OWN | TX_STP | TX_ENP);
 	dev->stats.tx_packets++;
 	dev->stats.tx_bytes += len;
-	dev->trans_start = jiffies;
+	netif_trans_update(dev);
 }
 
 /*
@@ -857,7 +853,7 @@ fst_rx_dma_complete(struct fst_card_info *card, struct fst_port_info *port,
 
 	dbg(DBG_TX, "fst_rx_dma_complete\n");
 	pi = port->index;
-	memcpy(skb_put(skb, len), card->rx_dma_handle_host, len);
+	skb_put_data(skb, card->rx_dma_handle_host, len);
 
 	/* Reset buffer descriptor */
 	FST_WRB(card, rxDescrRing[pi][rxp].bits, DMA_OWN);
@@ -1389,7 +1385,7 @@ do_bottom_half_tx(struct fst_card_info *card)
 						DMA_OWN | TX_STP | TX_ENP);
 					dev->stats.tx_packets++;
 					dev->stats.tx_bytes += skb->len;
-					dev->trans_start = jiffies;
+					netif_trans_update(dev);
 				} else {
 					/* Or do it through dma */
 					memcpy(card->tx_dma_handle_host,
@@ -2134,7 +2130,6 @@ static void
 fst_openport(struct fst_port_info *port)
 {
 	int signals;
-	int txq_length;
 
 	/* Only init things if card is actually running. This allows open to
 	 * succeed for downloads etc.
@@ -2161,7 +2156,6 @@ fst_openport(struct fst_port_info *port)
 		else
 			netif_carrier_off(port_to_dev(port));
 
-		txq_length = port->txqe - port->txqs;
 		port->txqe = 0;
 		port->txqs = 0;
 	}
@@ -2258,7 +2252,7 @@ fst_tx_timeout(struct net_device *dev)
 	    card->card_no, port->index);
 	fst_issue_cmd(port, ABORTTX);
 
-	dev->trans_start = jiffies;
+	netif_trans_update(dev);
 	netif_wake_queue(dev);
 	port->start = 0;
 }
@@ -2394,7 +2388,6 @@ fst_init_card(struct fst_card_info *card)
 static const struct net_device_ops fst_ops = {
 	.ndo_open       = fst_open,
 	.ndo_stop       = fst_close,
-	.ndo_change_mtu = hdlc_change_mtu,
 	.ndo_start_xmit = hdlc_start_xmit,
 	.ndo_do_ioctl   = fst_ioctl,
 	.ndo_tx_timeout = fst_tx_timeout,
@@ -2516,7 +2509,7 @@ fst_add_one(struct pci_dev *pdev, const struct pci_device_id *ent)
                 dev->mem_start   = card->phys_mem
                                  + BUF_OFFSET ( txBuffer[i][0][0]);
                 dev->mem_end     = card->phys_mem
-                                 + BUF_OFFSET ( txBuffer[i][NUM_TX_BUFFER][0]);
+                                 + BUF_OFFSET ( txBuffer[i][NUM_TX_BUFFER - 1][LEN_RX_BUFFER - 1]);
                 dev->base_addr   = card->pci_conf;
                 dev->irq         = card->irq;
 
@@ -2620,6 +2613,7 @@ fst_remove_one(struct pci_dev *pdev)
 	for (i = 0; i < card->nports; i++) {
 		struct net_device *dev = port_to_dev(&card->ports[i]);
 		unregister_hdlc_device(dev);
+		free_netdev(dev);
 	}
 
 	fst_disable_intr(card);
@@ -2640,6 +2634,7 @@ fst_remove_one(struct pci_dev *pdev)
 				    card->tx_dma_handle_card);
 	}
 	fst_card_array[card->card_no] = NULL;
+	kfree(card);
 }
 
 static struct pci_driver fst_driver = {

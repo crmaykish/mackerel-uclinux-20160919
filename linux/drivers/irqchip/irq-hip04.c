@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Hisilicon HiP04 INTC
  *
  * Copyright (C) 2002-2014 ARM Limited.
  * Copyright (c) 2013-2014 Hisilicon Ltd.
  * Copyright (c) 2013-2014 Linaro Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Interrupt architecture for the HIP04 INTC:
  *
@@ -133,7 +130,12 @@ static int hip04_irq_set_type(struct irq_data *d, unsigned int type)
 
 	raw_spin_lock(&irq_controller_lock);
 
-	ret = gic_configure_irq(irq, type, base, NULL);
+	ret = gic_configure_irq(irq, type, base + GIC_DIST_CONFIG, NULL);
+	if (ret && irq < 32) {
+		/* Misconfigured PPIs are usually not fatal */
+		pr_warn("GIC: PPI%d is secure or misconfigured\n", irq - 16);
+		ret = 0;
+	}
 
 	raw_spin_unlock(&irq_controller_lock);
 
@@ -164,6 +166,8 @@ static int hip04_irq_set_affinity(struct irq_data *d,
 	val = readl_relaxed(reg) & ~mask;
 	writel_relaxed(val | bit, reg);
 	raw_spin_unlock(&irq_controller_lock);
+
+	irq_data_update_effective_affinity(d, cpumask_of(cpu));
 
 	return IRQ_SET_MASK_OK;
 }
@@ -269,7 +273,7 @@ static void hip04_irq_cpu_init(struct hip04_irq_data *intc)
 		if (i != cpu)
 			hip04_cpu_map[i] &= ~cpu_mask;
 
-	gic_cpu_config(dist_base, NULL);
+	gic_cpu_config(dist_base, 32, NULL);
 
 	writel_relaxed(0xf0, base + GIC_CPU_PRIMASK);
 	writel_relaxed(1, base + GIC_CPU_CTRL);
@@ -312,6 +316,7 @@ static int hip04_irq_domain_map(struct irq_domain *d, unsigned int irq,
 		irq_set_chip_and_handler(irq, &hip04_irq_chip,
 					 handle_fasteoi_irq);
 		irq_set_probe(irq);
+		irqd_set_single_target(irq_desc_get_irq_data(irq_to_desc(irq)));
 	}
 	irq_set_chip_data(irq, d->host_data);
 	return 0;
@@ -342,25 +347,11 @@ static int hip04_irq_domain_xlate(struct irq_domain *d,
 	return ret;
 }
 
-#ifdef CONFIG_SMP
-static int hip04_irq_secondary_init(struct notifier_block *nfb,
-				    unsigned long action,
-				    void *hcpu)
+static int hip04_irq_starting_cpu(unsigned int cpu)
 {
-	if (action == CPU_STARTING || action == CPU_STARTING_FROZEN)
-		hip04_irq_cpu_init(&hip04_data);
-	return NOTIFY_OK;
+	hip04_irq_cpu_init(&hip04_data);
+	return 0;
 }
-
-/*
- * Notifier for enabling the INTC CPU interface. Set an arbitrarily high
- * priority because the GIC needs to be up before the ARM generic timers.
- */
-static struct notifier_block hip04_irq_cpu_notifier = {
-	.notifier_call	= hip04_irq_secondary_init,
-	.priority	= 100,
-};
-#endif
 
 static const struct irq_domain_ops hip04_irq_domain_ops = {
 	.map	= hip04_irq_domain_map,
@@ -402,7 +393,7 @@ hip04_of_init(struct device_node *node, struct device_node *parent)
 	nr_irqs -= hwirq_base; /* calculate # of irqs to allocate */
 
 	irq_base = irq_alloc_descs(-1, hwirq_base, nr_irqs, numa_node_id());
-	if (IS_ERR_VALUE(irq_base)) {
+	if (irq_base < 0) {
 		pr_err("failed to allocate IRQ numbers\n");
 		return -EINVAL;
 	}
@@ -417,13 +408,12 @@ hip04_of_init(struct device_node *node, struct device_node *parent)
 
 #ifdef CONFIG_SMP
 	set_smp_cross_call(hip04_raise_softirq);
-	register_cpu_notifier(&hip04_irq_cpu_notifier);
 #endif
 	set_handle_irq(hip04_handle_irq);
 
 	hip04_irq_dist_init(&hip04_data);
-	hip04_irq_cpu_init(&hip04_data);
-
+	cpuhp_setup_state(CPUHP_AP_IRQ_HIP04_STARTING, "irqchip/hip04:starting",
+			  hip04_irq_starting_cpu, NULL);
 	return 0;
 }
 IRQCHIP_DECLARE(hip04_intc, "hisilicon,hip04-intc", hip04_of_init);

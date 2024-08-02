@@ -111,11 +111,11 @@ static const struct radar_detector_specs jp_radar_ref_types[] = {
 	JP_PATTERN(0, 0, 1, 1428, 1428, 1, 18, 29, false),
 	JP_PATTERN(1, 2, 3, 3846, 3846, 1, 18, 29, false),
 	JP_PATTERN(2, 0, 1, 1388, 1388, 1, 18, 50, false),
-	JP_PATTERN(3, 1, 2, 4000, 4000, 1, 18, 50, false),
+	JP_PATTERN(3, 0, 4, 4000, 4000, 1, 18, 50, false),
 	JP_PATTERN(4, 0, 5, 150, 230, 1, 23, 50, false),
 	JP_PATTERN(5, 6, 10, 200, 500, 1, 16, 50, false),
 	JP_PATTERN(6, 11, 20, 200, 500, 1, 12, 50, false),
-	JP_PATTERN(7, 50, 100, 1000, 2000, 1, 3, 50, false),
+	JP_PATTERN(7, 50, 100, 1000, 2000, 1, 3, 50, true),
 	JP_PATTERN(5, 0, 1, 333, 333, 1, 9, 50, false),
 };
 
@@ -182,10 +182,12 @@ static void channel_detector_exit(struct dfs_pattern_detector *dpd,
 	if (cd == NULL)
 		return;
 	list_del(&cd->head);
-	for (i = 0; i < dpd->num_radar_types; i++) {
-		struct pri_detector *de = cd->detectors[i];
-		if (de != NULL)
-			de->exit(de);
+	if (cd->detectors) {
+		for (i = 0; i < dpd->num_radar_types; i++) {
+			struct pri_detector *de = cd->detectors[i];
+			if (de != NULL)
+				de->exit(de);
+		}
 	}
 	kfree(cd->detectors);
 	kfree(cd);
@@ -268,7 +270,8 @@ static void dpd_exit(struct dfs_pattern_detector *dpd)
 }
 
 static bool
-dpd_add_pulse(struct dfs_pattern_detector *dpd, struct pulse_event *event)
+dpd_add_pulse(struct dfs_pattern_detector *dpd, struct pulse_event *event,
+	      struct radar_detector_specs *rs)
 {
 	u32 i;
 	struct channel_detector *cd;
@@ -294,6 +297,8 @@ dpd_add_pulse(struct dfs_pattern_detector *dpd, struct pulse_event *event)
 		struct pri_detector *pd = cd->detectors[i];
 		struct pri_sequence *ps = pd->add_pulse(pd, event);
 		if (ps != NULL) {
+			if (rs != NULL)
+				memcpy(rs, pd->rs, sizeof(*rs));
 			ath_dbg(dpd->common, DFS,
 				"DFS: radar found on freq=%d: id=%d, pri=%d, "
 				"count=%d, count_false=%d\n",
@@ -338,7 +343,7 @@ static bool dpd_set_domain(struct dfs_pattern_detector *dpd,
 	return true;
 }
 
-static struct dfs_pattern_detector default_dpd = {
+static const struct dfs_pattern_detector default_dpd = {
 	.exit		= dpd_exit,
 	.set_dfs_domain	= dpd_set_domain,
 	.add_pulse	= dpd_add_pulse,
@@ -352,7 +357,7 @@ dfs_pattern_detector_init(struct ath_common *common,
 {
 	struct dfs_pattern_detector *dpd;
 
-	if (!config_enabled(CONFIG_CFG80211_CERTIFICATION_ONUS))
+	if (!IS_ENABLED(CONFIG_CFG80211_CERTIFICATION_ONUS))
 		return NULL;
 
 	dpd = kmalloc(sizeof(*dpd), GFP_KERNEL);

@@ -1,10 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2012-2013, Marco Porsch <marco.porsch@s2005.tu-chemnitz.de>
  * Copyright 2012-2013, cozybit Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * Copyright (C) 2021 Intel Corporation
  */
 
 #include "mesh.h"
@@ -30,7 +28,7 @@ static struct sk_buff *mps_qos_null_get(struct sta_info *sta)
 		return NULL;
 	skb_reserve(skb, local->hw.extra_tx_headroom);
 
-	nullfunc = (struct ieee80211_hdr *) skb_put(skb, size);
+	nullfunc = skb_put(skb, size);
 	fc = cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_STYPE_QOS_NULLFUNC);
 	ieee80211_fill_mesh_addresses(nullfunc, &fc, sta->sta.addr,
 				      sdata->vif.addr);
@@ -39,7 +37,7 @@ static struct sk_buff *mps_qos_null_get(struct sta_info *sta)
 	nullfunc->seq_ctrl = 0;
 	/* no address resolution for this frame -> set addr 1 immediately */
 	memcpy(nullfunc->addr1, sta->sta.addr, ETH_ALEN);
-	memset(skb_put(skb, 2), 0, 2); /* append QoS control field */
+	skb_put_zero(skb, 2); /* append QoS control field */
 	ieee80211_mps_set_frame_flags(sdata, sta, nullfunc);
 
 	return skb;
@@ -587,7 +585,7 @@ void ieee80211_mps_frame_release(struct sta_info *sta,
 
 	/* only transmit to PS STA with announced, non-zero awake window */
 	if (test_sta_flag(sta, WLAN_STA_PS_STA) &&
-	    (!elems->awake_window || !le16_to_cpu(*elems->awake_window)))
+	    (!elems->awake_window || !get_unaligned_le16(elems->awake_window)))
 		return;
 
 	if (!test_sta_flag(sta, WLAN_STA_MPSP_OWNER))

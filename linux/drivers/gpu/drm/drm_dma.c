@@ -1,4 +1,4 @@
-/**
+/*
  * \file drm_dma.c
  * DMA IOCTL and function support
  *
@@ -34,7 +34,11 @@
  */
 
 #include <linux/export.h>
-#include <drm/drmP.h>
+
+#include <drm/drm_drv.h>
+#include <drm/drm_pci.h>
+#include <drm/drm_print.h>
+
 #include "drm_legacy.h"
 
 /**
@@ -50,9 +54,8 @@ int drm_legacy_dma_setup(struct drm_device *dev)
 	int i;
 
 	if (!drm_core_check_feature(dev, DRIVER_HAVE_DMA) ||
-	    drm_core_check_feature(dev, DRIVER_MODESET)) {
+	    !drm_core_check_feature(dev, DRIVER_LEGACY))
 		return 0;
-	}
 
 	dev->buf_use = 0;
 	atomic_set(&dev->buf_alloc, 0);
@@ -81,9 +84,8 @@ void drm_legacy_dma_takedown(struct drm_device *dev)
 	int i, j;
 
 	if (!drm_core_check_feature(dev, DRIVER_HAVE_DMA) ||
-	    drm_core_check_feature(dev, DRIVER_MODESET)) {
+	    !drm_core_check_feature(dev, DRIVER_LEGACY))
 		return;
-	}
 
 	if (!dma)
 		return;

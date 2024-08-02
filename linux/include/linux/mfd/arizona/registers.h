@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * ARIZONA register definitions
  *
  * Copyright 2012 Wolfson Microelectronics plc
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _ARIZONA_REGISTERS_H
@@ -852,12 +849,6 @@
 #define ARIZONA_ISRC1DEC4MIX_INPUT_1_SOURCE      0xB18
 #define ARIZONA_ISRC1INT1MIX_INPUT_1_SOURCE      0xB20
 #define ARIZONA_ISRC1INT2MIX_INPUT_1_SOURCE      0xB28
-#define ARIZONA_ISRC1INT3MIX_INPUT_1_SOURCE      0xB30
-#define ARIZONA_ISRC1INT4MIX_INPUT_1_SOURCE      0xB38
-#define ARIZONA_ISRC2DEC1MIX_INPUT_1_SOURCE      0xB40
-#define ARIZONA_ISRC2DEC2MIX_INPUT_1_SOURCE      0xB48
-#define ARIZONA_ISRC2INT1MIX_INPUT_1_SOURCE      0xB60
-#define ARIZONA_ISRC2INT2MIX_INPUT_1_SOURCE      0xB68
 #define ARIZONA_ISRC1INT3MIX_INPUT_1_SOURCE      0xB30
 #define ARIZONA_ISRC1INT4MIX_INPUT_1_SOURCE      0xB38
 #define ARIZONA_ISRC2DEC1MIX_INPUT_1_SOURCE      0xB40

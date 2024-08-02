@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *   S/390 common I/O routines -- blacklisting of specific devices
  *
@@ -17,7 +18,7 @@
 #include <linux/ctype.h>
 #include <linux/device.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/cio.h>
 #include <asm/ipl.h>
 
@@ -51,9 +52,8 @@ static int blacklist_range(range_action action, unsigned int from_ssid,
 {
 	if ((from_ssid > to_ssid) || ((from_ssid == to_ssid) && (from > to))) {
 		if (msgtrigger)
-			pr_warning("0.%x.%04x to 0.%x.%04x is not a valid "
-				   "range for cio_ignore\n", from_ssid, from,
-				   to_ssid, to);
+			pr_warn("0.%x.%04x to 0.%x.%04x is not a valid range for cio_ignore\n",
+				from_ssid, from, to_ssid, to);
 
 		return 1;
 	}
@@ -140,8 +140,8 @@ static int parse_busid(char *str, unsigned int *cssid, unsigned int *ssid,
 	rc = 0;
 out:
 	if (rc && msgtrigger)
-		pr_warning("%s is not a valid device for the cio_ignore "
-			   "kernel parameter\n", str);
+		pr_warn("%s is not a valid device for the cio_ignore kernel parameter\n",
+			str);
 
 	return rc;
 }
@@ -303,8 +303,10 @@ static void *
 cio_ignore_proc_seq_next(struct seq_file *s, void *it, loff_t *offset)
 {
 	struct ccwdev_iter *iter;
+	loff_t p = *offset;
 
-	if (*offset >= (__MAX_SUBCHANNEL + 1) * (__MAX_SSID + 1))
+	(*offset)++;
+	if (p >= (__MAX_SUBCHANNEL + 1) * (__MAX_SSID + 1))
 		return NULL;
 	iter = it;
 	if (iter->devno == __MAX_SUBCHANNEL) {
@@ -314,7 +316,6 @@ cio_ignore_proc_seq_next(struct seq_file *s, void *it, loff_t *offset)
 			return NULL;
 	} else
 		iter->devno++;
-	(*offset)++;
 	return iter;
 }
 

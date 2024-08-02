@@ -1,8 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * MMP2 Power Management Routines
- *
- * This software program is licensed subject to the GNU General Public License
- * (GPL).Version 2,June 1991, available at http://www.fsf.org/copyleft/gpl.html
  *
  * (C) Copyright 2012 Marvell International Ltd.
  * All Rights Reserved
@@ -18,12 +16,12 @@
 #include <linux/io.h>
 #include <linux/interrupt.h>
 #include <asm/mach-types.h>
-#include <mach/hardware.h>
-#include <mach/cputype.h>
-#include <mach/addr-map.h>
-#include <mach/pm-mmp2.h>
-#include <mach/regs-icu.h>
-#include <mach/irqs.h>
+
+#include "cputype.h"
+#include "addr-map.h"
+#include "pm-mmp2.h"
+#include "regs-icu.h"
+#include "irqs.h"
 
 int mmp2_set_wake(struct irq_data *d, unsigned int on)
 {

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Definitions for the new Marvell Yukon 2 driver.
  */
@@ -2200,7 +2201,7 @@ struct rx_ring_info {
 	struct sk_buff	*skb;
 	dma_addr_t	data_addr;
 	DEFINE_DMA_UNMAP_LEN(data_size);
-	dma_addr_t	frag_addr[ETH_JUMBO_MTU >> PAGE_SHIFT];
+	dma_addr_t	frag_addr[ETH_JUMBO_MTU >> PAGE_SHIFT ?: 1];
 };
 
 enum flow_control {
@@ -2247,6 +2248,7 @@ struct sky2_port {
 	u16		     rx_data_size;
 	u16		     rx_nfrags;
 
+	unsigned long	     last_rx;
 	struct {
 		unsigned long last;
 		u32	mac_rp;

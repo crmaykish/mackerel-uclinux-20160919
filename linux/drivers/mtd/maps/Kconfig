@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 menu "Mapping drivers for chip access"
 	depends on MTD!=n
 	depends on HAS_IOMEM
@@ -10,7 +11,7 @@ config MTD_COMPLEX_MAPPINGS
 
 config MTD_PHYSMAP
 	tristate "Flash device in physical memory map"
-	depends on MTD_CFI || MTD_JEDECPROBE || MTD_ROM || MTD_LPDDR
+	depends on MTD_CFI || MTD_JEDECPROBE || MTD_ROM || MTD_RAM || MTD_LPDDR
 	help
 	  This provides a 'mapping' driver which allows the NOR Flash and
 	  ROM driver code to communicate with chips which are mapped
@@ -66,13 +67,43 @@ config MTD_PHYSMAP_BANKWIDTH
 	  used internally by the CFI drivers.
 
 config MTD_PHYSMAP_OF
-	tristate "Memory device in physical memory map based on OF description"
-	depends on OF && (MTD_CFI || MTD_JEDECPROBE || MTD_ROM || MTD_RAM)
+	bool "Memory device in physical memory map based on OF description"
+	depends on OF && MTD_PHYSMAP
 	help
 	  This provides a 'mapping' driver which allows the NOR Flash, ROM
 	  and RAM driver code to communicate with chips which are mapped
 	  physically into the CPU's memory. The mapping description here is
 	  taken from OF device tree.
+
+config MTD_PHYSMAP_VERSATILE
+	bool "ARM Versatile OF-based physical memory map handling"
+	depends on MTD_PHYSMAP_OF
+	depends on MFD_SYSCON
+	default y if (ARCH_INTEGRATOR || ARCH_VERSATILE || ARCH_REALVIEW)
+	help
+	  This provides some extra DT physmap parsing for the ARM Versatile
+	  platforms, basically to add a VPP (write protection) callback so
+	  the flash can be taken out of write protection.
+
+config MTD_PHYSMAP_GEMINI
+	bool "Cortina Gemini OF-based physical memory map handling"
+	depends on MTD_PHYSMAP_OF
+	depends on MFD_SYSCON
+	select MTD_COMPLEX_MAPPINGS
+	default ARCH_GEMINI
+	help
+	  This provides some extra DT physmap parsing for the Gemini
+	  platforms, some detection and setting up parallel mode on the
+	  external interface.
+
+config MTD_PHYSMAP_GPIO_ADDR
+	bool "GPIO-assisted Flash Chip Support"
+	depends on MTD_PHYSMAP
+	depends on GPIOLIB || COMPILE_TEST
+	depends on MTD_COMPLEX_MAPPINGS
+	help
+	  Extend the physmap driver to allow flashes to be partially
+	  physically addressed and assisted by GPIOs.
 
 config MTD_PMC_MSP_EVM
 	tristate "CFI Flash device mapped on PMC-Sierra MSP"
@@ -177,14 +208,6 @@ config MTD_AMD76XROM
 
 	  BE VERY CAREFUL.
 
-config MTD_AMDFCH
-	tristate "BIOS flash chip on the AMD FCH southbridge"
-	depends on X86
-	help
-	  Support the BIOS flash chip on the AMD Fusion Controller Hub (FCH)
-	  silicon module. This is used on many AMD x86 System-on-Chip type
-	  processors.
-
 config MTD_ICHXROM
 	tristate "BIOS flash chip on Intel Controller Hub 2/3/4/5"
 	depends on X86 && MTD_JEDECPROBE
@@ -195,13 +218,13 @@ config MTD_ICHXROM
 	  BE VERY CAREFUL.
 
 config MTD_ESB2ROM
-        tristate "BIOS flash chip on Intel ESB Controller Hub 2"
-        depends on X86 && MTD_JEDECPROBE && PCI
-        help
-          Support for treating the BIOS flash chip on ESB2 motherboards
-          as an MTD device - with this you can reprogram your BIOS.
+	tristate "BIOS flash chip on Intel ESB Controller Hub 2"
+	depends on X86 && MTD_JEDECPROBE && PCI
+	help
+	  Support for treating the BIOS flash chip on ESB2 motherboards
+	  as an MTD device - with this you can reprogram your BIOS.
 
-          BE VERY CAREFUL.
+	  BE VERY CAREFUL.
 
 config MTD_CK804XROM
 	tristate "BIOS flash chip on Nvidia CK804"
@@ -232,18 +255,6 @@ config MTD_NETtel
 	depends on X86 && MTD_JEDECPROBE
 	help
 	  Support for flash chips on NETtel/SecureEdge/SnapGear boards.
-
-config MTD_SNAPGEODE
-	tristate "CFI flash device on SnapGear/GEODE boards"
-	depends on X86
-	help
-	  Support for flash chips on SnapGear GEODE based boards.
-
-config MTD_SNAPARM
-	tristate 'CFI Flash device mapped on SnapGear/Cyberguard ARM/XSCALE boards'
-	depends on MTD_CFI && MTD_COMPLEX_MAPPINGS
-	help
-	  Support for flash chips on the SnapGear/Cyberguard ARM/XSCALE platforms.
 
 config MTD_LANTIQ
 	tristate "Lantiq SoC NOR support"
@@ -292,7 +303,7 @@ config MTD_DC21285
 
 config MTD_IXP4XX
 	tristate "CFI Flash device mapped on Intel IXP4xx based systems"
-	depends on MTD_CFI && MTD_COMPLEX_MAPPINGS && ARCH_IXP4XX
+	depends on MTD_CFI && MTD_COMPLEX_MAPPINGS && ARCH_IXP4XX && MTD_CFI_ADV_OPTIONS
 	help
 	  This enables MTD access to flash devices on platforms based
 	  on Intel's IXP4xx family of network processors such as the
@@ -334,111 +345,11 @@ config MTD_PCMCIA_ANONYMOUS
 
 	  If unsure, say N.
 
-config MTD_BFIN_ASYNC
-	tristate "Blackfin BF533-STAMP Flash Chip Support"
-	depends on BFIN533_STAMP && MTD_CFI && MTD_COMPLEX_MAPPINGS
-	default y
-	help
-	  Map driver which allows for simultaneous utilization of
-	  ethernet and CFI parallel flash.
-
-	  If compiled as a module, it will be called bfin-async-flash.
-
-config MTD_GPIO_ADDR
-	tristate "GPIO-assisted Flash Chip Support"
-	depends on GPIOLIB || COMPILE_TEST
-	depends on MTD_COMPLEX_MAPPINGS
-	help
-	  Map driver which allows flashes to be partially physically addressed
-	  and assisted by GPIOs.
-
-	  If compiled as a module, it will be called gpio-addr-flash.
-
 config MTD_UCLINUX
 	bool "Generic uClinux RAM/ROM filesystem support"
 	depends on (MTD_RAM=y || MTD_ROM=y) && (!MMU || COLDFIRE)
 	help
 	  Map driver to support image based filesystems for uClinux.
-
-config MTD_UCLINUX_EBSS
-	bool "uClinux RAM/ROM filesystem is located at ebss"
-	depends on MTD_UCLINUX
-	default y
-	help
-	  The filesystem is located directly after the kernel in memory.
-
-config MTD_UCLINUX_ADDRESS
-	hex "uClinux RAM/ROM filesystem address"
-	default 0x1400000
-	depends on MTD_UCLINUX && !MTD_UCLINUX_EBSS
-	help
-	  The filesystem is located at the given address.
-
-choice
-	prompt "uClinux RAM/ROM is located in ROM/RAM"
-	default MTD_UCLINUX_RAM
-	depends on MTD_UCLINUX && !MTD_UCLINUX_EBSS
-
-config MTD_UCLINUX_RAM
-	bool "RAM"
-config MTD_UCLINUX_ROM
-	bool "ROM"
-endchoice
-
-config MTD_COBRA5329
-	tristate "Cobra5329 mapping"
-	depends on COBRA5329
-	help
-	  Map driver to support Cobra5329 Flash.
-
-config MTD_SNAPGEARuC
-	tristate "SnapGear uClinux RAM/ROM filesystem support"
-	help
-	  Map driver for Flash and RAM in the SnapGear devices.
-
-config MTD_M520x
-	tristate "Freescale M520xEVB Flash filesystem support"
-	help
-	  Map for M5208EVB & M5207EVB Flash Partition.
-
-choice
-	prompt "Flash Size"
-	depends on MTD_SNAPGEARuC
-	default AUTO
-
-config FLASHAUTO
-	bool "AUTO"
-config FLASH128KB
-	bool "128KB"
-config FLASH1MB
-	bool "1MB"
-config FLASH2MB
-	bool "2MB"
-config FLASH4MB
-	bool "4MB"
-config FLASH6MB
-	bool "6MB"
-config FLASH8MB
-	bool "8MB"
-config FLASH16MB
-	bool "16MB"
-
-endchoice
-
-config MTD_COBRA5272
-        tristate "Flash device mapped on COBRA5272"
-        depends on MTD && COBRA5272
-        help
-          This enables access to the flash chips (2MB) on the COBRA5272.
-          If you have such board, say 'Y'.
-
-config MTD_COBRA5282
-        tristate "Flash device mapped on COBRA5282"
-        depends on MTD && COBRA5282
-        help
-          This enables access to the flash chips (4MB) on the COBRA5282.
-          If you have such board, say 'Y'.
-
 
 config MTD_INTEL_VR_NOR
 	tristate "NOR flash on Intel Vermilion Range Expansion Bus CS0"
@@ -461,27 +372,6 @@ config MTD_PLATRAM
 	  system.
 
 	  This selection automatically selects the map_ram driver.
-
-config MTD_AVNET5282
-	tristate "CFI Flash device mapped on AVNET5282"
-	depends on !MMU
-	help
-	  Support for flash chip on Avnet5282 board
-
-config MTD_UCBOOTSTRAP
-        tristate "CFI Flash device mapped on uCbootloader Board"
-        depends on MTD_CFI && UCBOOTSTRAP
-        help
-          This enables access to the Flash ROM chips on devices with the uCbootloader.
-          Say 'Y' if you are building a kernel for such a board.
-
-config MTD_PART_SINGLE
-        tristate "Creates single partition on CFI Flash device"
-        depends on MTD_CFI
-        help
-          This module creates single partition with specific parameters 
-	  on the specified Flash ROM chip.
-          Say 'M' if you need to create special/temporary partition at run time by insmod.
 
 config MTD_VMU
 	tristate "Map driver for Dreamcast VMU"
@@ -510,14 +400,5 @@ config MTD_PISMO
 	  and/or MTD_PLATRAM according to the devices on your module.
 
 	  When built as a module, it will be called pismo.ko
-
-config MTD_LATCH_ADDR
-        tristate "Latch-assisted Flash Chip Support"
-        depends on MTD_COMPLEX_MAPPINGS
-        help
-          Map driver which allows flashes to be partially physically addressed
-          and have the upper address lines set by a board specific code.
-
-          If compiled as a module, it will be called latch-addr-flash.
 
 endmenu

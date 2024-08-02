@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OCB mode implementation
  *
@@ -5,10 +6,6 @@
  *            (c) 2014 Volkswagen Group Research
  * Author:    Rostislav Lisovy <rostislav.lisovy@fel.cvut.cz>
  * Funded by: Volkswagen Group Research
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/ieee80211.h>
@@ -27,6 +24,9 @@ int __cfg80211_join_ocb(struct cfg80211_registered_device *rdev,
 	ASSERT_WDEV_LOCK(wdev);
 
 	if (dev->ieee80211_ptr->iftype != NL80211_IFTYPE_OCB)
+		return -EOPNOTSUPP;
+
+	if (!rdev->ops->join_ocb)
 		return -EOPNOTSUPP;
 
 	if (WARN_ON(!setup->chandef.chan))

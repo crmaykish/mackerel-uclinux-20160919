@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AMD Cryptographic Coprocessor (CCP) AES crypto API support
  *
- * Copyright (C) 2013 Advanced Micro Devices, Inc.
+ * Copyright (C) 2013-2019 Advanced Micro Devices, Inc.
  *
  * Author: Tom Lendacky <thomas.lendacky@amd.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -79,8 +76,7 @@ static int ccp_aes_crypt(struct ablkcipher_request *req, bool encrypt)
 		return -EINVAL;
 
 	if (((ctx->u.aes.mode == CCP_AES_MODE_ECB) ||
-	     (ctx->u.aes.mode == CCP_AES_MODE_CBC) ||
-	     (ctx->u.aes.mode == CCP_AES_MODE_CFB)) &&
+	     (ctx->u.aes.mode == CCP_AES_MODE_CBC)) &&
 	    (req->nbytes & (AES_BLOCK_SIZE - 1)))
 		return -EINVAL;
 
@@ -259,6 +255,7 @@ static struct crypto_alg ccp_aes_rfc3686_defaults = {
 
 struct ccp_aes_def {
 	enum ccp_aes_mode mode;
+	unsigned int version;
 	const char *name;
 	const char *driver_name;
 	unsigned int blocksize;
@@ -269,6 +266,7 @@ struct ccp_aes_def {
 static struct ccp_aes_def aes_algs[] = {
 	{
 		.mode		= CCP_AES_MODE_ECB,
+		.version	= CCP_VERSION(3, 0),
 		.name		= "ecb(aes)",
 		.driver_name	= "ecb-aes-ccp",
 		.blocksize	= AES_BLOCK_SIZE,
@@ -277,6 +275,7 @@ static struct ccp_aes_def aes_algs[] = {
 	},
 	{
 		.mode		= CCP_AES_MODE_CBC,
+		.version	= CCP_VERSION(3, 0),
 		.name		= "cbc(aes)",
 		.driver_name	= "cbc-aes-ccp",
 		.blocksize	= AES_BLOCK_SIZE,
@@ -285,14 +284,16 @@ static struct ccp_aes_def aes_algs[] = {
 	},
 	{
 		.mode		= CCP_AES_MODE_CFB,
+		.version	= CCP_VERSION(3, 0),
 		.name		= "cfb(aes)",
 		.driver_name	= "cfb-aes-ccp",
-		.blocksize	= AES_BLOCK_SIZE,
+		.blocksize	= 1,
 		.ivsize		= AES_BLOCK_SIZE,
 		.alg_defaults	= &ccp_aes_defaults,
 	},
 	{
 		.mode		= CCP_AES_MODE_OFB,
+		.version	= CCP_VERSION(3, 0),
 		.name		= "ofb(aes)",
 		.driver_name	= "ofb-aes-ccp",
 		.blocksize	= 1,
@@ -301,6 +302,7 @@ static struct ccp_aes_def aes_algs[] = {
 	},
 	{
 		.mode		= CCP_AES_MODE_CTR,
+		.version	= CCP_VERSION(3, 0),
 		.name		= "ctr(aes)",
 		.driver_name	= "ctr-aes-ccp",
 		.blocksize	= 1,
@@ -309,6 +311,7 @@ static struct ccp_aes_def aes_algs[] = {
 	},
 	{
 		.mode		= CCP_AES_MODE_CTR,
+		.version	= CCP_VERSION(3, 0),
 		.name		= "rfc3686(ctr(aes))",
 		.driver_name	= "rfc3686-ctr-aes-ccp",
 		.blocksize	= 1,
@@ -357,8 +360,11 @@ static int ccp_register_aes_alg(struct list_head *head,
 int ccp_register_aes_algs(struct list_head *head)
 {
 	int i, ret;
+	unsigned int ccpversion = ccp_version();
 
 	for (i = 0; i < ARRAY_SIZE(aes_algs); i++) {
+		if (aes_algs[i].version > ccpversion)
+			continue;
 		ret = ccp_register_aes_alg(head, &aes_algs[i]);
 		if (ret)
 			return ret;

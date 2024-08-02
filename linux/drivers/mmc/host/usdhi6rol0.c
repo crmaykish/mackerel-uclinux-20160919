@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2013-2014 Renesas Electronics Europe Ltd.
  * Author: Guennadi Liakhovetski <g.liakhovetski@gmx.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -22,6 +19,7 @@
 #include <linux/mmc/sdio.h>
 #include <linux/module.h>
 #include <linux/pagemap.h>
+#include <linux/pinctrl/consumer.h>
 #include <linux/platform_device.h>
 #include <linux/scatterlist.h>
 #include <linux/string.h>
@@ -198,6 +196,11 @@ struct usdhi6_host {
 	struct dma_chan *chan_rx;
 	struct dma_chan *chan_tx;
 	bool dma_active;
+
+	/* Pin control */
+	struct pinctrl *pinctrl;
+	struct pinctrl_state *pins_default;
+	struct pinctrl_state *pins_uhs;
 };
 
 /*			I/O primitives					*/
@@ -1147,12 +1150,45 @@ static void usdhi6_enable_sdio_irq(struct mmc_host *mmc, int enable)
 	}
 }
 
-static struct mmc_host_ops usdhi6_ops = {
+static int usdhi6_set_pinstates(struct usdhi6_host *host, int voltage)
+{
+	if (IS_ERR(host->pins_uhs))
+		return 0;
+
+	switch (voltage) {
+	case MMC_SIGNAL_VOLTAGE_180:
+	case MMC_SIGNAL_VOLTAGE_120:
+		return pinctrl_select_state(host->pinctrl,
+					    host->pins_uhs);
+
+	default:
+		return pinctrl_select_state(host->pinctrl,
+					    host->pins_default);
+	}
+}
+
+static int usdhi6_sig_volt_switch(struct mmc_host *mmc, struct mmc_ios *ios)
+{
+	int ret;
+
+	ret = mmc_regulator_set_vqmmc(mmc, ios);
+	if (ret < 0)
+		return ret;
+
+	ret = usdhi6_set_pinstates(mmc_priv(mmc), ios->signal_voltage);
+	if (ret)
+		dev_warn_once(mmc_dev(mmc),
+			      "Failed to set pinstate err=%d\n", ret);
+	return ret;
+}
+
+static const struct mmc_host_ops usdhi6_ops = {
 	.request	= usdhi6_request,
 	.set_ios	= usdhi6_set_ios,
 	.get_cd		= usdhi6_get_cd,
 	.get_ro		= usdhi6_get_ro,
 	.enable_sdio_irq = usdhi6_enable_sdio_irq,
+	.start_signal_voltage_switch = usdhi6_sig_volt_switch,
 };
 
 /*			State machine handlers				*/
@@ -1303,7 +1339,7 @@ static int usdhi6_stop_cmd(struct usdhi6_host *host)
 			host->wait = USDHI6_WAIT_FOR_STOP;
 			return 0;
 		}
-		/* Unsupported STOP command */
+		/* fall through - Unsupported STOP command. */
 	default:
 		dev_err(mmc_dev(host->mmc),
 			"unsupported stop CMD%d for CMD%d\n",
@@ -1630,11 +1666,11 @@ static irqreturn_t usdhi6_cd(int irq, void *dev_id)
  */
 static void usdhi6_timeout_work(struct work_struct *work)
 {
-	struct delayed_work *d = container_of(work, struct delayed_work, work);
+	struct delayed_work *d = to_delayed_work(work);
 	struct usdhi6_host *host = container_of(d, struct usdhi6_host, timeout_work);
 	struct mmc_request *mrq = host->mrq;
 	struct mmc_data *data = mrq ? mrq->data : NULL;
-	struct scatterlist *sg = host->sg ?: data->sg;
+	struct scatterlist *sg;
 
 	dev_warn(mmc_dev(host->mmc),
 		 "%s timeout wait %u CMD%d: IRQ 0x%08x:0x%08x, last IRQ 0x%08x\n",
@@ -1651,7 +1687,7 @@ static void usdhi6_timeout_work(struct work_struct *work)
 	switch (host->wait) {
 	default:
 		dev_err(mmc_dev(host->mmc), "Invalid state %u\n", host->wait);
-		/* mrq can be NULL in this actually impossible case */
+		/* fall through - mrq can be NULL, but is impossible. */
 	case USDHI6_WAIT_FOR_CMD:
 		usdhi6_error_code(host);
 		if (mrq)
@@ -1666,16 +1702,14 @@ static void usdhi6_timeout_work(struct work_struct *work)
 	case USDHI6_WAIT_FOR_MWRITE:
 	case USDHI6_WAIT_FOR_READ:
 	case USDHI6_WAIT_FOR_WRITE:
+		sg = host->sg ?: data->sg;
 		dev_dbg(mmc_dev(host->mmc),
 			"%c: page #%u @ +0x%zx %ux%u in SG%u. Current SG %u bytes @ %u\n",
 			data->flags & MMC_DATA_READ ? 'R' : 'W', host->page_idx,
 			host->offset, data->blocks, data->blksz, data->sg_len,
 			sg_dma_len(sg), sg->offset);
 		usdhi6_sg_unmap(host, true);
-		/*
-		 * If USDHI6_WAIT_FOR_DATA_END times out, we have already unmapped
-		 * the page
-		 */
+		/* fall through - page unmapped in USDHI6_WAIT_FOR_DATA_END. */
 	case USDHI6_WAIT_FOR_DATA_END:
 		usdhi6_error_code(host);
 		data->error = -ETIMEDOUT;
@@ -1709,15 +1743,17 @@ static int usdhi6_probe(struct platform_device *pdev)
 	irq_cd = platform_get_irq_byname(pdev, "card detect");
 	irq_sd = platform_get_irq_byname(pdev, "data");
 	irq_sdio = platform_get_irq_byname(pdev, "SDIO");
-	if (irq_sd < 0 || irq_sdio < 0)
-		return -ENODEV;
+	if (irq_sd < 0)
+		return irq_sd;
+	if (irq_sdio < 0)
+		return irq_sdio;
 
 	mmc = mmc_alloc_host(sizeof(struct usdhi6_host), dev);
 	if (!mmc)
 		return -ENOMEM;
 
 	ret = mmc_regulator_get_supply(mmc);
-	if (ret == -EPROBE_DEFER)
+	if (ret)
 		goto e_free_mmc;
 
 	ret = mmc_of_parse(mmc);
@@ -1728,6 +1764,25 @@ static int usdhi6_probe(struct platform_device *pdev)
 	host->mmc	= mmc;
 	host->wait	= USDHI6_WAIT_FOR_REQUEST;
 	host->timeout	= msecs_to_jiffies(4000);
+
+	host->pinctrl = devm_pinctrl_get(&pdev->dev);
+	if (IS_ERR(host->pinctrl)) {
+		ret = PTR_ERR(host->pinctrl);
+		goto e_free_mmc;
+	}
+
+	host->pins_uhs = pinctrl_lookup_state(host->pinctrl, "state_uhs");
+	if (!IS_ERR(host->pins_uhs)) {
+		host->pins_default = pinctrl_lookup_state(host->pinctrl,
+							  PINCTRL_STATE_DEFAULT);
+
+		if (IS_ERR(host->pins_default)) {
+			dev_err(dev,
+				"UHS pinctrl requires a default pin state.\n");
+			ret = PTR_ERR(host->pins_default);
+			goto e_free_mmc;
+		}
+	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	host->base = devm_ioremap_resource(dev, res);
@@ -1750,6 +1805,7 @@ static int usdhi6_probe(struct platform_device *pdev)
 
 	version = usdhi6_read(host, USDHI6_VERSION);
 	if ((version & 0xfff) != 0xa0d) {
+		ret = -EPERM;
 		dev_err(dev, "Version not recognized %x\n", version);
 		goto e_clk_off;
 	}
@@ -1784,11 +1840,11 @@ static int usdhi6_probe(struct platform_device *pdev)
 
 	mmc->ops = &usdhi6_ops;
 	mmc->caps |= MMC_CAP_SD_HIGHSPEED | MMC_CAP_MMC_HIGHSPEED |
-		MMC_CAP_UHS_SDR50 | MMC_CAP_UHS_DDR50 | MMC_CAP_SDIO_IRQ;
+		     MMC_CAP_SDIO_IRQ;
 	/* Set .max_segs to some random number. Feel free to adjust. */
 	mmc->max_segs = 32;
 	mmc->max_blk_size = 512;
-	mmc->max_req_size = PAGE_CACHE_SIZE * mmc->max_segs;
+	mmc->max_req_size = PAGE_SIZE * mmc->max_segs;
 	mmc->max_blk_count = mmc->max_req_size / mmc->max_blk_size;
 	/*
 	 * Setting .max_seg_size to 1 page would simplify our page-mapping code,
@@ -1807,10 +1863,12 @@ static int usdhi6_probe(struct platform_device *pdev)
 
 	ret = mmc_add_host(mmc);
 	if (ret < 0)
-		goto e_clk_off;
+		goto e_release_dma;
 
 	return 0;
 
+e_release_dma:
+	usdhi6_dma_release(host);
 e_clk_off:
 	clk_disable_unprepare(host->clk);
 e_free_mmc:

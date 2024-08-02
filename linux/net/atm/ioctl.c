@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* ATM ioctl handling */
 
 /* Written 1995-2000 by Werner Almesberger, EPFL LRC/ICA */
@@ -70,32 +71,19 @@ static int do_vcc_ioctl(struct socket *sock, unsigned int cmd,
 	case SIOCINQ:
 	{
 		struct sk_buff *skb;
+		int amount;
 
 		if (sock->state != SS_CONNECTED) {
 			error = -EINVAL;
 			goto done;
 		}
+		spin_lock_irq(&sk->sk_receive_queue.lock);
 		skb = skb_peek(&sk->sk_receive_queue);
-		error = put_user(skb ? skb->len : 0,
-				 (int __user *)argp) ? -EFAULT : 0;
+		amount = skb ? skb->len : 0;
+		spin_unlock_irq(&sk->sk_receive_queue.lock);
+		error = put_user(amount, (int __user *)argp) ? -EFAULT : 0;
 		goto done;
 	}
-	case SIOCGSTAMP: /* borrowed from IP */
-#ifdef CONFIG_COMPAT
-		if (compat)
-			error = compat_sock_get_timestamp(sk, argp);
-		else
-#endif
-			error = sock_get_timestamp(sk, argp);
-		goto done;
-	case SIOCGSTAMPNS: /* borrowed from IP */
-#ifdef CONFIG_COMPAT
-		if (compat)
-			error = compat_sock_get_timestampns(sk, argp);
-		else
-#endif
-			error = sock_get_timestampns(sk, argp);
-		goto done;
 	case ATM_SETSC:
 		net_warn_ratelimited("ATM_SETSC is obsolete; used by %s:%d\n",
 				     current->comm, task_pid_nr(current));

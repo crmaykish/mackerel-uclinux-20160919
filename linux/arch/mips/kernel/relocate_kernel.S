@@ -1,9 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * relocate_kernel.S for kexec
  * Created by <nschichan@corp.free.fr> on Thu Oct 12 17:49:57 2006
- *
- * This source code is licensed under the GNU General Public License,
- * Version 2.  See the file COPYING for more details.
  */
 
 #include <asm/asm.h>
@@ -12,7 +10,6 @@
 #include <asm/mipsregs.h>
 #include <asm/stackframe.h>
 #include <asm/addrspace.h>
-
 
 LEAF(relocate_new_kernel)
 	PTR_L a0,	arg0
@@ -50,7 +47,6 @@ process_entry:
 	/* done page */
 	and		s3, s2, 0x4
 	beq		s3, zero, 1f
-	nop
 	b		done
 1:
 	/* source page */
@@ -67,9 +63,7 @@ copy_word:
 	PTR_ADDIU	s2, s2, SZREG
 	LONG_ADDIU	s6, s6, -1
 	beq		s6, zero, process_entry
-	nop
 	b		copy_word
-	nop
 	b		process_entry
 
 done:
@@ -89,7 +83,7 @@ done:
 
 #ifdef CONFIG_CPU_CAVIUM_OCTEON
 	/* We need to flush I-cache before jumping to new kernel.
-	 * Unfortunatelly, this code is cpu-specific.
+	 * Unfortunately, this code is cpu-specific.
 	 */
 	.set push
 	.set noreorder
@@ -102,12 +96,12 @@ done:
 #endif
 	/* jump to kexec_start_address */
 	j		s1
-END(relocate_new_kernel)
+	END(relocate_new_kernel)
 
 #ifdef CONFIG_SMP
 /*
  * Other CPUs should wait until code is relocated and
- * then start at entry point.
+ * then start at entry (?) point.
  */
 LEAF(kexec_smp_wait)
 	PTR_L		a0, s_arg0
@@ -116,25 +110,32 @@ LEAF(kexec_smp_wait)
 	PTR_L		a3, s_arg3
 	PTR_L		s1, kexec_start_address
 
-	/*
-	 * Non-relocated address works for args and kexec_start_address (old
+	/* Non-relocated address works for args and kexec_start_address ( old
 	 * kernel is not overwritten). But we need relocated address of
 	 * kexec_flag.
 	 */
+
 	bal		1f
-1:	move		t1, ra
-	PTR_LA		t2, 1b
-	PTR_LA		t0, kexec_flag
-	PTR_SUB		t0, t0, t2
-	PTR_ADD		t0, t1, t0
+1:	move		t1,ra;
+	PTR_LA		t2,1b
+	PTR_LA		t0,kexec_flag
+	PTR_SUB		t0,t0,t2;
+	PTR_ADD		t0,t1,t0;
 
 1:	LONG_L		s0, (t0)
-	bne		s0, zero, 1b
+	bne		s0, zero,1b
 
-	j		s1
-END(kexec_smp_wait)
+#ifdef CONFIG_CPU_CAVIUM_OCTEON
+	.set push
+	.set noreorder
+	synci		0($0)
+	.set pop
+#else
+	sync
 #endif
-
+	j		s1
+	END(kexec_smp_wait)
+#endif
 
 #ifdef __mips64
        /* all PTR's must be aligned to 8 byte in 64-bit mode */
@@ -142,7 +143,7 @@ END(kexec_smp_wait)
 #endif
 
 /* All parameters to new kernel are passed in registers a0-a3.
- * kexec_args[0..3] are uses to prepare register values.
+ * kexec_args[0..3] are used to prepare register values.
  */
 
 kexec_args:

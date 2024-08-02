@@ -7,11 +7,12 @@
  */
 #include <linux/init.h>
 #include <linux/mm.h>
-#include <linux/bootmem.h>
+#include <linux/memblock.h>
 #include <linux/highmem.h>
 #include <asm/fixmap.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
+#include <asm/tlbflush.h>
 
 void pgd_init(unsigned long page)
 {
@@ -29,6 +30,25 @@ void pgd_init(unsigned long page)
 		p[i + 7] = (unsigned long) invalid_pte_table;
 	}
 }
+
+#if defined(CONFIG_TRANSPARENT_HUGEPAGE)
+pmd_t mk_pmd(struct page *page, pgprot_t prot)
+{
+	pmd_t pmd;
+
+	pmd_val(pmd) = (page_to_pfn(page) << _PFN_SHIFT) | pgprot_val(prot);
+
+	return pmd;
+}
+
+
+void set_pmd_at(struct mm_struct *mm, unsigned long addr,
+		pmd_t *pmdp, pmd_t pmd)
+{
+	*pmdp = pmd;
+	flush_tlb_all();
+}
+#endif /* defined(CONFIG_TRANSPARENT_HUGEPAGE) */
 
 void __init pagetable_init(void)
 {
@@ -51,15 +71,15 @@ void __init pagetable_init(void)
 	/*
 	 * Fixed mappings:
 	 */
-	vaddr = __fix_to_virt(__end_of_fixed_addresses - 1) & PMD_MASK;
-	fixrange_init(vaddr, vaddr + FIXADDR_SIZE, pgd_base);
+	vaddr = __fix_to_virt(__end_of_fixed_addresses - 1);
+	fixrange_init(vaddr & PMD_MASK, vaddr + FIXADDR_SIZE, pgd_base);
 
 #ifdef CONFIG_HIGHMEM
 	/*
 	 * Permanent kmaps:
 	 */
 	vaddr = PKMAP_BASE;
-	fixrange_init(vaddr, vaddr + PAGE_SIZE*LAST_PKMAP, pgd_base);
+	fixrange_init(vaddr & PMD_MASK, vaddr + PAGE_SIZE*LAST_PKMAP, pgd_base);
 
 	pgd = swapper_pg_dir + __pgd_offset(vaddr);
 	pud = pud_offset(pgd, vaddr);

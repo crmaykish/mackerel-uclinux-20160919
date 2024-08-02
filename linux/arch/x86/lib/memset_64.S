@@ -1,15 +1,15 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /* Copyright 2002 Andi Kleen, SuSE Labs */
 
 #include <linux/linkage.h>
-#include <asm/cpufeature.h>
+#include <asm/cpufeatures.h>
 #include <asm/alternative-asm.h>
-
-.weak memset
+#include <asm/export.h>
 
 /*
  * ISO C memset - set a memory block to a byte value. This function uses fast
  * string to get better performance than the original function. The code is
- * simpler and shorter than the orignal function as well.
+ * simpler and shorter than the original function as well.
  *
  * rdi   destination
  * rsi   value (char)
@@ -17,7 +17,7 @@
  *
  * rax   original destination
  */
-ENTRY(memset)
+SYM_FUNC_START_WEAK(memset)
 ENTRY(__memset)
 	/*
 	 * Some CPUs support enhanced REP MOVSB/STOSB feature. It is recommended
@@ -43,6 +43,8 @@ ENTRY(__memset)
 	ret
 ENDPROC(memset)
 ENDPROC(__memset)
+EXPORT_SYMBOL(memset)
+EXPORT_SYMBOL(__memset)
 
 /*
  * ISO C memset - set a memory block to a byte value. This function uses

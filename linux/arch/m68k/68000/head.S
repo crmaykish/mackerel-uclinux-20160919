@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * head.S - Common startup code for 68000 core based CPU's
  *
@@ -194,6 +195,31 @@ _copy_initmem:
 	lea	__bss_stop,%a1
 	movel	%a1,_ramstart
 
+/*****************************************************************************
+ * If the kernel is in RAM, move romfs to right above bss and
+ * adjust _ramstart to where romfs ends.
+ *
+ * (Do this only if CONFIG_MTD_UCLINUX is true)
+ *****************************************************************************/
+
+#if defined(CONFIG_ROMFS_FS) && defined(CONFIG_RAMKERNEL) && \
+    defined(CONFIG_MTD_UCLINUX)
+	lea	__bss_start, %a0		/* get start of bss */
+	lea	__bss_stop, %a1			/* set up destination  */
+	movel	%a0, %a2			/* copy of bss start */
+
+	movel	8(%a0), %d0			/* get size of ROMFS */
+	addql	#8, %d0				/* allow for rounding */
+	andl	#0xfffffffc, %d0		/* whole words */
+
+	addl	%d0, %a0			/* copy from end */
+	addl	%d0, %a1			/* copy from end */
+	movel	%a1, _ramstart			/* set start of ram */
+_copy_romfs:
+	movel	-(%a0), -(%a1)			/* copy dword */
+	cmpl	%a0, %a2			/* check if at end */
+	bne	_copy_romfs
+#endif /* CONFIG_ROMFS_FS && CONFIG_RAMKERNEL && CONFIG_MTD_UCLINUX */
 
 /*****************************************************************************
  * Clear bss region

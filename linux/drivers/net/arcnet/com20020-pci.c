@@ -93,6 +93,27 @@ static void led_recon_set(struct led_classdev *led_cdev,
 	outb(!!value, priv->misc + ci->leds[card->index].red);
 }
 
+static ssize_t backplane_mode_show(struct device *dev,
+				   struct device_attribute *attr,
+				   char *buf)
+{
+	struct net_device *net_dev = to_net_dev(dev);
+	struct arcnet_local *lp = netdev_priv(net_dev);
+
+	return sprintf(buf, "%s\n", lp->backplane ? "true" : "false");
+}
+static DEVICE_ATTR_RO(backplane_mode);
+
+static struct attribute *com20020_state_attrs[] = {
+	&dev_attr_backplane_mode.attr,
+	NULL,
+};
+
+static const struct attribute_group com20020_state_group = {
+	.name = NULL,
+	.attrs = com20020_state_attrs,
+};
+
 static void com20020pci_remove(struct pci_dev *pdev);
 
 static int com20020pci_probe(struct pci_dev *pdev,
@@ -106,6 +127,8 @@ static int com20020pci_probe(struct pci_dev *pdev,
 	int i, ioaddr, ret;
 	struct resource *r;
 
+	ret = 0;
+
 	if (pci_enable_device(pdev))
 		return -EIO;
 
@@ -115,8 +138,13 @@ static int com20020pci_probe(struct pci_dev *pdev,
 		return -ENOMEM;
 
 	ci = (struct com20020_pci_card_info *)id->driver_data;
+	if (!ci)
+		return -EINVAL;
+
 	priv->ci = ci;
 	mm = &ci->misc_map;
+
+	pci_set_drvdata(pdev, priv);
 
 	INIT_LIST_HEAD(&priv->list_dev);
 
@@ -135,11 +163,12 @@ static int com20020pci_probe(struct pci_dev *pdev,
 	for (i = 0; i < ci->devcount; i++) {
 		struct com20020_pci_channel_map *cm = &ci->chan_map_tbl[i];
 		struct com20020_dev *card;
+		int dev_id_mask = 0xf;
 
 		dev = alloc_arcdev(device);
 		if (!dev) {
 			ret = -ENOMEM;
-			goto out_port;
+			break;
 		}
 		dev->dev_port = i;
 
@@ -156,7 +185,7 @@ static int com20020pci_probe(struct pci_dev *pdev,
 			pr_err("IO region %xh-%xh already allocated\n",
 			       ioaddr, ioaddr + cm->size - 1);
 			ret = -EBUSY;
-			goto out_port;
+			goto err_free_arcdev;
 		}
 
 		/* Dummy access after Reset
@@ -166,8 +195,10 @@ static int com20020pci_probe(struct pci_dev *pdev,
 		arcnet_outb(0x00, ioaddr, COM20020_REG_W_COMMAND);
 		arcnet_inb(ioaddr, COM20020_REG_R_DIAGSTAT);
 
+		SET_NETDEV_DEV(dev, &pdev->dev);
 		dev->base_addr = ioaddr;
 		dev->dev_addr[0] = node;
+		dev->sysfs_groups[0] = &com20020_state_group;
 		dev->irq = pdev->irq;
 		lp->card_name = "PCI COM20020";
 		lp->card_flags = ci->flags;
@@ -177,74 +208,84 @@ static int com20020pci_probe(struct pci_dev *pdev,
 		lp->timeout = timeout;
 		lp->hw.owner = THIS_MODULE;
 
-		/* Get the dev_id from the PLX rotary coder */
-		if (!strncmp(ci->name, "EAE PLX-PCI MA1", 15))
-			dev->dev_id = 0xc;
-		dev->dev_id ^= inb(priv->misc + ci->rotary) >> 4;
+		lp->backplane = (inb(priv->misc) >> (2 + i)) & 0x1;
 
-		snprintf(dev->name, sizeof(dev->name), "arc%d-%d", dev->dev_id, i);
+		if (!strncmp(ci->name, "EAE PLX-PCI FB2", 15))
+			lp->backplane = 1;
+
+		if (ci->flags & ARC_HAS_ROTARY) {
+			/* Get the dev_id from the PLX rotary coder */
+			if (!strncmp(ci->name, "EAE PLX-PCI MA1", 15))
+				dev_id_mask = 0x3;
+			dev->dev_id = (inb(priv->misc + ci->rotary) >> 4) & dev_id_mask;
+			snprintf(dev->name, sizeof(dev->name), "arc%d-%d", dev->dev_id, i);
+		}
 
 		if (arcnet_inb(ioaddr, COM20020_REG_R_STATUS) == 0xFF) {
 			pr_err("IO address %Xh is empty!\n", ioaddr);
 			ret = -EIO;
-			goto out_port;
+			goto err_free_arcdev;
 		}
 		if (com20020_check(dev)) {
 			ret = -EIO;
-			goto out_port;
+			goto err_free_arcdev;
 		}
-
-		card = devm_kzalloc(&pdev->dev, sizeof(struct com20020_dev),
-				    GFP_KERNEL);
-		if (!card)
-			return -ENOMEM;
-
-		card->index = i;
-		card->pci_priv = priv;
-		card->tx_led.brightness_set = led_tx_set;
-		card->tx_led.default_trigger = devm_kasprintf(&pdev->dev,
-						GFP_KERNEL, "arc%d-%d-tx",
-						dev->dev_id, i);
-		card->tx_led.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
-						"pci:green:tx:%d-%d",
-						dev->dev_id, i);
-
-		card->tx_led.dev = &dev->dev;
-		card->recon_led.brightness_set = led_recon_set;
-		card->recon_led.default_trigger = devm_kasprintf(&pdev->dev,
-						GFP_KERNEL, "arc%d-%d-recon",
-						dev->dev_id, i);
-		card->recon_led.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
-						"pci:red:recon:%d-%d",
-						dev->dev_id, i);
-		card->recon_led.dev = &dev->dev;
-		card->dev = dev;
-
-		ret = devm_led_classdev_register(&pdev->dev, &card->tx_led);
-		if (ret)
-			goto out_port;
-
-		ret = devm_led_classdev_register(&pdev->dev, &card->recon_led);
-		if (ret)
-			goto out_port;
-
-		dev_set_drvdata(&dev->dev, card);
 
 		ret = com20020_found(dev, IRQF_SHARED);
 		if (ret)
-			goto out_port;
+			goto err_free_arcdev;
 
-		devm_arcnet_led_init(dev, dev->dev_id, i);
+		card = devm_kzalloc(&pdev->dev, sizeof(struct com20020_dev),
+				    GFP_KERNEL);
+		if (!card) {
+			ret = -ENOMEM;
+			goto err_free_arcdev;
+		}
 
+		card->index = i;
+		card->pci_priv = priv;
+
+		if (ci->flags & ARC_HAS_LED) {
+			card->tx_led.brightness_set = led_tx_set;
+			card->tx_led.default_trigger = devm_kasprintf(&pdev->dev,
+							GFP_KERNEL, "arc%d-%d-tx",
+							dev->dev_id, i);
+			card->tx_led.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
+							"pci:green:tx:%d-%d",
+							dev->dev_id, i);
+
+			card->tx_led.dev = &dev->dev;
+			card->recon_led.brightness_set = led_recon_set;
+			card->recon_led.default_trigger = devm_kasprintf(&pdev->dev,
+							GFP_KERNEL, "arc%d-%d-recon",
+							dev->dev_id, i);
+			card->recon_led.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
+							"pci:red:recon:%d-%d",
+							dev->dev_id, i);
+			card->recon_led.dev = &dev->dev;
+
+			ret = devm_led_classdev_register(&pdev->dev, &card->tx_led);
+			if (ret)
+				goto err_free_arcdev;
+
+			ret = devm_led_classdev_register(&pdev->dev, &card->recon_led);
+			if (ret)
+				goto err_free_arcdev;
+
+			dev_set_drvdata(&dev->dev, card);
+			devm_arcnet_led_init(dev, dev->dev_id, i);
+		}
+
+		card->dev = dev;
 		list_add(&card->list, &priv->list_dev);
+		continue;
+
+err_free_arcdev:
+		free_arcdev(dev);
+		break;
 	}
-
-	pci_set_drvdata(pdev, priv);
-
-	return 0;
-
-out_port:
-	com20020pci_remove(pdev);
+	if (ret)
+		com20020pci_remove(pdev);
 	return ret;
 }
 
@@ -260,7 +301,7 @@ static void com20020pci_remove(struct pci_dev *pdev)
 
 		unregister_netdev(dev);
 		free_irq(dev->irq, dev);
-		free_netdev(dev);
+		free_arcdev(dev);
 	}
 }
 
@@ -291,7 +332,7 @@ static struct com20020_pci_card_info card_info_5mbit = {
 };
 
 static struct com20020_pci_card_info card_info_sohard = {
-	.name = "PLX-PCI",
+	.name = "SOHARD SH ARC-PCI",
 	.devcount = 1,
 	/* SOHARD needs PCI base addr 4 */
 	.chan_map_tbl = {
@@ -326,7 +367,7 @@ static struct com20020_pci_card_info card_info_eae_arc1 = {
 		},
 	},
 	.rotary = 0x0,
-	.flags = ARC_CAN_10MBIT,
+	.flags = ARC_HAS_ROTARY | ARC_HAS_LED | ARC_CAN_10MBIT,
 };
 
 static struct com20020_pci_card_info card_info_eae_ma1 = {
@@ -358,7 +399,32 @@ static struct com20020_pci_card_info card_info_eae_ma1 = {
 		},
 	},
 	.rotary = 0x0,
-	.flags = ARC_CAN_10MBIT,
+	.flags = ARC_HAS_ROTARY | ARC_HAS_LED | ARC_CAN_10MBIT,
+};
+
+static struct com20020_pci_card_info card_info_eae_fb2 = {
+	.name = "EAE PLX-PCI FB2",
+	.devcount = 1,
+	.chan_map_tbl = {
+		{
+			.bar = 2,
+			.offset = 0x00,
+			.size = 0x08,
+		},
+	},
+	.misc_map = {
+		.bar = 2,
+		.offset = 0x10,
+		.size = 0x04,
+	},
+	.leds = {
+		{
+			.green = 0x0,
+			.red = 0x1,
+		},
+	},
+	.rotary = 0x0,
+	.flags = ARC_HAS_ROTARY | ARC_HAS_LED | ARC_CAN_10MBIT,
 };
 
 static const struct pci_device_id com20020pci_id_table[] = {
@@ -505,6 +571,12 @@ static const struct pci_device_id com20020pci_id_table[] = {
 		0x10B5, 0x3292,
 		0, 0,
 		(kernel_ulong_t)&card_info_eae_ma1
+	},
+	{
+		0x10B5, 0x9050,
+		0x10B5, 0x3294,
+		0, 0,
+		(kernel_ulong_t)&card_info_eae_fb2
 	},
 	{
 		0x14BA, 0x6000,

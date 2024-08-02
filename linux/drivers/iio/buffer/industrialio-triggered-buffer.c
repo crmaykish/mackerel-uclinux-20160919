@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
  /*
  * Copyright (c) 2012 Analog Devices, Inc.
  *  Author: Lars-Peter Clausen <lars@metafoo.de>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -97,6 +94,48 @@ void iio_triggered_buffer_cleanup(struct iio_dev *indio_dev)
 	iio_kfifo_free(indio_dev->buffer);
 }
 EXPORT_SYMBOL(iio_triggered_buffer_cleanup);
+
+static void devm_iio_triggered_buffer_clean(struct device *dev, void *res)
+{
+	iio_triggered_buffer_cleanup(*(struct iio_dev **)res);
+}
+
+int devm_iio_triggered_buffer_setup(struct device *dev,
+				    struct iio_dev *indio_dev,
+				    irqreturn_t (*h)(int irq, void *p),
+				    irqreturn_t (*thread)(int irq, void *p),
+				    const struct iio_buffer_setup_ops *ops)
+{
+	struct iio_dev **ptr;
+	int ret;
+
+	ptr = devres_alloc(devm_iio_triggered_buffer_clean, sizeof(*ptr),
+			   GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+
+	*ptr = indio_dev;
+
+	ret = iio_triggered_buffer_setup(indio_dev, h, thread, ops);
+	if (!ret)
+		devres_add(dev, ptr);
+	else
+		devres_free(ptr);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(devm_iio_triggered_buffer_setup);
+
+void devm_iio_triggered_buffer_cleanup(struct device *dev,
+				       struct iio_dev *indio_dev)
+{
+	int rc;
+
+	rc = devres_release(dev, devm_iio_triggered_buffer_clean,
+			    devm_iio_device_match, indio_dev);
+	WARN_ON(rc);
+}
+EXPORT_SYMBOL_GPL(devm_iio_triggered_buffer_cleanup);
 
 MODULE_AUTHOR("Lars-Peter Clausen <lars@metafoo.de>");
 MODULE_DESCRIPTION("IIO helper functions for setting up triggered buffers");

@@ -45,8 +45,6 @@
   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <linux/pci.h>
-#include <linux/mutex.h>
 #include <linux/delay.h>
 #include "adf_accel_devices.h"
 #include "adf_common_drv.h"
@@ -58,12 +56,6 @@
 #define ADF_DH895XCC_ERRMSK5	(ADF_DH895XCC_EP_OFFSET + 0xDC)
 #define ADF_DH895XCC_ERRMSK5_VF2PF_U_MASK(vf_mask) (vf_mask >> 16)
 
-/**
- * adf_enable_pf2vf_interrupts() - Enable PF to VF interrupts
- * @accel_dev:  Pointer to acceleration device.
- *
- * Function enables PF to VF interrupts
- */
 void adf_enable_pf2vf_interrupts(struct adf_accel_dev *accel_dev)
 {
 	struct adf_accel_pci *pci_info = &accel_dev->accel_pci_dev;
@@ -73,14 +65,7 @@ void adf_enable_pf2vf_interrupts(struct adf_accel_dev *accel_dev)
 
 	ADF_CSR_WR(pmisc_bar_addr, hw_data->get_vintmsk_offset(0), 0x0);
 }
-EXPORT_SYMBOL_GPL(adf_enable_pf2vf_interrupts);
 
-/**
- * adf_disable_pf2vf_interrupts() - Disable PF to VF interrupts
- * @accel_dev:  Pointer to acceleration device.
- *
- * Function disables PF to VF interrupts
- */
 void adf_disable_pf2vf_interrupts(struct adf_accel_dev *accel_dev)
 {
 	struct adf_accel_pci *pci_info = &accel_dev->accel_pci_dev;
@@ -90,7 +75,6 @@ void adf_disable_pf2vf_interrupts(struct adf_accel_dev *accel_dev)
 
 	ADF_CSR_WR(pmisc_bar_addr, hw_data->get_vintmsk_offset(0), 0x2);
 }
-EXPORT_SYMBOL_GPL(adf_disable_pf2vf_interrupts);
 
 void adf_enable_vf2pf_interrupts(struct adf_accel_dev *accel_dev,
 				 u32 vf_mask)
@@ -116,12 +100,6 @@ void adf_enable_vf2pf_interrupts(struct adf_accel_dev *accel_dev,
 	}
 }
 
-/**
- * adf_disable_pf2vf_interrupts() - Disable VF to PF interrupts
- * @accel_dev:  Pointer to acceleration device.
- *
- * Function disables VF to PF interrupts
- */
 void adf_disable_vf2pf_interrupts(struct adf_accel_dev *accel_dev, u32 vf_mask)
 {
 	struct adf_hw_device_data *hw_data = accel_dev->hw_device;
@@ -144,7 +122,6 @@ void adf_disable_vf2pf_interrupts(struct adf_accel_dev *accel_dev, u32 vf_mask)
 		ADF_CSR_WR(pmisc_addr, ADF_DH895XCC_ERRMSK5, reg);
 	}
 }
-EXPORT_SYMBOL_GPL(adf_disable_vf2pf_interrupts);
 
 static int __adf_iov_putmsg(struct adf_accel_dev *accel_dev, u32 msg, u8 vf_nr)
 {
@@ -218,6 +195,13 @@ static int __adf_iov_putmsg(struct adf_accel_dev *accel_dev, u32 msg, u8 vf_nr)
 		val = ADF_CSR_RD(pmisc_bar_addr, pf2vf_offset);
 	} while ((val & int_bit) && (count++ < ADF_IOV_MSG_ACK_MAX_RETRY));
 
+	if (val != msg) {
+		dev_dbg(&GET_DEV(accel_dev),
+			"Collision - PFVF CSR overwritten by remote function\n");
+		ret = -EIO;
+		goto out;
+	}
+
 	if (val & int_bit) {
 		dev_dbg(&GET_DEV(accel_dev), "ACK not received from remote\n");
 		val &= ~int_bit;
@@ -254,7 +238,6 @@ int adf_iov_putmsg(struct adf_accel_dev *accel_dev, u32 msg, u8 vf_nr)
 
 	return ret;
 }
-EXPORT_SYMBOL_GPL(adf_iov_putmsg);
 
 void adf_vf2pf_req_hndl(struct adf_accel_vf_info *vf_info)
 {
@@ -267,6 +250,11 @@ void adf_vf2pf_req_hndl(struct adf_accel_vf_info *vf_info)
 
 	/* Read message from the VF */
 	msg = ADF_CSR_RD(pmisc_addr, hw_data->get_pf2vf_offset(vf_nr));
+	if (!(msg & ADF_VF2PF_INT)) {
+		dev_info(&GET_DEV(accel_dev),
+			 "Spurious VF2PF interrupt, msg %X. Ignored\n", msg);
+		goto out;
+	}
 
 	/* To ACK, clear the VF2PFINT bit */
 	msg &= ~ADF_VF2PF_INT;
@@ -350,6 +338,7 @@ void adf_vf2pf_req_hndl(struct adf_accel_vf_info *vf_info)
 	if (resp && adf_iov_putmsg(accel_dev, resp, vf_nr))
 		dev_err(&GET_DEV(accel_dev), "Failed to send response to VF\n");
 
+out:
 	/* re-enable interrupt on PF from this VF */
 	adf_enable_vf2pf_interrupts(accel_dev, (1 << vf_nr));
 	return;
@@ -383,6 +372,8 @@ static int adf_vf2pf_request_version(struct adf_accel_dev *accel_dev)
 	msg |= ADF_VF2PF_MSGTYPE_COMPAT_VER_REQ << ADF_VF2PF_MSGTYPE_SHIFT;
 	msg |= ADF_PFVF_COMPATIBILITY_VERSION << ADF_VF2PF_COMPAT_VER_REQ_SHIFT;
 	BUILD_BUG_ON(ADF_PFVF_COMPATIBILITY_VERSION > 255);
+
+	reinit_completion(&accel_dev->vf.iov_msg_completion);
 
 	/* Send request from VF to PF */
 	ret = adf_iov_putmsg(accel_dev, msg, 0);

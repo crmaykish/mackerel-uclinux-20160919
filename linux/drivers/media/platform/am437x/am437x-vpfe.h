@@ -65,12 +65,6 @@ struct vpfe_hw_if_param {
 #define VPFE_MAX_SUBDEV		1
 #define VPFE_MAX_INPUTS		1
 
-struct vpfe_pixel_format {
-	struct v4l2_fmtdesc fmtdesc;
-	/* bytes per pixel */
-	int bpp;
-};
-
 struct vpfe_std_info {
 	int active_pixels;
 	int active_lines;
@@ -264,8 +258,6 @@ struct vpfe_device {
 	struct v4l2_rect crop;
 	/* Buffer queue used in video-buf */
 	struct vb2_queue buffer_queue;
-	/* Allocator-specific contexts for each plane */
-	struct vb2_alloc_ctx *alloc_ctx;
 	/* Queue of filled frames */
 	struct list_head dma_queue;
 	/* IRQ lock for DMA queue */

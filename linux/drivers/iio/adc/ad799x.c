@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * iio/adc/ad799x.c
  * Copyright (C) 2010-2011 Michael Hennerich, Analog Devices Inc.
@@ -11,15 +12,10 @@
  * based on linux/drivers/acron/char/pcf8583.c
  * Copyright (C) 2000 Russell King
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
  * ad799x.c
  *
  * Support for ad7991, ad7995, ad7999, ad7992, ad7993, ad7994, ad7997,
  * ad7998 and similar chips.
- *
  */
 
 #include <linux/interrupt.h>
@@ -212,7 +208,7 @@ static irqreturn_t ad799x_trigger_handler(int irq, void *p)
 		goto out;
 
 	iio_push_to_buffers_with_timestamp(indio_dev, st->rx_buf,
-			iio_get_time_ns());
+			iio_get_time_ns(indio_dev));
 out:
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -282,12 +278,11 @@ static int ad799x_read_raw(struct iio_dev *indio_dev,
 
 	switch (m) {
 	case IIO_CHAN_INFO_RAW:
-		mutex_lock(&indio_dev->mlock);
-		if (iio_buffer_enabled(indio_dev))
-			ret = -EBUSY;
-		else
-			ret = ad799x_scan_direct(st, chan->scan_index);
-		mutex_unlock(&indio_dev->mlock);
+		ret = iio_device_claim_direct_mode(indio_dev);
+		if (ret)
+			return ret;
+		ret = ad799x_scan_direct(st, chan->scan_index);
+		iio_device_release_direct_mode(indio_dev);
 
 		if (ret < 0)
 			return ret;
@@ -395,11 +390,9 @@ static int ad799x_write_event_config(struct iio_dev *indio_dev,
 	struct ad799x_state *st = iio_priv(indio_dev);
 	int ret;
 
-	mutex_lock(&indio_dev->mlock);
-	if (iio_buffer_enabled(indio_dev)) {
-		ret = -EBUSY;
-		goto done;
-	}
+	ret = iio_device_claim_direct_mode(indio_dev);
+	if (ret)
+		return ret;
 
 	if (state)
 		st->config |= BIT(chan->scan_index) << AD799X_CHANNEL_SHIFT;
@@ -412,10 +405,7 @@ static int ad799x_write_event_config(struct iio_dev *indio_dev,
 		st->config &= ~AD7998_ALERT_EN;
 
 	ret = ad799x_write_config(st, st->config);
-
-done:
-	mutex_unlock(&indio_dev->mlock);
-
+	iio_device_release_direct_mode(indio_dev);
 	return ret;
 }
 
@@ -477,7 +467,7 @@ static int ad799x_read_event_value(struct iio_dev *indio_dev,
 	if (ret < 0)
 		return ret;
 	*val = (ret >> chan->scan_type.shift) &
-		GENMASK(chan->scan_type.realbits - 1 , 0);
+		GENMASK(chan->scan_type.realbits - 1, 0);
 
 	return IIO_VAL_INT;
 }
@@ -508,7 +498,7 @@ static irqreturn_t ad799x_event_handler(int irq, void *private)
 							    (i >> 1),
 							    IIO_EV_TYPE_THRESH,
 							    IIO_EV_DIR_FALLING),
-				       iio_get_time_ns());
+				       iio_get_time_ns(indio_dev));
 	}
 
 done:
@@ -526,18 +516,17 @@ static struct attribute *ad799x_event_attributes[] = {
 	NULL,
 };
 
-static struct attribute_group ad799x_event_attrs_group = {
+static const struct attribute_group ad799x_event_attrs_group = {
 	.attrs = ad799x_event_attributes,
 };
 
 static const struct iio_info ad7991_info = {
 	.read_raw = &ad799x_read_raw,
-	.driver_module = THIS_MODULE,
+	.update_scan_mode = ad799x_update_scan_mode,
 };
 
 static const struct iio_info ad7993_4_7_8_noirq_info = {
 	.read_raw = &ad799x_read_raw,
-	.driver_module = THIS_MODULE,
 	.update_scan_mode = ad799x_update_scan_mode,
 };
 
@@ -548,7 +537,6 @@ static const struct iio_info ad7993_4_7_8_irq_info = {
 	.write_event_config = &ad799x_write_event_config,
 	.read_event_value = &ad799x_read_event_value,
 	.write_event_value = &ad799x_write_event_value,
-	.driver_module = THIS_MODULE,
 	.update_scan_mode = ad799x_update_scan_mode,
 };
 
@@ -812,6 +800,7 @@ static int ad799x_probe(struct i2c_client *client,
 	st->client = client;
 
 	indio_dev->dev.parent = &client->dev;
+	indio_dev->dev.of_node = client->dev.of_node;
 	indio_dev->name = id->name;
 	indio_dev->info = st->chip_config->info;
 
@@ -821,10 +810,10 @@ static int ad799x_probe(struct i2c_client *client,
 
 	ret = ad799x_write_config(st, st->chip_config->default_config);
 	if (ret < 0)
-		goto error_disable_reg;
+		goto error_disable_vref;
 	ret = ad799x_read_config(st);
 	if (ret < 0)
-		goto error_disable_reg;
+		goto error_disable_vref;
 	st->config = ret;
 
 	ret = iio_triggered_buffer_setup(indio_dev, NULL,
@@ -899,6 +888,6 @@ static struct i2c_driver ad799x_driver = {
 };
 module_i2c_driver(ad799x_driver);
 
-MODULE_AUTHOR("Michael Hennerich <hennerich@blackfin.uclinux.org>");
+MODULE_AUTHOR("Michael Hennerich <michael.hennerich@analog.com>");
 MODULE_DESCRIPTION("Analog Devices AD799x ADC");
 MODULE_LICENSE("GPL v2");

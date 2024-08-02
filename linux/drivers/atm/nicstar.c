@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * nicstar.c
  *
@@ -50,7 +51,7 @@
 #include <linux/slab.h>
 #include <linux/idr.h>
 #include <asm/io.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/atomic.h>
 #include <linux/etherdevice.h>
 #include "nicstar.h"
@@ -145,7 +146,7 @@ static int ns_ioctl(struct atm_dev *dev, unsigned int cmd, void __user * arg);
 #ifdef EXTRA_DEBUG
 static void which_list(ns_dev * card, struct sk_buff *skb);
 #endif
-static void ns_poll(unsigned long arg);
+static void ns_poll(struct timer_list *unused);
 static void ns_phy_put(struct atm_dev *dev, unsigned char value,
 		       unsigned long addr);
 static unsigned char ns_phy_get(struct atm_dev *dev, unsigned long addr);
@@ -154,7 +155,7 @@ static unsigned char ns_phy_get(struct atm_dev *dev, unsigned long addr);
 
 static struct ns_dev *cards[NS_MAX_CARDS];
 static unsigned num_cards;
-static struct atmdev_ops atm_ops = {
+static const struct atmdev_ops atm_ops = {
 	.open = ns_open,
 	.close = ns_close,
 	.ioctl = ns_ioctl,
@@ -253,7 +254,7 @@ static void nicstar_remove_one(struct pci_dev *pcidev)
 	kfree(card);
 }
 
-static struct pci_device_id nicstar_pci_tbl[] = {
+static const struct pci_device_id nicstar_pci_tbl[] = {
 	{ PCI_VDEVICE(IDT, PCI_DEVICE_ID_IDT_IDT77201), 0 },
 	{0,}			/* terminate list */
 };
@@ -284,10 +285,8 @@ static int __init nicstar_init(void)
 	XPRINTK("nicstar: nicstar_init() returned.\n");
 
 	if (!error) {
-		init_timer(&ns_timer);
+		timer_setup(&ns_timer, ns_poll, 0);
 		ns_timer.expires = jiffies + NS_POLL_PERIOD;
-		ns_timer.data = 0UL;
-		ns_timer.function = ns_poll;
 		add_timer(&ns_timer);
 	}
 
@@ -298,7 +297,7 @@ static void __exit nicstar_cleanup(void)
 {
 	XPRINTK("nicstar: nicstar_cleanup() called.\n");
 
-	del_timer(&ns_timer);
+	del_timer_sync(&ns_timer);
 
 	pci_unregister_driver(&nicstar_driver);
 
@@ -370,7 +369,8 @@ static int ns_init_card(int i, struct pci_dev *pcidev)
 		return error;
         }
 
-	if ((card = kmalloc(sizeof(ns_dev), GFP_KERNEL)) == NULL) {
+	card = kmalloc(sizeof(*card), GFP_KERNEL);
+	if (!card) {
 		printk
 		    ("nicstar%d: can't allocate memory for device structure.\n",
 		     i);
@@ -525,6 +525,15 @@ static int ns_init_card(int i, struct pci_dev *pcidev)
 	/* Set the VPI/VCI MSb mask to zero so we can receive OAM cells */
 	writel(0x00000000, card->membase + VPM);
 
+	card->intcnt = 0;
+	if (request_irq
+	    (pcidev->irq, &ns_irq_handler, IRQF_SHARED, "nicstar", card) != 0) {
+		pr_err("nicstar%d: can't allocate IRQ %d.\n", i, pcidev->irq);
+		error = 9;
+		ns_init_card_error(card, error);
+		return error;
+	}
+
 	/* Initialize TSQ */
 	card->tsq.org = dma_alloc_coherent(&card->pcidev->dev,
 					   NS_TSQSIZE + NS_TSQ_ALIGNMENT,
@@ -611,7 +620,7 @@ static int ns_init_card(int i, struct pci_dev *pcidev)
 	for (j = 0; j < card->rct_size; j++)
 		ns_write_sram(card, j * 4, u32d, 4);
 
-	memset(card->vcmap, 0, NS_MAX_RCTSIZE * sizeof(vc_map));
+	memset(card->vcmap, 0, sizeof(card->vcmap));
 
 	for (j = 0; j < NS_FRSCD_NUM; j++)
 		card->scd2vc[j] = NULL;
@@ -751,15 +760,6 @@ static int ns_init_card(int i, struct pci_dev *pcidev)
 
 	card->efbie = 1;
 
-	card->intcnt = 0;
-	if (request_irq
-	    (pcidev->irq, &ns_irq_handler, IRQF_SHARED, "nicstar", card) != 0) {
-		printk("nicstar%d: can't allocate IRQ %d.\n", i, pcidev->irq);
-		error = 9;
-		ns_init_card_error(card, error);
-		return error;
-	}
-
 	/* Register device */
 	card->atmdev = atm_dev_register("nicstar", &card->pcidev->dev, &atm_ops,
 					-1, NULL);
@@ -837,10 +837,12 @@ static void ns_init_card_error(ns_dev *card, int error)
 			dev_kfree_skb_any(hb);
 	}
 	if (error >= 12) {
-		kfree(card->rsq.org);
+		dma_free_coherent(&card->pcidev->dev, NS_RSQSIZE + NS_RSQ_ALIGNMENT,
+				card->rsq.org, card->rsq.dma);
 	}
 	if (error >= 11) {
-		kfree(card->tsq.org);
+		dma_free_coherent(&card->pcidev->dev, NS_TSQSIZE + NS_TSQ_ALIGNMENT,
+				card->tsq.org, card->tsq.dma);
 	}
 	if (error >= 10) {
 		free_irq(card->pcidev->irq, card);
@@ -862,7 +864,7 @@ static scq_info *get_scq(ns_dev *card, int size, u32 scd)
 	if (size != VBR_SCQSIZE && size != CBR_SCQSIZE)
 		return NULL;
 
-	scq = kmalloc(sizeof(scq_info), GFP_KERNEL);
+	scq = kmalloc(sizeof(*scq), GFP_KERNEL);
 	if (!scq)
 		return NULL;
         scq->org = dma_alloc_coherent(&card->pcidev->dev,
@@ -871,10 +873,12 @@ static scq_info *get_scq(ns_dev *card, int size, u32 scd)
 		kfree(scq);
 		return NULL;
 	}
-	scq->skb = kmalloc(sizeof(struct sk_buff *) *
-			   (size / NS_SCQE_SIZE), GFP_KERNEL);
+	scq->skb = kmalloc_array(size / NS_SCQE_SIZE,
+				 sizeof(*scq->skb),
+				 GFP_KERNEL);
 	if (!scq->skb) {
-		kfree(scq->org);
+		dma_free_coherent(&card->pcidev->dev,
+				  2 * size, scq->org, scq->dma);
 		kfree(scq);
 		return NULL;
 	}
@@ -1704,6 +1708,8 @@ static int ns_send(struct atm_vcc *vcc, struct sk_buff *skb)
 
 	if (push_scqe(card, vc, scq, &scqe, skb) != 0) {
 		atomic_inc(&vcc->stats->tx_err);
+		dma_unmap_single(&card->pcidev->dev, NS_PRV_DMA(skb), skb->len,
+				 DMA_TO_DEVICE);
 		dev_kfree_skb_any(skb);
 		return -EIO;
 	}
@@ -1977,13 +1983,12 @@ static void dequeue_rx(ns_dev * card, ns_rsqe * rsqe)
 	card->lbfqc = ns_stat_lfbqc_get(stat);
 
 	id = le32_to_cpu(rsqe->buffer_handle);
-	skb = idr_find(&card->idr, id);
+	skb = idr_remove(&card->idr, id);
 	if (!skb) {
 		RXPRINTK(KERN_ERR
-			 "nicstar%d: idr_find() failed!\n", card->index);
+			 "nicstar%d: skb not found!\n", card->index);
 		return;
 	}
-	idr_remove(&card->idr, id);
 	dma_sync_single_for_cpu(&card->pcidev->dev,
 				NS_PRV_DMA(skb),
 				(NS_PRV_BUFTYPE(skb) == BUF_SM
@@ -2020,7 +2025,8 @@ static void dequeue_rx(ns_dev * card, ns_rsqe * rsqe)
 
 		cell = skb->data;
 		for (i = ns_rsqe_cellcount(rsqe); i; i--) {
-			if ((sb = dev_alloc_skb(NS_SMSKBSIZE)) == NULL) {
+			sb = dev_alloc_skb(NS_SMSKBSIZE);
+			if (!sb) {
 				printk
 				    ("nicstar%d: Can't allocate buffers for aal0.\n",
 				     card->index);
@@ -2678,7 +2684,7 @@ static void which_list(ns_dev * card, struct sk_buff *skb)
 }
 #endif /* EXTRA_DEBUG */
 
-static void ns_poll(unsigned long arg)
+static void ns_poll(struct timer_list *unused)
 {
 	int i;
 	ns_dev *card;
@@ -2688,11 +2694,10 @@ static void ns_poll(unsigned long arg)
 	PRINTK("nicstar: Entering ns_poll().\n");
 	for (i = 0; i < num_cards; i++) {
 		card = cards[i];
-		if (spin_is_locked(&card->int_lock)) {
+		if (!spin_trylock_irqsave(&card->int_lock, flags)) {
 			/* Probably it isn't worth spinning */
 			continue;
 		}
-		spin_lock_irqsave(&card->int_lock, flags);
 
 		stat_w = 0;
 		stat_r = readl(card->membase + STAT);

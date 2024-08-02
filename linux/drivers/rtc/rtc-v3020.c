@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* drivers/rtc/rtc-v3020.c
  *
  * Copyright (C) 2006 8D Technologies inc.
  * Copyright (C) 2004 Compulab Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * Driver for the V3020 RTC
  *
@@ -17,7 +14,6 @@
  *
  *  ??-???-2004: Someone at Compulab
  *			- Initial driver creation.
- *
  */
 #include <linux/platform_device.h>
 #include <linux/module.h>
@@ -25,7 +21,7 @@
 #include <linux/rtc.h>
 #include <linux/types.h>
 #include <linux/bcd.h>
-#include <linux/rtc-v3020.h>
+#include <linux/platform_data/rtc-v3020.h>
 #include <linux/delay.h>
 #include <linux/gpio.h>
 #include <linux/slab.h>
@@ -57,7 +53,7 @@ struct v3020 {
 	/* GPIO access */
 	struct gpio *gpio;
 
-	struct v3020_chip_ops *ops;
+	const struct v3020_chip_ops *ops;
 
 	struct rtc_device *rtc;
 };
@@ -95,7 +91,7 @@ static unsigned char v3020_mmio_read_bit(struct v3020 *chip)
 	return !!(readl(chip->ioaddress) & (1 << chip->leftshift));
 }
 
-static struct v3020_chip_ops v3020_mmio_ops = {
+static const struct v3020_chip_ops v3020_mmio_ops = {
 	.map_io		= v3020_mmio_map,
 	.unmap_io	= v3020_mmio_unmap,
 	.read_bit	= v3020_mmio_read_bit,
@@ -158,7 +154,7 @@ static unsigned char v3020_gpio_read_bit(struct v3020 *chip)
 	return bit;
 }
 
-static struct v3020_chip_ops v3020_gpio_ops = {
+static const struct v3020_chip_ops v3020_gpio_ops = {
 	.map_io		= v3020_gpio_map,
 	.unmap_io	= v3020_gpio_unmap,
 	.read_bit	= v3020_gpio_read_bit,

@@ -1,14 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * purgatory:  stack
  *
  * Copyright (C) 2014 Red Hat Inc.
- *
- * This source code is licensed under the GNU General Public License,
- * Version 2.  See the file COPYING for more details.
  */
 
 	/* A stack for the loaded kernel.
-	 * Seperate and in the data section so it can be prepopulated.
+	 * Separate and in the data section so it can be prepopulated.
 	 */
 	.data
 	.balign 4096

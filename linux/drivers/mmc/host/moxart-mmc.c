@@ -111,8 +111,8 @@
 #define CLK_DIV_MASK		0x7f
 
 /* REG_BUS_WIDTH */
-#define BUS_WIDTH_8		BIT(2)
-#define BUS_WIDTH_4		BIT(1)
+#define BUS_WIDTH_4_SUPPORT	BIT(3)
+#define BUS_WIDTH_4		BIT(2)
 #define BUS_WIDTH_1		BIT(0)
 
 #define MMC_VDD_360		23
@@ -256,8 +256,8 @@ static void moxart_dma_complete(void *param)
 
 static void moxart_transfer_dma(struct mmc_data *data, struct moxart_host *host)
 {
-	u32 len, dir_data, dir_slave;
-	unsigned long dma_time;
+	u32 len, dir_slave;
+	long dma_time;
 	struct dma_async_tx_descriptor *desc = NULL;
 	struct dma_chan *dma_chan;
 
@@ -266,16 +266,14 @@ static void moxart_transfer_dma(struct mmc_data *data, struct moxart_host *host)
 
 	if (data->flags & MMC_DATA_WRITE) {
 		dma_chan = host->dma_chan_tx;
-		dir_data = DMA_TO_DEVICE;
 		dir_slave = DMA_MEM_TO_DEV;
 	} else {
 		dma_chan = host->dma_chan_rx;
-		dir_data = DMA_FROM_DEVICE;
 		dir_slave = DMA_DEV_TO_MEM;
 	}
 
 	len = dma_map_sg(dma_chan->device->dev, data->sg,
-			 data->sg_len, dir_data);
+			 data->sg_len, mmc_get_dma_dir(data));
 
 	if (len > 0) {
 		desc = dmaengine_prep_slave_sg(dma_chan, data->sg,
@@ -301,7 +299,7 @@ static void moxart_transfer_dma(struct mmc_data *data, struct moxart_host *host)
 
 	dma_unmap_sg(dma_chan->device->dev,
 		     data->sg, data->sg_len,
-		     dir_data);
+		     mmc_get_dma_dir(data));
 }
 
 
@@ -341,13 +339,7 @@ static void moxart_transfer_pio(struct moxart_host *host)
 				return;
 			}
 			for (len = 0; len < remain && len < host->fifo_width;) {
-				/* SCR data must be read in big endian. */
-				if (data->mrq->cmd->opcode == SD_APP_SEND_SCR)
-					*sgp = ioread32be(host->base +
-							  REG_DATA_WINDOW);
-				else
-					*sgp = ioread32(host->base +
-							REG_DATA_WINDOW);
+				*sgp = ioread32(host->base + REG_DATA_WINDOW);
 				sgp++;
 				len += 4;
 			}
@@ -397,7 +389,8 @@ static void moxart_prepare_data(struct moxart_host *host)
 static void moxart_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
 	struct moxart_host *host = mmc_priv(mmc);
-	unsigned long pio_time, flags;
+	long pio_time;
+	unsigned long flags;
 	u32 status;
 
 	spin_lock_irqsave(&host->lock, flags);
@@ -528,9 +521,6 @@ static void moxart_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	case MMC_BUS_WIDTH_4:
 		writel(BUS_WIDTH_4, host->base + REG_BUS_WIDTH);
 		break;
-	case MMC_BUS_WIDTH_8:
-		writel(BUS_WIDTH_8, host->base + REG_BUS_WIDTH);
-		break;
 	default:
 		writel(BUS_WIDTH_1, host->base + REG_BUS_WIDTH);
 		break;
@@ -547,7 +537,7 @@ static int moxart_get_ro(struct mmc_host *mmc)
 	return !!(readl(host->base + REG_STATUS) & WRITE_PROT);
 }
 
-static struct mmc_host_ops moxart_ops = {
+static const struct mmc_host_ops moxart_ops = {
 	.request = moxart_request,
 	.set_ios = moxart_set_ios,
 	.get_ro = moxart_get_ro,
@@ -632,6 +622,7 @@ static int moxart_probe(struct platform_device *pdev)
 			 host->dma_chan_tx, host->dma_chan_rx);
 		host->have_dma = true;
 
+		memset(&cfg, 0, sizeof(cfg));
 		cfg.src_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
 		cfg.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
 
@@ -646,16 +637,8 @@ static int moxart_probe(struct platform_device *pdev)
 		dmaengine_slave_config(host->dma_chan_rx, &cfg);
 	}
 
-	switch ((readl(host->base + REG_BUS_WIDTH) >> 3) & 3) {
-	case 1:
+	if (readl(host->base + REG_BUS_WIDTH) & BUS_WIDTH_4_SUPPORT)
 		mmc->caps |= MMC_CAP_4_BIT_DATA;
-		break;
-	case 2:
-		mmc->caps |= MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA;
-		break;
-	default:
-		break;
-	}
 
 	writel(0, host->base + REG_INTERRUPT_MASK);
 
@@ -671,7 +654,9 @@ static int moxart_probe(struct platform_device *pdev)
 		goto out;
 
 	dev_set_drvdata(dev, mmc);
-	mmc_add_host(mmc);
+	ret = mmc_add_host(mmc);
+	if (ret)
+		goto out;
 
 	dev_dbg(dev, "IRQ=%d, FIFO is %d bytes\n", irq, host->fifo_width);
 
@@ -696,12 +681,12 @@ static int moxart_remove(struct platform_device *pdev)
 		if (!IS_ERR(host->dma_chan_rx))
 			dma_release_channel(host->dma_chan_rx);
 		mmc_remove_host(mmc);
-		mmc_free_host(mmc);
 
 		writel(0, host->base + REG_INTERRUPT_MASK);
 		writel(0, host->base + REG_POWER_CONTROL);
 		writel(readl(host->base + REG_CLOCK_CONTROL) | CLK_OFF,
 		       host->base + REG_CLOCK_CONTROL);
+		mmc_free_host(mmc);
 	}
 	return 0;
 }

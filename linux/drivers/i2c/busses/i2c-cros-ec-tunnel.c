@@ -1,18 +1,12 @@
-/*
- *  Copyright (C) 2013 Google, Inc
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- * Expose an I2C passthrough to the ChromeOS EC.
- */
+// SPDX-License-Identifier: GPL-2.0+
+// Expose an I2C passthrough to the ChromeOS EC.
+//
+// Copyright (C) 2013 Google, Inc.
 
 #include <linux/module.h>
 #include <linux/i2c.h>
-#include <linux/mfd/cros_ec.h>
-#include <linux/mfd/cros_ec_commands.h>
+#include <linux/platform_data/cros_ec_commands.h>
+#include <linux/platform_data/cros_ec_proto.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
@@ -154,8 +148,10 @@ static int ec_i2c_parse_response(const u8 *buf, struct i2c_msg i2c_msgs[],
 	resp = (const struct ec_response_i2c_passthru *)buf;
 	if (resp->i2c_status & EC_I2C_STATUS_TIMEOUT)
 		return -ETIMEDOUT;
+	else if (resp->i2c_status & EC_I2C_STATUS_NAK)
+		return -ENXIO;
 	else if (resp->i2c_status & EC_I2C_STATUS_ERROR)
-		return -EREMOTEIO;
+		return -EIO;
 
 	/* Other side could send us back fewer messages, but not more */
 	if (resp->num_msgs > *num)
@@ -215,17 +211,15 @@ static int ec_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg i2c_msgs[],
 	msg->outsize = request_len;
 	msg->insize = response_len;
 
-	result = cros_ec_cmd_xfer(bus->ec, msg);
+	result = cros_ec_cmd_xfer_status(bus->ec, msg);
 	if (result < 0) {
 		dev_err(dev, "Error transferring EC i2c message %d\n", result);
 		goto exit;
 	}
 
 	result = ec_i2c_parse_response(msg->data, i2c_msgs, &num);
-	if (result < 0) {
-		dev_err(dev, "Error parsing EC i2c message %d\n", result);
+	if (result < 0)
 		goto exit;
-	}
 
 	/* Indicate success by saying how many messages were sent */
 	result = num;
@@ -281,10 +275,8 @@ static int ec_i2c_probe(struct platform_device *pdev)
 	bus->adap.retries = I2C_MAX_RETRIES;
 
 	err = i2c_add_adapter(&bus->adap);
-	if (err) {
-		dev_err(dev, "cannot register i2c adapter\n");
+	if (err)
 		return err;
-	}
 	platform_set_drvdata(pdev, bus);
 
 	return err;

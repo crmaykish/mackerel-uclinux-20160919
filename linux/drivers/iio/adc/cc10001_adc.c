@@ -1,10 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014-2015 Imagination Technologies Ltd.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
  */
 
 #include <linux/clk.h>
@@ -186,7 +182,7 @@ done:
 
 	if (!sample_invalid)
 		iio_push_to_buffers_with_timestamp(indio_dev, data,
-						   iio_get_time_ns());
+						   iio_get_time_ns(indio_dev));
 	iio_trigger_notify_done(indio_dev->trig);
 
 	return IRQ_HANDLED;
@@ -262,7 +258,6 @@ static int cc10001_update_scan_mode(struct iio_dev *indio_dev,
 }
 
 static const struct iio_info cc10001_adc_info = {
-	.driver_module = THIS_MODULE,
 	.read_raw = &cc10001_adc_read_raw,
 	.update_scan_mode = &cc10001_update_scan_mode,
 };

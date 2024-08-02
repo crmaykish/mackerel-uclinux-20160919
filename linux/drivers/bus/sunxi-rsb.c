@@ -178,6 +178,7 @@ static struct bus_type sunxi_rsb_bus = {
 	.match		= sunxi_rsb_device_match,
 	.probe		= sunxi_rsb_device_probe,
 	.remove		= sunxi_rsb_device_remove,
+	.uevent		= of_device_uevent_modalias,
 };
 
 static void sunxi_rsb_dev_release(struct device *dev)
@@ -223,6 +224,8 @@ static struct sunxi_rsb_device *sunxi_rsb_device_create(struct sunxi_rsb *rsb,
 
 	dev_dbg(&rdev->dev, "device %s registered\n", dev_name(&rdev->dev));
 
+	return rdev;
+
 err_device_add:
 	put_device(&rdev->dev);
 
@@ -265,6 +268,9 @@ EXPORT_SYMBOL_GPL(sunxi_rsb_driver_register);
 /* common code that starts a transfer */
 static int _sunxi_rsb_run_xfer(struct sunxi_rsb *rsb)
 {
+	u32 int_mask, status;
+	bool timeout;
+
 	if (readl(rsb->regs + RSB_CTRL) & RSB_CTRL_START_TRANS) {
 		dev_dbg(rsb->dev, "RSB transfer still in progress\n");
 		return -EBUSY;
@@ -272,13 +278,23 @@ static int _sunxi_rsb_run_xfer(struct sunxi_rsb *rsb)
 
 	reinit_completion(&rsb->complete);
 
-	writel(RSB_INTS_LOAD_BSY | RSB_INTS_TRANS_ERR | RSB_INTS_TRANS_OVER,
-	       rsb->regs + RSB_INTE);
+	int_mask = RSB_INTS_LOAD_BSY | RSB_INTS_TRANS_ERR | RSB_INTS_TRANS_OVER;
+	writel(int_mask, rsb->regs + RSB_INTE);
 	writel(RSB_CTRL_START_TRANS | RSB_CTRL_GLOBAL_INT_ENB,
 	       rsb->regs + RSB_CTRL);
 
-	if (!wait_for_completion_io_timeout(&rsb->complete,
-					    msecs_to_jiffies(100))) {
+	if (irqs_disabled()) {
+		timeout = readl_poll_timeout_atomic(rsb->regs + RSB_INTS,
+						    status, (status & int_mask),
+						    10, 100000);
+		writel(status, rsb->regs + RSB_INTS);
+	} else {
+		timeout = !wait_for_completion_io_timeout(&rsb->complete,
+							  msecs_to_jiffies(100));
+		status = rsb->status;
+	}
+
+	if (timeout) {
 		dev_dbg(rsb->dev, "RSB timeout\n");
 
 		/* abort the transfer */
@@ -290,18 +306,18 @@ static int _sunxi_rsb_run_xfer(struct sunxi_rsb *rsb)
 		return -ETIMEDOUT;
 	}
 
-	if (rsb->status & RSB_INTS_LOAD_BSY) {
+	if (status & RSB_INTS_LOAD_BSY) {
 		dev_dbg(rsb->dev, "RSB busy\n");
 		return -EBUSY;
 	}
 
-	if (rsb->status & RSB_INTS_TRANS_ERR) {
-		if (rsb->status & RSB_INTS_TRANS_ERR_ACK) {
+	if (status & RSB_INTS_TRANS_ERR) {
+		if (status & RSB_INTS_TRANS_ERR_ACK) {
 			dev_dbg(rsb->dev, "RSB slave nack\n");
 			return -EINVAL;
 		}
 
-		if (rsb->status & RSB_INTS_TRANS_ERR_DATA) {
+		if (status & RSB_INTS_TRANS_ERR_DATA) {
 			dev_dbg(rsb->dev, "RSB transfer data error\n");
 			return -EIO;
 		}
@@ -330,7 +346,7 @@ static int sunxi_rsb_read(struct sunxi_rsb *rsb, u8 rtaddr, u8 addr,
 		cmd = RSB_CMD_RD32;
 		break;
 	default:
-		dev_err(rsb->dev, "Invalid access width: %d\n", len);
+		dev_err(rsb->dev, "Invalid access width: %zd\n", len);
 		return -EINVAL;
 	}
 
@@ -344,7 +360,7 @@ static int sunxi_rsb_read(struct sunxi_rsb *rsb, u8 rtaddr, u8 addr,
 	if (ret)
 		goto unlock;
 
-	*buf = readl(rsb->regs + RSB_DATA);
+	*buf = readl(rsb->regs + RSB_DATA) & GENMASK(len * 8 - 1, 0);
 
 unlock:
 	mutex_unlock(&rsb->lock);
@@ -372,7 +388,7 @@ static int sunxi_rsb_write(struct sunxi_rsb *rsb, u8 rtaddr, u8 addr,
 		cmd = RSB_CMD_WR32;
 		break;
 	default:
-		dev_err(rsb->dev, "Invalid access width: %d\n", len);
+		dev_err(rsb->dev, "Invalid access width: %zd\n", len);
 		return -EINVAL;
 	}
 
@@ -556,20 +572,20 @@ static int of_rsb_register_devices(struct sunxi_rsb *rsb)
 
 	/* Runtime addresses for all slaves should be set first */
 	for_each_available_child_of_node(np, child) {
-		dev_dbg(dev, "setting child %s runtime address\n",
-			child->full_name);
+		dev_dbg(dev, "setting child %pOF runtime address\n",
+			child);
 
 		ret = of_property_read_u32(child, "reg", &hwaddr);
 		if (ret) {
-			dev_err(dev, "%s: invalid 'reg' property: %d\n",
-				child->full_name, ret);
+			dev_err(dev, "%pOF: invalid 'reg' property: %d\n",
+				child, ret);
 			continue;
 		}
 
 		rtaddr = sunxi_rsb_get_rtaddr(hwaddr);
 		if (!rtaddr) {
-			dev_err(dev, "%s: unknown hardware device address\n",
-				child->full_name);
+			dev_err(dev, "%pOF: unknown hardware device address\n",
+				child);
 			continue;
 		}
 
@@ -586,15 +602,15 @@ static int of_rsb_register_devices(struct sunxi_rsb *rsb)
 		/* send command */
 		ret = _sunxi_rsb_run_xfer(rsb);
 		if (ret)
-			dev_warn(dev, "%s: set runtime address failed: %d\n",
-				 child->full_name, ret);
+			dev_warn(dev, "%pOF: set runtime address failed: %d\n",
+				 child, ret);
 	}
 
 	/* Then we start adding devices and probing them */
 	for_each_available_child_of_node(np, child) {
 		struct sunxi_rsb_device *rdev;
 
-		dev_dbg(dev, "adding child %s\n", child->full_name);
+		dev_dbg(dev, "adding child %pOF\n", child);
 
 		ret = of_property_read_u32(child, "reg", &hwaddr);
 		if (ret)
@@ -606,8 +622,8 @@ static int of_rsb_register_devices(struct sunxi_rsb *rsb)
 
 		rdev = sunxi_rsb_device_create(rsb, child, hwaddr, rtaddr);
 		if (IS_ERR(rdev))
-			dev_err(dev, "failed to add child device %s: %ld\n",
-				child->full_name, PTR_ERR(rdev));
+			dev_err(dev, "failed to add child device %pOF: %ld\n",
+				child, PTR_ERR(rdev));
 	}
 
 	return 0;
@@ -650,10 +666,8 @@ static int sunxi_rsb_probe(struct platform_device *pdev)
 		return PTR_ERR(rsb->regs);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(dev, "failed to retrieve irq: %d\n", irq);
+	if (irq < 0)
 		return irq;
-	}
 
 	rsb->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(rsb->clk)) {
@@ -767,7 +781,13 @@ static int __init sunxi_rsb_init(void)
 		return ret;
 	}
 
-	return platform_driver_register(&sunxi_rsb_driver);
+	ret = platform_driver_register(&sunxi_rsb_driver);
+	if (ret) {
+		bus_unregister(&sunxi_rsb_bus);
+		return ret;
+	}
+
+	return 0;
 }
 module_init(sunxi_rsb_init);
 

@@ -1,10 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/slab.h>
 #include <linux/file.h>
 #include <linux/fdtable.h>
+#include <linux/freezer.h>
 #include <linux/mm.h>
 #include <linux/stat.h>
 #include <linux/fcntl.h>
 #include <linux/swap.h>
+#include <linux/ctype.h>
 #include <linux/string.h>
 #include <linux/init.h>
 #include <linux/pagemap.h>
@@ -15,6 +18,9 @@
 #include <linux/personality.h>
 #include <linux/binfmts.h>
 #include <linux/coredump.h>
+#include <linux/sched/coredump.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/task_stack.h>
 #include <linux/utsname.h>
 #include <linux/pid_namespace.h>
 #include <linux/module.h>
@@ -32,8 +38,11 @@
 #include <linux/pipe_fs_i.h>
 #include <linux/oom.h>
 #include <linux/compat.h>
+#include <linux/fs.h>
+#include <linux/path.h>
+#include <linux/timekeeping.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/mmu_context.h>
 #include <asm/tlb.h>
 #include <asm/exec.h>
@@ -117,6 +126,26 @@ int cn_esc_printf(struct core_name *cn, const char *fmt, ...)
 	ret = cn_vprintf(cn, fmt, arg);
 	va_end(arg);
 
+	if (ret == 0) {
+		/*
+		 * Ensure that this coredump name component can't cause the
+		 * resulting corefile path to consist of a ".." or ".".
+		 */
+		if ((cn->used - cur == 1 && cn->corename[cur] == '.') ||
+				(cn->used - cur == 2 && cn->corename[cur] == '.'
+				&& cn->corename[cur+1] == '.'))
+			cn->corename[cur] = '!';
+
+		/*
+		 * Empty names are fishy and could be used to create a "//" in a
+		 * corefile name, causing the coredump to happen one directory
+		 * level too high. Enforce that all components of the core
+		 * pattern are at least one character long.
+		 */
+		if (cn->used == cur)
+			ret = cn_printf(cn, "!");
+	}
+
 	for (; cur < cn->used; ++cur) {
 		if (cn->corename[cur] == '/')
 			cn->corename[cur] = '!';
@@ -134,7 +163,7 @@ static int cn_print_exe_file(struct core_name *cn)
 	if (!exe_file)
 		return cn_esc_printf(cn, "%s (path unknown)", current->comm);
 
-	pathbuf = kmalloc(PATH_MAX, GFP_TEMPORARY);
+	pathbuf = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!pathbuf) {
 		ret = -ENOMEM;
 		goto put_exe_file;
@@ -159,11 +188,13 @@ put_exe_file:
  * name into corename, which must have space for at least
  * CORENAME_MAX_SIZE bytes plus one byte for the zero terminator.
  */
-static int format_corename(struct core_name *cn, struct coredump_params *cprm)
+static int format_corename(struct core_name *cn, struct coredump_params *cprm,
+			   size_t **argv, int *argc)
 {
 	const struct cred *cred = current_cred();
 	const char *pat_ptr = core_pattern;
 	int ispipe = (*pat_ptr == '|');
+	bool was_space = false;
 	int pid_in_pattern = 0;
 	int err = 0;
 
@@ -173,12 +204,38 @@ static int format_corename(struct core_name *cn, struct coredump_params *cprm)
 		return -ENOMEM;
 	cn->corename[0] = '\0';
 
-	if (ispipe)
+	if (ispipe) {
+		int argvs = sizeof(core_pattern) / 2;
+		(*argv) = kmalloc_array(argvs, sizeof(**argv), GFP_KERNEL);
+		if (!(*argv))
+			return -ENOMEM;
+		(*argv)[(*argc)++] = 0;
 		++pat_ptr;
+		if (!(*pat_ptr))
+			return -ENOMEM;
+	}
 
 	/* Repeat as long as we have more pattern to process and more output
 	   space */
 	while (*pat_ptr) {
+		/*
+		 * Split on spaces before doing template expansion so that
+		 * %e and %E don't get split if they have spaces in them
+		 */
+		if (ispipe) {
+			if (isspace(*pat_ptr)) {
+				if (cn->used != 0)
+					was_space = true;
+				pat_ptr++;
+				continue;
+			} else if (was_space) {
+				was_space = false;
+				err = cn_printf(cn, "%c", '\0');
+				if (err)
+					return err;
+				(*argv)[(*argc)++] = cn->used;
+			}
+		}
 		if (*pat_ptr != '%') {
 			err = cn_printf(cn, "%c", *pat_ptr++);
 		} else {
@@ -232,9 +289,10 @@ static int format_corename(struct core_name *cn, struct coredump_params *cprm)
 				break;
 			/* UNIX time of coredump */
 			case 't': {
-				struct timeval tv;
-				do_gettimeofday(&tv);
-				err = cn_printf(cn, "%lu", tv.tv_sec);
+				time64_t time;
+
+				time = ktime_get_real_seconds();
+				err = cn_printf(cn, "%lld", time);
 				break;
 			}
 			/* hostname */
@@ -388,7 +446,9 @@ static int coredump_wait(int exit_code, struct core_state *core_state)
 	core_state->dumper.task = tsk;
 	core_state->dumper.next = NULL;
 
-	down_write(&mm->mmap_sem);
+	if (down_write_killable(&mm->mmap_sem))
+		return -EINTR;
+
 	if (!mm->core_state)
 		core_waiters = zap_threads(tsk, mm, core_state, exit_code);
 	up_write(&mm->mmap_sem);
@@ -396,7 +456,9 @@ static int coredump_wait(int exit_code, struct core_state *core_state)
 	if (core_waiters > 0) {
 		struct core_thread *ptr;
 
+		freezer_do_not_count();
 		wait_for_completion(&core_state->startup);
+		freezer_count();
 		/*
 		 * Wait for all the threads to become inactive, so that
 		 * all the thread context (extended register state, like
@@ -503,15 +565,7 @@ static int umh_pipe_setup(struct subprocess_info *info, struct cred *new)
 	return err;
 }
 
-/* for systems with sizeof(void*) == 4: */
-#define MAPS_LINE_FORMAT4	  KERN_ERR "%08lx-%08lx %s %08lx %02x:%02x %lu %s\n"
-
-/* for systems with sizeof(void*) == 8: */
-#define MAPS_LINE_FORMAT8	  KERN_ERR "%016lx-%016lx %s %016lx %02x:%02x %lu %s\n"
-
-#define MAPS_LINE_FORMAT	(sizeof(void*) == 4 ? MAPS_LINE_FORMAT4 : MAPS_LINE_FORMAT8)
-
-void do_coredump(const siginfo_t *siginfo)
+void do_coredump(const kernel_siginfo_t *siginfo)
 {
 	struct core_state core_state;
 	struct core_name cn;
@@ -521,6 +575,8 @@ void do_coredump(const siginfo_t *siginfo)
 	struct cred *cred;
 	int retval = 0;
 	int ispipe;
+	size_t *argv = NULL;
+	int argc = 0;
 	struct files_struct *displaced;
 	/* require nonrelative corefile path and be extra careful */
 	bool need_suid_safe = false;
@@ -537,102 +593,6 @@ void do_coredump(const siginfo_t *siginfo)
 		 */
 		.mm_flags = mm->flags,
 	};
-
-#ifdef CONFIG_COREDUMP_PRINTK
-	int32_t *stack=NULL;
-	int rc, lines=0;
-	char output_buf[80];
-	char *output = output_buf;
-	int32_t value = 0;
-
-	printk(KERN_ERR "%s[%d] killed because of sig - %d", current->comm, 
-			current->pid, siginfo->si_signo);
-	/* TODO
-	 * print out mmaps.
-	 */
-
-	/*
-	 * We print out the stack.  We start by pointing the stack before the
-	 * call to do_coredump.  Note that we are assuming the kernel stack is 
-	 * the same as the user stack when we are calling do_coredump.
-	 */
-	printk("\n");
-	printk(KERN_ERR"STACK DUMP:\n");
-	for (lines=0,stack=(int32_t *)user_stack(signal_pt_regs());(lines < 10) && 
-			(stack <= (int32_t *)current->mm->start_stack);lines++) {
-		/* print out the address */
-		output+=snprintf(output, 79-(output-output_buf), "0x%08x: ", 
-				(unsigned)stack);
-		/* now print out the stack contents */
-		for (;(stack <= (int32_t*)current->mm->start_stack) && 
-				(79-(output-output_buf) > sizeof("FFFF0000 "));stack++) {
-			rc = copy_from_user(&value, stack, sizeof(int32_t));
-			output += snprintf(output, 79-(output-output_buf),
-					"%08x ", value);
-		}
-		output--;
-		*output++ = '\n';
-		*output = '\0';
-		printk(KERN_ERR "%s", output_buf);
-		output = output_buf;
-	}
-	show_regs(signal_pt_regs());
-
-#ifdef CONFIG_MMU
-	{
-	struct mm_struct *mm=NULL;
-	struct vm_area_struct *map;
-	char buf[200]={0};
-	int flags=0;
-	char *line;
-	dev_t dev = 0;
-	unsigned long ino = 0;
-
-	mm = current->mm;
-	if (mm) 
-		atomic_inc(&mm->mm_users);
-	if (!mm)
-		goto finished;
-
-	down_read(&mm->mmap_sem);
-	map = mm->mmap;
-
-	while (map) {
-		char str[5];
-
-		if (map->vm_file != NULL) {
-			dev = map->vm_file->f_path.dentry->d_inode->i_sb->s_dev;
-			ino = map->vm_file->f_path.dentry->d_inode->i_ino;
-			line = d_path(&map->vm_file->f_path, buf, sizeof(buf));
-		} else {
-			line=NULL;
-		}
-
-		flags = map->vm_flags;
-
-		str[0] = flags & VM_READ ? 'r' : '-';
-		str[1] = flags & VM_WRITE ? 'w' : '-';
-		str[2] = flags & VM_EXEC ? 'x' : '-';
-		str[3] = flags & VM_MAYSHARE ? 's' : 'p';
-		str[4] = 0;
-
-		printk(MAPS_LINE_FORMAT, map->vm_start, map->vm_end,
-				str,
-				map->vm_pgoff << PAGE_SHIFT,
-				MAJOR(dev), MINOR(dev), ino, line?line:"");
-		map = map->vm_next;
-	}
-	up_read(&mm->mmap_sem);
-	mmput(mm);
-	}
-#else
-	/*
-	 * How do we find base address of shared libs??
-	 */
-#endif
-
-finished:
-#endif
 
 	audit_core_dumps(siginfo->si_signo);
 
@@ -663,9 +623,10 @@ finished:
 
 	old_cred = override_creds(cred);
 
-	ispipe = format_corename(&cn, &cprm);
+	ispipe = format_corename(&cn, &cprm, &argv, &argc);
 
 	if (ispipe) {
+		int argi;
 		int dump_count;
 		char **helper_argv;
 		struct subprocess_info *sub_info;
@@ -708,12 +669,16 @@ finished:
 			goto fail_dropcount;
 		}
 
-		helper_argv = argv_split(GFP_KERNEL, cn.corename, NULL);
+		helper_argv = kmalloc_array(argc + 1, sizeof(*helper_argv),
+					    GFP_KERNEL);
 		if (!helper_argv) {
 			printk(KERN_WARNING "%s failed to allocate memory\n",
 			       __func__);
 			goto fail_dropcount;
 		}
+		for (argi = 0; argi < argc; argi++)
+			helper_argv[argi] = cn.corename + argv[argi];
+		helper_argv[argi] = NULL;
 
 		retval = -ENOMEM;
 		sub_info = call_usermodehelper_setup(helper_argv[0],
@@ -723,7 +688,7 @@ finished:
 			retval = call_usermodehelper_exec(sub_info,
 							  UMH_WAIT_EXEC);
 
-		argv_free(helper_argv);
+		kfree(helper_argv);
 		if (retval) {
 			printk(KERN_INFO "Core dump to |%s pipe failed\n",
 			       cn.corename);
@@ -731,6 +696,8 @@ finished:
 		}
 	} else {
 		struct inode *inode;
+		int open_flags = O_CREAT | O_RDWR | O_NOFOLLOW |
+				 O_LARGEFILE | O_EXCL;
 
 		if (cprm.limit < binfmt->min_coredump)
 			goto fail_unlock;
@@ -749,16 +716,11 @@ finished:
 		 * privs and don't want to unlink another user's coredump.
 		 */
 		if (!need_suid_safe) {
-			mm_segment_t old_fs;
-
-			old_fs = get_fs();
-			set_fs(KERNEL_DS);
 			/*
 			 * If it doesn't exist, that's fine. If there's some
 			 * other problem, we'll catch it at the filp_open().
 			 */
-			(void) sys_unlink((const char __user *)cn.corename);
-			set_fs(old_fs);
+			do_unlinkat(AT_FDCWD, getname_kernel(cn.corename));
 		}
 
 		/*
@@ -769,10 +731,27 @@ finished:
 		 * what matters is that at least one of the two processes
 		 * writes its coredump successfully, not which one.
 		 */
-		cprm.file = filp_open(cn.corename,
-				 O_CREAT | 2 | O_NOFOLLOW |
-				 O_LARGEFILE | O_EXCL,
-				 0600);
+		if (need_suid_safe) {
+			/*
+			 * Using user namespaces, normal user tasks can change
+			 * their current->fs->root to point to arbitrary
+			 * directories. Since the intention of the "only dump
+			 * with a fully qualified path" rule is to control where
+			 * coredumps may be placed using root privileges,
+			 * current->fs->root must not be used. Instead, use the
+			 * root directory of init_task.
+			 */
+			struct path root;
+
+			task_lock(&init_task);
+			get_fs_root(init_task.fs, &root);
+			task_unlock(&init_task);
+			cprm.file = file_open_root(root.dentry, root.mnt,
+				cn.corename, open_flags, 0600);
+			path_put(&root);
+		} else {
+			cprm.file = filp_open(cn.corename, open_flags, 0600);
+		}
 		if (IS_ERR(cprm.file))
 			goto fail_unlock;
 
@@ -810,6 +789,14 @@ finished:
 	if (displaced)
 		put_files_struct(displaced);
 	if (!dump_interrupted()) {
+		/*
+		 * umh disabled with CONFIG_STATIC_USERMODEHELPER_PATH="" would
+		 * have this set to NULL.
+		 */
+		if (!cprm.file) {
+			pr_info("Core dump to |%s disabled\n", cn.corename);
+			goto close_fail;
+		}
 		file_start_write(cprm.file);
 		core_dumped = binfmt->core_dump(&cprm);
 		file_end_write(cprm.file);
@@ -823,6 +810,7 @@ fail_dropcount:
 	if (ispipe)
 		atomic_dec(&core_dump_count);
 fail_unlock:
+	kfree(argv);
 	kfree(cn.corename);
 	coredump_finish(mm, core_dumped);
 	revert_creds(old_cred);
@@ -852,6 +840,7 @@ int dump_emit(struct coredump_params *cprm, const void *addr, int nr)
 			return 0;
 		file->f_pos = pos;
 		cprm->written += n;
+		cprm->pos += n;
 		nr -= n;
 	}
 	return 1;
@@ -863,12 +852,10 @@ int dump_skip(struct coredump_params *cprm, size_t nr)
 	static char zeroes[PAGE_SIZE];
 	struct file *file = cprm->file;
 	if (file->f_op->llseek && file->f_op->llseek != no_llseek) {
-		if (cprm->written + nr > cprm->limit)
-			return 0;
 		if (dump_interrupted() ||
 		    file->f_op->llseek(file, nr, SEEK_CUR) < 0)
 			return 0;
-		cprm->written += nr;
+		cprm->pos += nr;
 		return 1;
 	} else {
 		while (nr > PAGE_SIZE) {
@@ -883,9 +870,27 @@ EXPORT_SYMBOL(dump_skip);
 
 int dump_align(struct coredump_params *cprm, int align)
 {
-	unsigned mod = cprm->written & (align - 1);
+	unsigned mod = cprm->pos & (align - 1);
 	if (align & (align - 1))
 		return 0;
 	return mod ? dump_skip(cprm, align - mod) : 1;
 }
 EXPORT_SYMBOL(dump_align);
+
+/*
+ * Ensures that file size is big enough to contain the current file
+ * postion. This prevents gdb from complaining about a truncated file
+ * if the last "write" to the file was dump_skip.
+ */
+void dump_truncate(struct coredump_params *cprm)
+{
+	struct file *file = cprm->file;
+	loff_t offset;
+
+	if (file->f_op->llseek && file->f_op->llseek != no_llseek) {
+		offset = file->f_op->llseek(file, 0, SEEK_CUR);
+		if (i_size_read(file->f_mapping->host) < offset)
+			do_truncate(file->f_path.dentry, offset, 0, file);
+	}
+}
+EXPORT_SYMBOL(dump_truncate);

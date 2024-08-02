@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*  linux/arch/sparc/kernel/signal.c
  *
  *  Copyright (C) 1991, 1992  Linus Torvalds
@@ -20,7 +21,7 @@
 #include <linux/bitops.h>
 #include <linux/tracehook.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/ptrace.h>
 #include <asm/pgalloc.h>
 #include <asm/pgtable.h>
@@ -60,10 +61,22 @@ struct rt_signal_frame {
 #define SF_ALIGNEDSZ  (((sizeof(struct signal_frame) + 7) & (~7)))
 #define RT_ALIGNEDSZ  (((sizeof(struct rt_signal_frame) + 7) & (~7)))
 
+/* Checks if the fp is valid.  We always build signal frames which are
+ * 16-byte aligned, therefore we can always enforce that the restore
+ * frame has that property as well.
+ */
+static inline bool invalid_frame_pointer(void __user *fp, int fplen)
+{
+	if ((((unsigned long) fp) & 15) || !__access_ok((unsigned long)fp, fplen))
+		return true;
+
+	return false;
+}
+
 asmlinkage void do_sigreturn(struct pt_regs *regs)
 {
+	unsigned long up_psr, pc, npc, ufp;
 	struct signal_frame __user *sf;
-	unsigned long up_psr, pc, npc;
 	sigset_t set;
 	__siginfo_fpu_t __user *fpu_save;
 	__siginfo_rwin_t __user *rwin_save;
@@ -77,10 +90,13 @@ asmlinkage void do_sigreturn(struct pt_regs *regs)
 	sf = (struct signal_frame __user *) regs->u_regs[UREG_FP];
 
 	/* 1. Make sure we are not getting garbage from the user */
-	if (!access_ok(VERIFY_READ, sf, sizeof(*sf)))
+	if (invalid_frame_pointer(sf, sizeof(*sf)))
 		goto segv_and_exit;
 
-	if (((unsigned long) sf) & 3)
+	if (get_user(ufp, &sf->info.si_regs.u_regs[UREG_FP]))
+		goto segv_and_exit;
+
+	if (ufp & 0x7)
 		goto segv_and_exit;
 
 	err = __get_user(pc,  &sf->info.si_regs.pc);
@@ -121,13 +137,13 @@ asmlinkage void do_sigreturn(struct pt_regs *regs)
 	return;
 
 segv_and_exit:
-	force_sig(SIGSEGV, current);
+	force_sig(SIGSEGV);
 }
 
 asmlinkage void do_rt_sigreturn(struct pt_regs *regs)
 {
 	struct rt_signal_frame __user *sf;
-	unsigned int psr, pc, npc;
+	unsigned int psr, pc, npc, ufp;
 	__siginfo_fpu_t __user *fpu_save;
 	__siginfo_rwin_t __user *rwin_save;
 	sigset_t set;
@@ -135,8 +151,13 @@ asmlinkage void do_rt_sigreturn(struct pt_regs *regs)
 
 	synchronize_user_stack();
 	sf = (struct rt_signal_frame __user *) regs->u_regs[UREG_FP];
-	if (!access_ok(VERIFY_READ, sf, sizeof(*sf)) ||
-	    (((unsigned long) sf) & 0x03))
+	if (invalid_frame_pointer(sf, sizeof(*sf)))
+		goto segv;
+
+	if (get_user(ufp, &sf->regs.u_regs[UREG_FP]))
+		goto segv;
+
+	if (ufp & 0x7)
 		goto segv;
 
 	err = __get_user(pc, &sf->regs.pc);
@@ -175,16 +196,7 @@ asmlinkage void do_rt_sigreturn(struct pt_regs *regs)
 	set_current_blocked(&set);
 	return;
 segv:
-	force_sig(SIGSEGV, current);
-}
-
-/* Checks if the fp is valid */
-static inline int invalid_frame_pointer(void __user *fp, int fplen)
-{
-	if ((((unsigned long) fp) & 7) || !__access_ok((unsigned long)fp, fplen))
-		return 1;
-
-	return 0;
+	force_sig(SIGSEGV);
 }
 
 static inline void __user *get_sigframe(struct ksignal *ksig, struct pt_regs *regs, unsigned long framesize)
@@ -496,6 +508,7 @@ static void do_signal(struct pt_regs *regs, unsigned long orig_i0)
 				regs->pc -= 4;
 				regs->npc -= 4;
 				pt_regs_clear_syscall(regs);
+				/* fall through */
 			case ERESTART_RESTARTBLOCK:
 				regs->u_regs[UREG_G1] = __NR_restart_syscall;
 				regs->pc -= 4;

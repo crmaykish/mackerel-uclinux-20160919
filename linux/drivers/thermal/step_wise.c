@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  step_wise.c - A step-by-step Thermal throttling governor
  *
@@ -5,19 +6,6 @@
  *  Copyright (C) 2012 Durgadoss R <durgadoss.r@intel.com>
  *
  *  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; version 2 of the License.
- *
- *  This program is distributed in the hope that it will be useful, but
- *  WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- *  General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along
- *  with this program; if not, write to the Free Software Foundation, Inc.,
- *  59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
  *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
@@ -31,8 +19,7 @@
  * If the temperature is higher than a trip point,
  *    a. if the trend is THERMAL_TREND_RAISING, use higher cooling
  *       state for this trip point
- *    b. if the trend is THERMAL_TREND_DROPPING, use lower cooling
- *       state for this trip point
+ *    b. if the trend is THERMAL_TREND_DROPPING, do nothing
  *    c. if the trend is THERMAL_TREND_RAISE_FULL, use upper limit
  *       for this trip point
  *    d. if the trend is THERMAL_TREND_DROP_FULL, use lower limit
@@ -63,6 +50,19 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 	next_target = instance->target;
 	dev_dbg(&cdev->device, "cur_state=%ld\n", cur_state);
 
+	if (!instance->initialized) {
+		if (throttle) {
+			next_target = (cur_state + 1) >= instance->upper ?
+					instance->upper :
+					((cur_state + 1) < instance->lower ?
+					instance->lower : (cur_state + 1));
+		} else {
+			next_target = THERMAL_NO_TARGET;
+		}
+
+		return next_target;
+	}
+
 	switch (trend) {
 	case THERMAL_TREND_RAISING:
 		if (throttle) {
@@ -81,9 +81,11 @@ static unsigned long get_target_state(struct thermal_instance *instance,
 			if (!throttle)
 				next_target = THERMAL_NO_TARGET;
 		} else {
-			next_target = cur_state - 1;
-			if (next_target > instance->upper)
-				next_target = instance->upper;
+			if (!throttle) {
+				next_target = cur_state - 1;
+				if (next_target > instance->upper)
+					next_target = instance->upper;
+			}
 		}
 		break;
 	case THERMAL_TREND_DROP_FULL:
@@ -149,7 +151,7 @@ static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 		dev_dbg(&instance->cdev->device, "old_target=%d, target=%d\n",
 					old_target, (int)instance->target);
 
-		if (old_target == instance->target)
+		if (instance->initialized && old_target == instance->target)
 			continue;
 
 		/* Activate a passive thermal instance */
@@ -161,8 +163,10 @@ static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 			instance->target == THERMAL_NO_TARGET)
 			update_passive_instance(tz, trip_type, -1);
 
-
+		instance->initialized = true;
+		mutex_lock(&instance->cdev->lock);
 		instance->cdev->updated = false; /* cdev needs update */
+		mutex_unlock(&instance->cdev->lock);
 	}
 
 	mutex_unlock(&tz->lock);
@@ -171,8 +175,7 @@ static void thermal_zone_trip_update(struct thermal_zone_device *tz, int trip)
 /**
  * step_wise_throttle - throttles devices associated with the given zone
  * @tz - thermal_zone_device
- * @trip - the trip point
- * @trip_type - type of the trip point
+ * @trip - trip point index
  *
  * Throttling Logic: This uses the trend of the thermal zone to throttle.
  * If the thermal zone is 'heating up' this throttles all the cooling
@@ -203,13 +206,4 @@ static struct thermal_governor thermal_gov_step_wise = {
 	.name		= "step_wise",
 	.throttle	= step_wise_throttle,
 };
-
-int thermal_gov_step_wise_register(void)
-{
-	return thermal_register_governor(&thermal_gov_step_wise);
-}
-
-void thermal_gov_step_wise_unregister(void)
-{
-	thermal_unregister_governor(&thermal_gov_step_wise);
-}
+THERMAL_GOVERNOR_DECLARE(thermal_gov_step_wise);

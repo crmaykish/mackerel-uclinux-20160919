@@ -1,21 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  Copyright (C) 2003-2005 SAN People
  *
  * Debugging macro include header
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
 */
-
-#ifdef CONFIG_MMU
-#define AT91_IO_P2V(x) ((x) - 0x01000000)
-#else
-#define AT91_IO_P2V(x) (x)
-#endif
-
-#define CONFIG_DEBUG_UART_VIRT AT91_IO_P2V(CONFIG_DEBUG_UART_PHYS)
 
 #define AT91_DBGU_SR		(0x14)	/* Status Register */
 #define AT91_DBGU_THR		(0x1c)	/* Transmitter Holding Register */
