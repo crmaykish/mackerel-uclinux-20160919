@@ -71,8 +71,12 @@ static int __init uclinux_mtd_init(void)
 
 	mapp = &uclinux_ram_map;
 
+	u32 mtd_address = 0x300000;
+
+	printk(KERN_INFO "MTD init address: %X\r", mtd_address);
+
 	if (physaddr == -1)
-		mapp->phys = (resource_size_t)__bss_stop;
+		mapp->phys = (resource_size_t)mtd_address;
 	else
 		mapp->phys = physaddr;
 

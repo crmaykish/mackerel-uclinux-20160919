@@ -1574,6 +1574,17 @@ config SERIAL_MILBEAUT_USIO_CONSOLE
 	  receives all kernel messages and warnings and which allows logins in
 	  single user mode).
 
+config SERIAL_XR68C681
+	bool "XR68C681 serial port support"
+	select SERIAL_CORE
+	help
+	Driver for XR68C681 DUART
+
+config SERIAL_XR68C681_CONSOLE
+	bool "Support for console on XR68C681"
+	depends on SERIAL_XR68C681=y
+	select SERIAL_CORE_CONSOLE
+
 endmenu
 
 config SERIAL_MCTRL_GPIO

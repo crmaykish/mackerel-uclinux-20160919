@@ -122,6 +122,8 @@ menu "Platform setup"
 
 source "arch/m68k/Kconfig.cpu"
 
+source "arch/m68k/68000/mackerel/Kconfig"
+
 source "arch/m68k/Kconfig.machine"
 
 source "arch/m68k/Kconfig.bus"

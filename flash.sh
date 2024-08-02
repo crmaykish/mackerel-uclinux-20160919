@@ -1,7 +1,8 @@
 #!/bin/sh
 
 PORT=/dev/ttyUSB0
-IMAGE_FILE="images/image.bin"
+# IMAGE_FILE="images/image.bin"
+IMAGE_FILE="images/linux.bin"
 ROMFS_FILE="images/romfs.img"
 
 ls -lah "$ROMFS_FILE"

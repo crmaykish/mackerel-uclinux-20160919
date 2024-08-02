@@ -1,0 +1,5 @@
+menuconfig MACKEREL
+	bool "Mackerel-68k board support."
+	depends on M68000
+	help
+	  Support for the Mackerel-68k board.
