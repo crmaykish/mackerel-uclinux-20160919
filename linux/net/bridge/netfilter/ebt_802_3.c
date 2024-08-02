@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * 802_3
  *
@@ -11,13 +10,7 @@
 #include <linux/module.h>
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter_bridge/ebtables.h>
-#include <linux/skbuff.h>
-#include <uapi/linux/netfilter_bridge/ebt_802_3.h>
-
-static struct ebt_802_3_hdr *ebt_802_3_hdr(const struct sk_buff *skb)
-{
-	return (struct ebt_802_3_hdr *)skb_mac_header(skb);
-}
+#include <linux/netfilter_bridge/ebt_802_3.h>
 
 static bool
 ebt_802_3_mt(const struct sk_buff *skb, struct xt_action_param *par)
@@ -27,16 +20,16 @@ ebt_802_3_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	__be16 type = hdr->llc.ui.ctrl & IS_UI ? hdr->llc.ui.type : hdr->llc.ni.type;
 
 	if (info->bitmask & EBT_802_3_SAP) {
-		if (NF_INVF(info, EBT_802_3_SAP, info->sap != hdr->llc.ui.ssap))
+		if (FWINV(info->sap != hdr->llc.ui.ssap, EBT_802_3_SAP))
 			return false;
-		if (NF_INVF(info, EBT_802_3_SAP, info->sap != hdr->llc.ui.dsap))
+		if (FWINV(info->sap != hdr->llc.ui.dsap, EBT_802_3_SAP))
 			return false;
 	}
 
 	if (info->bitmask & EBT_802_3_TYPE) {
 		if (!(hdr->llc.ui.dsap == CHECK_TYPE && hdr->llc.ui.ssap == CHECK_TYPE))
 			return false;
-		if (NF_INVF(info, EBT_802_3_TYPE, info->type != type))
+		if (FWINV(info->type != type, EBT_802_3_TYPE))
 			return false;
 	}
 

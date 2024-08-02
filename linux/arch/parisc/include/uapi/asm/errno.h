@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 #ifndef _PARISC_ERRNO_H
 #define _PARISC_ERRNO_H
 
@@ -98,10 +97,10 @@
 #define	ENOTCONN	235	/* Transport endpoint is not connected */
 #define	ESHUTDOWN	236	/* Cannot send after transport endpoint shutdown */
 #define	ETOOMANYREFS	237	/* Too many references: cannot splice */
+#define EREFUSED	ECONNREFUSED	/* for HP's NFS apparently */
 #define	ETIMEDOUT	238	/* Connection timed out */
 #define	ECONNREFUSED	239	/* Connection refused */
-#define	EREFUSED	ECONNREFUSED	/* for HP's NFS apparently */
-#define	EREMOTERELEASE	240	/* Remote peer released connection */
+#define EREMOTERELEASE	240	/* Remote peer released connection */
 #define	EHOSTDOWN	241	/* Host is down */
 #define	EHOSTUNREACH	242	/* No route to host */
 
@@ -113,6 +112,7 @@
 #define	ELOOP		249	/* Too many symbolic links encountered */
 #define	ENOSYS		251	/* Function not implemented */
 
+#define ENOTSUP		252	/* Function not implemented (POSIX.4 / HPUX) */
 #define ECANCELLED	253	/* aio request was canceled before complete (POSIX.4 / HPUX) */
 #define ECANCELED	ECANCELLED	/* SuSv3 and Solaris wants one 'L' */
 

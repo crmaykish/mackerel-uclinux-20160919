@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  CPU frequency scaling for OMAP using OPP information
  *
@@ -9,10 +8,11 @@
  *
  * Copyright (C) 2007-2011 Texas Instruments, Inc.
  * - OMAP3/4 support by Rajendra Nayak, Santosh Shilimkar
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -51,7 +51,7 @@ static int omap_target(struct cpufreq_policy *policy, unsigned int index)
 
 	freq = new_freq * 1000;
 	ret = clk_round_rate(policy->clk, freq);
-	if (ret < 0) {
+	if (IS_ERR_VALUE(ret)) {
 		dev_warn(mpu_dev,
 			 "CPUfreq: Cannot find matching frequency for %lu\n",
 			 freq);
@@ -60,14 +60,16 @@ static int omap_target(struct cpufreq_policy *policy, unsigned int index)
 	freq = ret;
 
 	if (mpu_reg) {
+		rcu_read_lock();
 		opp = dev_pm_opp_find_freq_ceil(mpu_dev, &freq);
 		if (IS_ERR(opp)) {
+			rcu_read_unlock();
 			dev_err(mpu_dev, "%s: unable to find MPU OPP for %d\n",
 				__func__, new_freq);
 			return -EINVAL;
 		}
 		volt = dev_pm_opp_get_voltage(opp);
-		dev_pm_opp_put(opp);
+		rcu_read_unlock();
 		tol = volt * OPP_TOLERANCE / 100;
 		volt_old = regulator_get_voltage(mpu_reg);
 	}
@@ -122,18 +124,21 @@ static int omap_cpu_init(struct cpufreq_policy *policy)
 			dev_err(mpu_dev,
 				"%s: cpu%d: failed creating freq table[%d]\n",
 				__func__, policy->cpu, result);
-			clk_put(policy->clk);
-			return result;
+			goto fail;
 		}
 	}
 
 	atomic_inc_return(&freq_table_users);
 
 	/* FIXME: what's the actual transition time? */
-	cpufreq_generic_init(policy, freq_table, 300 * 1000);
-	dev_pm_opp_of_register_em(policy->cpus);
+	result = cpufreq_generic_init(policy, freq_table, 300 * 1000);
+	if (!result)
+		return 0;
 
-	return 0;
+	freq_table_free();
+fail:
+	clk_put(policy->clk);
+	return result;
 }
 
 static int omap_cpu_exit(struct cpufreq_policy *policy)
@@ -158,13 +163,13 @@ static int omap_cpufreq_probe(struct platform_device *pdev)
 {
 	mpu_dev = get_cpu_device(0);
 	if (!mpu_dev) {
-		pr_warn("%s: unable to get the MPU device\n", __func__);
+		pr_warning("%s: unable to get the mpu device\n", __func__);
 		return -EINVAL;
 	}
 
 	mpu_reg = regulator_get(mpu_dev, "vcc");
 	if (IS_ERR(mpu_reg)) {
-		pr_warn("%s: unable to get MPU regulator\n", __func__);
+		pr_warning("%s: unable to get MPU regulator\n", __func__);
 		mpu_reg = NULL;
 	} else {
 		/* 

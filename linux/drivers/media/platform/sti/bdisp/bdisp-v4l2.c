@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) STMicroelectronics SA 2014
  * Authors: Fabien Dessenne <fabien.dessenne@st.com> for STMicroelectronics.
+ * License terms:  GNU General Public License (GPL), version 2
  */
 
 #include <linux/errno.h>
@@ -191,7 +191,7 @@ static void bdisp_job_finish(struct bdisp_ctx *ctx, int vb_state)
 	dst_vb = v4l2_m2m_dst_buf_remove(ctx->fh.m2m_ctx);
 
 	if (src_vb && dst_vb) {
-		dst_vb->vb2_buf.timestamp = src_vb->vb2_buf.timestamp;
+		dst_vb->timestamp = src_vb->timestamp;
 		dst_vb->timecode = src_vb->timecode;
 		dst_vb->flags &= ~V4L2_BUF_FLAG_TSTAMP_SRC_MASK;
 		dst_vb->flags |= src_vb->flags &
@@ -297,7 +297,7 @@ static int bdisp_get_bufs(struct bdisp_ctx *ctx)
 	if (ret)
 		return ret;
 
-	dst_vb->vb2_buf.timestamp = src_vb->vb2_buf.timestamp;
+	dst_vb->timestamp = src_vb->timestamp;
 
 	return 0;
 }
@@ -360,7 +360,7 @@ out:
 		bdisp_job_finish(ctx, VB2_BUF_STATE_ERROR);
 }
 
-static const struct v4l2_m2m_ops bdisp_m2m_ops = {
+static struct v4l2_m2m_ops bdisp_m2m_ops = {
 	.device_run     = bdisp_device_run,
 	.job_abort      = bdisp_job_abort,
 };
@@ -438,9 +438,11 @@ static void bdisp_ctrls_delete(struct bdisp_ctx *ctx)
 }
 
 static int bdisp_queue_setup(struct vb2_queue *vq,
+			     const void *parg,
 			     unsigned int *nb_buf, unsigned int *nb_planes,
-			     unsigned int sizes[], struct device *alloc_devs[])
+			     unsigned int sizes[], void *allocators[])
 {
+	const struct v4l2_format *fmt = parg;
 	struct bdisp_ctx *ctx = vb2_get_drv_priv(vq);
 	struct bdisp_frame *frame = ctx_get_frame(ctx, vq->type);
 
@@ -454,11 +456,12 @@ static int bdisp_queue_setup(struct vb2_queue *vq,
 		return -EINVAL;
 	}
 
-	if (*nb_planes)
-		return sizes[0] < frame->sizeimage ? -EINVAL : 0;
+	if (fmt && fmt->fmt.pix.sizeimage < frame->sizeimage)
+		return -EINVAL;
 
 	*nb_planes = 1;
-	sizes[0] = frame->sizeimage;
+	sizes[0] = fmt ? fmt->fmt.pix.sizeimage : frame->sizeimage;
+	allocators[0] = ctx->bdisp_dev->alloc_ctx;
 
 	return 0;
 }
@@ -499,7 +502,7 @@ static int bdisp_start_streaming(struct vb2_queue *q, unsigned int count)
 {
 	struct bdisp_ctx *ctx = q->drv_priv;
 	struct vb2_v4l2_buffer *buf;
-	int ret = pm_runtime_resume_and_get(ctx->bdisp_dev->dev);
+	int ret = pm_runtime_get_sync(ctx->bdisp_dev->dev);
 
 	if (ret < 0) {
 		dev_err(ctx->bdisp_dev->dev, "failed to set runtime PM\n");
@@ -527,7 +530,7 @@ static void bdisp_stop_streaming(struct vb2_queue *q)
 	pm_runtime_put(ctx->bdisp_dev->dev);
 }
 
-static const struct vb2_ops bdisp_qops = {
+static struct vb2_ops bdisp_qops = {
 	.queue_setup     = bdisp_queue_setup,
 	.buf_prepare     = bdisp_buf_prepare,
 	.buf_queue       = bdisp_buf_queue,
@@ -552,7 +555,6 @@ static int queue_init(void *priv,
 	src_vq->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
 	src_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
 	src_vq->lock = &ctx->bdisp_dev->lock;
-	src_vq->dev = ctx->bdisp_dev->v4l2_dev.dev;
 
 	ret = vb2_queue_init(src_vq);
 	if (ret)
@@ -567,7 +569,6 @@ static int queue_init(void *priv,
 	dst_vq->buf_struct_size = sizeof(struct v4l2_m2m_buffer);
 	dst_vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_COPY;
 	dst_vq->lock = &ctx->bdisp_dev->lock;
-	dst_vq->dev = ctx->bdisp_dev->v4l2_dev.dev;
 
 	return vb2_queue_init(dst_vq);
 }
@@ -632,8 +633,8 @@ static int bdisp_open(struct file *file)
 
 error_ctrls:
 	bdisp_ctrls_delete(ctx);
-	v4l2_fh_del(&ctx->fh);
 error_fh:
+	v4l2_fh_del(&ctx->fh);
 	v4l2_fh_exit(&ctx->fh);
 	bdisp_hw_free_nodes(ctx);
 mem_ctx:
@@ -651,7 +652,8 @@ static int bdisp_release(struct file *file)
 
 	dev_dbg(bdisp->dev, "%s\n", __func__);
 
-	mutex_lock(&bdisp->lock);
+	if (mutex_lock_interruptible(&bdisp->lock))
+		return -ERESTARTSYS;
 
 	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);
 
@@ -687,10 +689,15 @@ static int bdisp_querycap(struct file *file, void *fh,
 	struct bdisp_ctx *ctx = fh_to_ctx(fh);
 	struct bdisp_dev *bdisp = ctx->bdisp_dev;
 
-	strscpy(cap->driver, bdisp->pdev->name, sizeof(cap->driver));
-	strscpy(cap->card, bdisp->pdev->name, sizeof(cap->card));
+	strlcpy(cap->driver, bdisp->pdev->name, sizeof(cap->driver));
+	strlcpy(cap->card, bdisp->pdev->name, sizeof(cap->card));
 	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:%s%d",
 		 BDISP_NAME, bdisp->id);
+
+	cap->device_caps = V4L2_CAP_STREAMING | V4L2_CAP_VIDEO_M2M;
+
+	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
+
 	return 0;
 }
 
@@ -717,7 +724,7 @@ static int bdisp_enum_fmt(struct file *file, void *fh, struct v4l2_fmtdesc *f)
 static int bdisp_g_fmt(struct file *file, void *fh, struct v4l2_format *f)
 {
 	struct bdisp_ctx *ctx = fh_to_ctx(fh);
-	struct v4l2_pix_format *pix;
+	struct v4l2_pix_format *pix = &f->fmt.pix;
 	struct bdisp_frame *frame  = ctx_get_frame(ctx, f->type);
 
 	if (IS_ERR(frame)) {
@@ -1053,7 +1060,6 @@ static int bdisp_register_device(struct bdisp_dev *bdisp)
 	bdisp->vdev.lock        = &bdisp->lock;
 	bdisp->vdev.vfl_dir     = VFL_DIR_M2M;
 	bdisp->vdev.v4l2_dev    = &bdisp->v4l2_dev;
-	bdisp->vdev.device_caps = V4L2_CAP_STREAMING | V4L2_CAP_VIDEO_M2M;
 	snprintf(bdisp->vdev.name, sizeof(bdisp->vdev.name), "%s.%d",
 		 BDISP_NAME, bdisp->id);
 
@@ -1265,6 +1271,8 @@ static int bdisp_remove(struct platform_device *pdev)
 
 	bdisp_hw_free_filters(bdisp->dev);
 
+	vb2_dma_contig_cleanup_ctx(bdisp->alloc_ctx);
+
 	pm_runtime_disable(&pdev->dev);
 
 	bdisp_debugfs_remove(bdisp);
@@ -1292,10 +1300,6 @@ static int bdisp_probe(struct platform_device *pdev)
 	if (!bdisp)
 		return -ENOMEM;
 
-	ret = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(32));
-	if (ret)
-		return ret;
-
 	bdisp->pdev = pdev;
 	bdisp->dev = dev;
 	platform_set_drvdata(pdev, bdisp);
@@ -1308,8 +1312,6 @@ static int bdisp_probe(struct platform_device *pdev)
 	init_waitqueue_head(&bdisp->irq_queue);
 	INIT_DELAYED_WORK(&bdisp->timeout_work, bdisp_irq_timeout);
 	bdisp->work_queue = create_workqueue(BDISP_NAME);
-	if (!bdisp->work_queue)
-		return -ENOMEM;
 
 	spin_lock_init(&bdisp->slock);
 	mutex_init(&bdisp->lock);
@@ -1338,7 +1340,6 @@ static int bdisp_probe(struct platform_device *pdev)
 	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 	if (!res) {
 		dev_err(dev, "failed to get IRQ resource\n");
-		ret = -EINVAL;
 		goto err_clk;
 	}
 
@@ -1366,17 +1367,24 @@ static int bdisp_probe(struct platform_device *pdev)
 
 	/* Power management */
 	pm_runtime_enable(dev);
-	ret = pm_runtime_resume_and_get(dev);
+	ret = pm_runtime_get_sync(dev);
 	if (ret < 0) {
 		dev_err(dev, "failed to set PM\n");
-		goto err_remove;
+		goto err_dbg;
+	}
+
+	/* Continuous memory allocator */
+	bdisp->alloc_ctx = vb2_dma_contig_init_ctx(dev);
+	if (IS_ERR(bdisp->alloc_ctx)) {
+		ret = PTR_ERR(bdisp->alloc_ctx);
+		goto err_pm;
 	}
 
 	/* Filters */
 	if (bdisp_hw_alloc_filters(bdisp->dev)) {
 		dev_err(bdisp->dev, "no memory for filters\n");
 		ret = -ENOMEM;
-		goto err_pm;
+		goto err_vb2_dma;
 	}
 
 	/* Register */
@@ -1395,9 +1403,11 @@ static int bdisp_probe(struct platform_device *pdev)
 
 err_filter:
 	bdisp_hw_free_filters(bdisp->dev);
+err_vb2_dma:
+	vb2_dma_contig_cleanup_ctx(bdisp->alloc_ctx);
 err_pm:
 	pm_runtime_put(dev);
-err_remove:
+err_dbg:
 	bdisp_debugfs_remove(bdisp);
 err_v4l2:
 	v4l2_device_unregister(&bdisp->v4l2_dev);

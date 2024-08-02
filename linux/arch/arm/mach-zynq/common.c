@@ -1,13 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file contains common code that is intended to be used across
  * boards so that it's not replicated.
  *
  *  Copyright (C) 2011 Xilinx
+ *
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/init.h>
-#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/cpumask.h>
 #include <linux/platform_device.h>
@@ -52,7 +59,7 @@ void __iomem *zynq_scu_base;
 static void __init zynq_memory_init(void)
 {
 	if (!__pa(PAGE_OFFSET))
-		memblock_reserve(__pa(PAGE_OFFSET), 0x80000);
+		memblock_reserve(__pa(PAGE_OFFSET), __pa(swapper_pg_dir));
 }
 
 static struct platform_device zynq_cpuidle_device = {
@@ -77,7 +84,6 @@ static int __init zynq_get_revision(void)
 	}
 
 	zynq_devcfg_base = of_iomap(np, 0);
-	of_node_put(np);
 	if (!zynq_devcfg_base) {
 		pr_err("%s: Unable to map I/O memory\n", __func__);
 		return -1;
@@ -104,6 +110,7 @@ static void __init zynq_init_late(void)
  */
 static void __init zynq_init_machine(void)
 {
+	struct platform_device_info devinfo = { .name = "cpufreq-dt", };
 	struct soc_device_attribute *soc_dev_attr;
 	struct soc_device *soc_dev;
 	struct device *parent = NULL;
@@ -135,16 +142,19 @@ out:
 	 * Finished with the static registrations now; fill in the missing
 	 * devices
 	 */
-	of_platform_default_populate(NULL, NULL, parent);
+	of_platform_populate(NULL, of_default_bus_match_table, NULL, parent);
 
 	platform_device_register(&zynq_cpuidle_device);
+	platform_device_register_full(&devinfo);
 }
 
 static void __init zynq_timer_init(void)
 {
+	zynq_early_slcr_init();
+
 	zynq_clock_init();
 	of_clk_init(NULL);
-	timer_probe();
+	clocksource_probe();
 }
 
 static struct map_desc zynq_cortex_a9_scu_map __initdata = {
@@ -176,7 +186,6 @@ static void __init zynq_map_io(void)
 
 static void __init zynq_irq_init(void)
 {
-	zynq_early_slcr_init();
 	irqchip_init();
 }
 

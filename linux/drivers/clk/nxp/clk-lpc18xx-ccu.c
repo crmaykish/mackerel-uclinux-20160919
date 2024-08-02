@@ -10,7 +10,6 @@
 
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
-#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -28,6 +27,8 @@
 /* CCU branch feature bits */
 #define CCU_BRANCH_IS_BUS	BIT(0)
 #define CCU_BRANCH_HAVE_DIV2	BIT(1)
+
+#define to_clk_gate(_hw) container_of(_hw, struct clk_gate, hw)
 
 struct lpc18xx_branch_clk_data {
 	const char **name;
@@ -143,7 +144,7 @@ static int lpc18xx_ccu_gate_endisable(struct clk_hw *hw, bool enable)
 	 * Divider field is write only, so divider stat field must
 	 * be read so divider field can be set accordingly.
 	 */
-	val = readl(gate->reg);
+	val = clk_readl(gate->reg);
 	if (val & LPC18XX_CCU_DIVSTAT)
 		val |= LPC18XX_CCU_DIV;
 
@@ -156,12 +157,12 @@ static int lpc18xx_ccu_gate_endisable(struct clk_hw *hw, bool enable)
 		 * and the next write should clear the RUN bit.
 		 */
 		val |= LPC18XX_CCU_AUTO;
-		writel(val, gate->reg);
+		clk_writel(val, gate->reg);
 
 		val &= ~LPC18XX_CCU_RUN;
 	}
 
-	writel(val, gate->reg);
+	clk_writel(val, gate->reg);
 
 	return 0;
 }
@@ -221,7 +222,7 @@ static void lpc18xx_ccu_register_branch_gate_div(struct lpc18xx_clk_branch *bran
 		div->width = 1;
 
 		div_hw = &div->hw;
-		div_ops = &clk_divider_ro_ops;
+		div_ops = &clk_divider_ops;
 	}
 
 	branch->gate.reg = branch->offset + reg_base;
@@ -278,15 +279,12 @@ static void __init lpc18xx_ccu_init(struct device_node *np)
 	}
 
 	clk_data = kzalloc(sizeof(*clk_data), GFP_KERNEL);
-	if (!clk_data) {
-		iounmap(reg_base);
+	if (!clk_data)
 		return;
-	}
 
 	clk_data->num = of_property_count_strings(np, "clock-names");
 	clk_data->name = kcalloc(clk_data->num, sizeof(char *), GFP_KERNEL);
 	if (!clk_data->name) {
-		iounmap(reg_base);
 		kfree(clk_data);
 		return;
 	}

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Device tree for EFM32GG-DK3750 development board.
  *
@@ -17,8 +16,7 @@
 		bootargs = "console=ttyefm4,115200 init=/linuxrc ignore_loglevel ihash_entries=64 dhash_entries=64 earlyprintk uclinux.physaddr=0x8c400000 root=/dev/mtdblock0";
 	};
 
-	memory@88000000 {
-		device_type = "memory";
+	memory {
 		reg = <0x88000000 0x400000>;
 	};
 
@@ -37,7 +35,7 @@
 			};
 
 			eeprom@50 {
-				compatible = "microchip,24c02", "atmel,24c02";
+				compatible = "microchip,24c02";
 				reg = <0x50>;
 				pagesize = <16>;
 			};
@@ -76,7 +74,7 @@
 			status = "ok";
 		};
 
-		boardfpga: boardfpga@80000000 {
+		boardfpga: boardfpga {
 			compatible = "efm32board";
 			reg = <0x80000000 0x400>;
 			irq-gpios = <&gpio 64 1>;

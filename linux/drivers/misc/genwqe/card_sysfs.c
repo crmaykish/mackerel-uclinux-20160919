@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /**
  * IBM Accelerator Family 'GenWQE'
  *
@@ -8,6 +7,15 @@
  * Author: Joerg-Stephan Vogt <jsvogt@de.ibm.com>
  * Author: Michael Jung <mijung@gmx.net>
  * Author: Michael Ruettger <michael@ibmra.de>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License (version 2 only)
+ * as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  */
 
 /*
@@ -270,7 +278,7 @@ static umode_t genwqe_is_visible(struct kobject *kobj,
 				 struct attribute *attr, int n)
 {
 	unsigned int j;
-	struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = container_of(kobj, struct device, kobj);
 	struct genwqe_dev *cd = dev_get_drvdata(dev);
 	umode_t mode = attr->mode;
 

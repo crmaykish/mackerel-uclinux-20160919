@@ -1,10 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Cell Broadband Engine OProfile Support
  *
  * (C) Copyright IBM Corporation 2006
  *
  * Author: Maynard Johnson <maynardj@us.ibm.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 /* The purpose of this file is to handle SPU event task switching
@@ -32,7 +36,7 @@
 static DEFINE_SPINLOCK(buffer_lock);
 static DEFINE_SPINLOCK(cache_lock);
 static int num_spu_nodes;
-static int spu_prof_num_nodes;
+int spu_prof_num_nodes;
 
 struct spu_buffer spu_buff[MAX_NUMNODES * SPUS_PER_NODE];
 struct delayed_work spu_work;
@@ -47,7 +51,7 @@ static void spu_buff_add(unsigned long int value, int spu)
 	 * That way we can tell the difference between the
 	 * buffer being full versus empty.
 	 *
-	 *  ASSUMPTION: the buffer_lock is held when this function
+	 *  ASSUPTION: the buffer_lock is held when this function
 	 *             is called to lock the buffer, head and tail.
 	 */
 	int full = 1;
@@ -84,7 +88,7 @@ static void spu_buff_add(unsigned long int value, int spu)
 /* This function copies the per SPU buffers to the
  * OProfile kernel buffer.
  */
-static void sync_spu_buff(void)
+void sync_spu_buff(void)
 {
 	int spu;
 	unsigned long flags;
@@ -204,7 +208,7 @@ prepare_cached_spu_info(struct spu *spu, unsigned long objectId)
 	/* Create cached_info and set spu_info[spu->number] to point to it.
 	 * spu->number is a system-wide value, not a per-node value.
 	 */
-	info = kzalloc(sizeof(*info), GFP_KERNEL);
+	info = kzalloc(sizeof(struct cached_info), GFP_KERNEL);
 	if (!info) {
 		printk(KERN_ERR "SPU_PROF: "
 		       "%s, line %d: create vma_map failed\n",
@@ -291,7 +295,7 @@ out:
  * dcookie user still being registered (namely, the reader
  * of the event buffer).
  */
-static inline unsigned long fast_get_dcookie(const struct path *path)
+static inline unsigned long fast_get_dcookie(struct path *path)
 {
 	unsigned long cookie;
 

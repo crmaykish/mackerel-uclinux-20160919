@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/mach-pxa/pcm027.c
  *  Support for the Phytec phyCORE-PXA270 CPU card (aka PCM-027).
@@ -15,6 +14,10 @@
  *  based on Intel Mainstone Board
  *
  *  Copyright 2007 Juergen Beisert @ Pengutronix (j.beisert@pengutronix.de)
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License version 2 as
+ *  published by the Free Software Foundation.
  */
 
 #include <linux/irq.h>
@@ -27,8 +30,8 @@
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
-#include "pxa27x.h"
-#include "pcm027.h"
+#include <mach/pxa27x.h>
+#include <mach/pcm027.h>
 #include "generic.h"
 
 /*
@@ -129,7 +132,7 @@ static struct platform_device smc91x_device = {
 /*
  * SPI host and devices
  */
-static struct pxa2xx_spi_controller pxa_ssp_master_info = {
+static struct pxa2xx_spi_master pxa_ssp_master_info = {
 	.num_chipselect	= 1,
 };
 

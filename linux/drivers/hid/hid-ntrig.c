@@ -1,12 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  HID driver for N-Trig touchscreens
  *
  *  Copyright (c) 2008-2010 Rafi Rubin
  *  Copyright (c) 2009-2010 Stephane Chatty
+ *
  */
 
 /*
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
  */
 
 #include <linux/device.h>
@@ -169,7 +173,7 @@ static ssize_t show_phys_width(struct device *dev,
 			       struct device_attribute *attr,
 			       char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", nd->sensor_physical_width);
@@ -181,7 +185,7 @@ static ssize_t show_phys_height(struct device *dev,
 				struct device_attribute *attr,
 				char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", nd->sensor_physical_height);
@@ -193,7 +197,7 @@ static ssize_t show_log_width(struct device *dev,
 			      struct device_attribute *attr,
 			      char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", nd->sensor_logical_width);
@@ -205,7 +209,7 @@ static ssize_t show_log_height(struct device *dev,
 			       struct device_attribute *attr,
 			       char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", nd->sensor_logical_height);
@@ -217,7 +221,7 @@ static ssize_t show_min_width(struct device *dev,
 			      struct device_attribute *attr,
 			      char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", nd->min_width *
@@ -229,7 +233,7 @@ static ssize_t set_min_width(struct device *dev,
 			     struct device_attribute *attr,
 			     const char *buf, size_t count)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	unsigned long val;
@@ -252,7 +256,7 @@ static ssize_t show_min_height(struct device *dev,
 			       struct device_attribute *attr,
 			       char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", nd->min_height *
@@ -264,7 +268,7 @@ static ssize_t set_min_height(struct device *dev,
 			      struct device_attribute *attr,
 			      const char *buf, size_t count)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	unsigned long val;
@@ -288,7 +292,7 @@ static ssize_t show_activate_slack(struct device *dev,
 				   struct device_attribute *attr,
 				   char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", nd->activate_slack);
@@ -298,7 +302,7 @@ static ssize_t set_activate_slack(struct device *dev,
 				  struct device_attribute *attr,
 				  const char *buf, size_t count)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	unsigned long val;
@@ -321,7 +325,7 @@ static ssize_t show_activation_width(struct device *dev,
 				     struct device_attribute *attr,
 				     char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", nd->activation_width *
@@ -333,7 +337,7 @@ static ssize_t set_activation_width(struct device *dev,
 				    struct device_attribute *attr,
 				    const char *buf, size_t count)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	unsigned long val;
@@ -357,7 +361,7 @@ static ssize_t show_activation_height(struct device *dev,
 				      struct device_attribute *attr,
 				      char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", nd->activation_height *
@@ -369,7 +373,7 @@ static ssize_t set_activation_height(struct device *dev,
 				     struct device_attribute *attr,
 				     const char *buf, size_t count)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	unsigned long val;
@@ -393,7 +397,7 @@ static ssize_t show_deactivate_slack(struct device *dev,
 				     struct device_attribute *attr,
 				     char *buf)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	return sprintf(buf, "%d\n", -nd->deactivate_slack);
@@ -403,7 +407,7 @@ static ssize_t set_deactivate_slack(struct device *dev,
 				    struct device_attribute *attr,
 				    const char *buf, size_t count)
 {
-	struct hid_device *hdev = to_hid_device(dev);
+	struct hid_device *hdev = container_of(dev, struct hid_device, dev);
 	struct ntrig_data *nd = hid_get_drvdata(hdev);
 
 	unsigned long val;
@@ -441,7 +445,7 @@ static struct attribute *sysfs_attrs[] = {
 	NULL
 };
 
-static const struct attribute_group ntrig_attribute_group = {
+static struct attribute_group ntrig_attribute_group = {
 	.attrs = sysfs_attrs
 };
 
@@ -587,8 +591,8 @@ static int ntrig_event (struct hid_device *hid, struct hid_field *field,
 	switch (usage->hid) {
 	case 0xff000001:
 		/* Tag indicating the start of a multitouch group */
-		nd->reading_mt = true;
-		nd->first_contact_touch = false;
+		nd->reading_mt = 1;
+		nd->first_contact_touch = 0;
 		break;
 	case HID_DG_TIPSWITCH:
 		nd->tipswitch = value;
@@ -659,7 +663,7 @@ static int ntrig_event (struct hid_device *hid, struct hid_field *field,
 			 * even if deactivation slack is turned off.
 			 */
 			nd->act_state = deactivate_slack - 1;
-			nd->confidence = false;
+			nd->confidence = 0;
 			break;
 		}
 
@@ -675,7 +679,7 @@ static int ntrig_event (struct hid_device *hid, struct hid_field *field,
 			 */
 			if (nd->w < nd->min_width ||
 			    nd->h < nd->min_height)
-				nd->confidence = false;
+				nd->confidence = 0;
 		} else
 			break;
 
@@ -754,7 +758,7 @@ static int ntrig_event (struct hid_device *hid, struct hid_field *field,
 		if (!nd->reading_mt) /* Just to be sure */
 			break;
 
-		nd->reading_mt = false;
+		nd->reading_mt = 0;
 
 
 		/*
@@ -906,7 +910,7 @@ static int ntrig_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		return -ENOMEM;
 	}
 
-	nd->reading_mt = false;
+	nd->reading_mt = 0;
 	nd->min_width = 0;
 	nd->min_height = 0;
 	nd->activate_slack = activate_slack;
@@ -951,8 +955,6 @@ static int ntrig_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	ret = sysfs_create_group(&hdev->dev.kobj,
 			&ntrig_attribute_group);
-	if (ret)
-		hid_err(hdev, "cannot create sysfs group\n");
 
 	return 0;
 err_free:

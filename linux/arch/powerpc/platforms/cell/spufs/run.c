@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #define DEBUG
 
 #include <linux/wait.h>
@@ -327,7 +326,7 @@ static int spu_process_callback(struct spu_context *ctx)
 	spu_ret = -ENOSYS;
 	npc += 4;
 
-	if (s.nr_ret < NR_syscalls) {
+	if (s.nr_ret < __NR_syscalls) {
 		spu_release(ctx);
 		/* do actual system call from here */
 		spu_ret = spu_sys_callback(&s);
@@ -436,14 +435,14 @@ long spufs_run_spu(struct spu_context *ctx, u32 *npc, u32 *event)
 
 	/* Note: we don't need to force_sig SIGTRAP on single-step
 	 * since we have TIF_SINGLESTEP set, thus the kernel will do
-	 * it upon return from the syscall anyway.
+	 * it upon return from the syscall anyawy
 	 */
 	if (unlikely(status & SPU_STATUS_SINGLE_STEP))
 		ret = -ERESTARTSYS;
 
 	else if (unlikely((status & SPU_STATUS_STOPPED_BY_STOP)
 	    && (status >> SPU_STOP_STATUS_SHIFT) == 0x3fff)) {
-		force_sig(SIGTRAP);
+		force_sig(SIGTRAP, current);
 		ret = -ERESTARTSYS;
 	}
 

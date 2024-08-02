@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * NFS server file handle treatment.
  *
@@ -60,20 +59,14 @@ static int nfsd_acceptable(void *expv, struct dentry *dentry)
  * the write call).
  */
 static inline __be32
-nfsd_mode_check(struct svc_rqst *rqstp, struct dentry *dentry,
-		umode_t requested)
+nfsd_mode_check(struct svc_rqst *rqstp, umode_t mode, umode_t requested)
 {
-	umode_t mode = d_inode(dentry)->i_mode & S_IFMT;
+	mode &= S_IFMT;
 
 	if (requested == 0) /* the caller doesn't care */
 		return nfs_ok;
-	if (mode == requested) {
-		if (mode == S_IFDIR && !d_can_lookup(dentry)) {
-			WARN_ON_ONCE(1);
-			return nfserr_notdir;
-		}
+	if (mode == requested)
 		return nfs_ok;
-	}
 	/*
 	 * v4 has an error more specific than err_notdir which we should
 	 * return in preference to err_notdir:
@@ -87,23 +80,13 @@ nfsd_mode_check(struct svc_rqst *rqstp, struct dentry *dentry,
 	return nfserr_inval;
 }
 
-static bool nfsd_originating_port_ok(struct svc_rqst *rqstp, int flags)
-{
-	if (flags & NFSEXP_INSECURE_PORT)
-		return true;
-	/* We don't require gss requests to use low ports: */
-	if (rqstp->rq_cred.cr_flavor >= RPC_AUTH_GSS)
-		return true;
-	return test_bit(RQ_SECURE, &rqstp->rq_flags);
-}
-
 static __be32 nfsd_setuser_and_check_port(struct svc_rqst *rqstp,
 					  struct svc_export *exp)
 {
 	int flags = nfsexp_flags(rqstp, exp);
 
 	/* Check if the request originated from a secure port. */
-	if (!nfsd_originating_port_ok(rqstp, flags)) {
+	if (!test_bit(RQ_SECURE, &rqstp->rq_flags) && !(flags & NFSEXP_INSECURE_PORT)) {
 		RPC_IFDEBUG(char buf[RPC_MAX_ADDRBUFLEN]);
 		dprintk("nfsd: request from insecure port %s!\n",
 		        svc_print_addr(rqstp, buf, sizeof(buf)));
@@ -315,7 +298,7 @@ out:
  * that it expects something not of the given type.
  *
  * @access is formed from the NFSD_MAY_* constants defined in
- * fs/nfsd/vfs.h.
+ * include/linux/nfsd/nfsd.h.
  */
 __be32
 fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type, int access)
@@ -357,7 +340,7 @@ fh_verify(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type, int access)
 	if (error)
 		goto out;
 
-	error = nfsd_mode_check(rqstp, dentry, type);
+	error = nfsd_mode_check(rqstp, d_inode(dentry)->i_mode, type);
 	if (error)
 		goto out;
 
@@ -443,7 +426,7 @@ static bool is_root_export(struct svc_export *exp)
 
 static struct super_block *exp_sb(struct svc_export *exp)
 {
-	return exp->ex_path.dentry->d_sb;
+	return d_inode(exp->ex_path.dentry)->i_sb;
 }
 
 static bool fsid_type_ok_for_exp(u8 fsid_type, struct svc_export *exp)
@@ -451,7 +434,7 @@ static bool fsid_type_ok_for_exp(u8 fsid_type, struct svc_export *exp)
 	switch (fsid_type) {
 	case FSID_DEV:
 		if (!old_valid_dev(exp_sb(exp)->s_dev))
-			return false;
+			return 0;
 		/* FALL THROUGH */
 	case FSID_MAJOR_MINOR:
 	case FSID_ENCODE_DEV:
@@ -461,13 +444,13 @@ static bool fsid_type_ok_for_exp(u8 fsid_type, struct svc_export *exp)
 	case FSID_UUID8:
 	case FSID_UUID16:
 		if (!is_root_export(exp))
-			return false;
+			return 0;
 		/* fall through */
 	case FSID_UUID4_INUM:
 	case FSID_UUID16_INUM:
 		return exp->ex_uuid != NULL;
 	}
-	return true;
+	return 1;
 }
 
 
@@ -550,7 +533,7 @@ fh_compose(struct svc_fh *fhp, struct svc_export *exp, struct dentry *dentry,
 	 * the reference filehandle (if it is in the same export)
 	 * or the export options.
 	 */
-	set_version_and_fsid_type(fhp, exp, ref_fh);
+	 set_version_and_fsid_type(fhp, exp, ref_fh);
 
 	if (ref_fh == fhp)
 		fh_put(ref_fh);

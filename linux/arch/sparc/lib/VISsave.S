@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * VISsave.S: Code for saving FPU register state for
  *            VIS routines. One should not call this directly,
@@ -14,7 +13,6 @@
 #include <asm/ptrace.h>
 #include <asm/visasm.h>
 #include <asm/thread_info.h>
-#include <asm/export.h>
 
 	/* On entry: %o5=current FPRS value, %g7 is callers address */
 	/* May clobber %o5, %g1, %g2, %g3, %g7, %icc, %xcc */
@@ -81,4 +79,3 @@ vis1:	ldub		[%g6 + TI_FPSAVED], %g3
 80:	jmpl		%g7 + %g0, %g0
 	 nop
 ENDPROC(VISenter)
-EXPORT_SYMBOL(VISenter)

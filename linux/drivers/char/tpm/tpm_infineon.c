@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Description:
  * Device Driver for the Infineon Technologies
@@ -9,6 +8,11 @@
  * Sirrix AG - security technologies <tpmdd@sirrix.com> and
  * Applied Data Security Group, Ruhr-University Bochum, Germany
  * Project-Homepage: http://www.trust.rub.de/projects/linux-device-driver-infineon-tpm/ 
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, version 2 of the
+ * License.
  */
 
 #include <linux/init.h>
@@ -187,13 +191,13 @@ static int wait(struct tpm_chip *chip, int wait_for_bit)
 		/* check the status-register if wait_for_bit is set */
 		if (status & 1 << wait_for_bit)
 			break;
-		tpm_msleep(TPM_MSLEEP_TIME);
+		msleep(TPM_MSLEEP_TIME);
 	}
 	if (i == TPM_MAX_TRIES) {	/* timeout occurs */
 		if (wait_for_bit == STAT_XFE)
-			dev_err(&chip->dev, "Timeout in wait(STAT_XFE)\n");
+			dev_err(chip->pdev, "Timeout in wait(STAT_XFE)\n");
 		if (wait_for_bit == STAT_RDA)
-			dev_err(&chip->dev, "Timeout in wait(STAT_RDA)\n");
+			dev_err(chip->pdev, "Timeout in wait(STAT_RDA)\n");
 		return -EIO;
 	}
 	return 0;
@@ -216,24 +220,24 @@ static void wait_and_send(struct tpm_chip *chip, u8 sendbyte)
 static void tpm_wtx(struct tpm_chip *chip)
 {
 	number_of_wtx++;
-	dev_info(&chip->dev, "Granting WTX (%02d / %02d)\n",
+	dev_info(chip->pdev, "Granting WTX (%02d / %02d)\n",
 		 number_of_wtx, TPM_MAX_WTX_PACKAGES);
 	wait_and_send(chip, TPM_VL_VER);
 	wait_and_send(chip, TPM_CTRL_WTX);
 	wait_and_send(chip, 0x00);
 	wait_and_send(chip, 0x00);
-	tpm_msleep(TPM_WTX_MSLEEP_TIME);
+	msleep(TPM_WTX_MSLEEP_TIME);
 }
 
 static void tpm_wtx_abort(struct tpm_chip *chip)
 {
-	dev_info(&chip->dev, "Aborting WTX\n");
+	dev_info(chip->pdev, "Aborting WTX\n");
 	wait_and_send(chip, TPM_VL_VER);
 	wait_and_send(chip, TPM_CTRL_WTX_ABORT);
 	wait_and_send(chip, 0x00);
 	wait_and_send(chip, 0x00);
 	number_of_wtx = 0;
-	tpm_msleep(TPM_WTX_MSLEEP_TIME);
+	msleep(TPM_WTX_MSLEEP_TIME);
 }
 
 static int tpm_inf_recv(struct tpm_chip *chip, u8 * buf, size_t count)
@@ -253,7 +257,7 @@ recv_begin:
 	}
 
 	if (buf[0] != TPM_VL_VER) {
-		dev_err(&chip->dev,
+		dev_err(chip->pdev,
 			"Wrong transport protocol implementation!\n");
 		return -EIO;
 	}
@@ -268,7 +272,7 @@ recv_begin:
 		}
 
 		if ((size == 0x6D00) && (buf[1] == 0x80)) {
-			dev_err(&chip->dev, "Error handling on vendor layer!\n");
+			dev_err(chip->pdev, "Error handling on vendor layer!\n");
 			return -EIO;
 		}
 
@@ -280,7 +284,7 @@ recv_begin:
 	}
 
 	if (buf[1] == TPM_CTRL_WTX) {
-		dev_info(&chip->dev, "WTX-package received\n");
+		dev_info(chip->pdev, "WTX-package received\n");
 		if (number_of_wtx < TPM_MAX_WTX_PACKAGES) {
 			tpm_wtx(chip);
 			goto recv_begin;
@@ -291,14 +295,14 @@ recv_begin:
 	}
 
 	if (buf[1] == TPM_CTRL_WTX_ABORT_ACK) {
-		dev_info(&chip->dev, "WTX-abort acknowledged\n");
+		dev_info(chip->pdev, "WTX-abort acknowledged\n");
 		return size;
 	}
 
 	if (buf[1] == TPM_CTRL_ERROR) {
-		dev_err(&chip->dev, "ERROR-package received:\n");
+		dev_err(chip->pdev, "ERROR-package received:\n");
 		if (buf[4] == TPM_INF_NAK)
-			dev_err(&chip->dev,
+			dev_err(chip->pdev,
 				"-> Negative acknowledgement"
 				" - retransmit command!\n");
 		return -EIO;
@@ -317,7 +321,7 @@ static int tpm_inf_send(struct tpm_chip *chip, u8 * buf, size_t count)
 
 	ret = empty_fifo(chip, 1);
 	if (ret) {
-		dev_err(&chip->dev, "Timeout while clearing FIFO\n");
+		dev_err(chip->pdev, "Timeout while clearing FIFO\n");
 		return -EIO;
 	}
 
@@ -350,7 +354,7 @@ static int tpm_inf_send(struct tpm_chip *chip, u8 * buf, size_t count)
 	for (i = 0; i < count; i++) {
 		wait_and_send(chip, buf[i]);
 	}
-	return 0;
+	return count;
 }
 
 static void tpm_inf_cancel(struct tpm_chip *chip)
@@ -393,7 +397,7 @@ static int tpm_inf_pnp_probe(struct pnp_dev *dev,
 	int vendorid[2];
 	int version[2];
 	int productid[2];
-	const char *chipname;
+	char chipname[20];
 	struct tpm_chip *chip;
 
 	/* read IO-ports through PnP */
@@ -484,13 +488,13 @@ static int tpm_inf_pnp_probe(struct pnp_dev *dev,
 
 	switch ((productid[0] << 8) | productid[1]) {
 	case 6:
-		chipname = " (SLD 9630 TT 1.1)";
+		snprintf(chipname, sizeof(chipname), " (SLD 9630 TT 1.1)");
 		break;
 	case 11:
-		chipname = " (SLB 9635 TT 1.2)";
+		snprintf(chipname, sizeof(chipname), " (SLB 9635 TT 1.2)");
 		break;
 	default:
-		chipname = " (unknown chip)";
+		snprintf(chipname, sizeof(chipname), " (unknown chip)");
 		break;
 	}
 

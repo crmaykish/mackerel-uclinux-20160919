@@ -22,7 +22,6 @@
 #include <engine/falcon.h>
 
 #include <core/gpuobj.h>
-#include <subdev/mc.h>
 #include <subdev/timer.h>
 #include <engine/fifo.h>
 
@@ -100,7 +99,7 @@ nvkm_falcon_fini(struct nvkm_engine *engine, bool suspend)
 	const u32 base = falcon->addr;
 
 	if (!suspend) {
-		nvkm_memory_unref(&falcon->core);
+		nvkm_memory_del(&falcon->core);
 		if (falcon->external) {
 			vfree(falcon->data.data);
 			vfree(falcon->code.data);
@@ -108,10 +107,8 @@ nvkm_falcon_fini(struct nvkm_engine *engine, bool suspend)
 		}
 	}
 
-	if (nvkm_mc_enabled(device, engine->subdev.index)) {
-		nvkm_mask(device, base + 0x048, 0x00000003, 0x00000000);
-		nvkm_wr32(device, base + 0x014, 0xffffffff);
-	}
+	nvkm_mask(device, base + 0x048, 0x00000003, 0x00000000);
+	nvkm_wr32(device, base + 0x014, 0xffffffff);
 	return 0;
 }
 
@@ -351,6 +348,6 @@ nvkm_falcon_new_(const struct nvkm_falcon_func *func,
 	falcon->data.size = func->data.size;
 	*pengine = &falcon->engine;
 
-	return nvkm_engine_ctor(&nvkm_falcon, device, index,
+	return nvkm_engine_ctor(&nvkm_falcon, device, index, func->pmc_enable,
 				enable, &falcon->engine);
 }

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_STOP_MACHINE
 #define _LINUX_STOP_MACHINE
 
@@ -30,13 +29,12 @@ struct cpu_stop_work {
 
 int stop_one_cpu(unsigned int cpu, cpu_stop_fn_t fn, void *arg);
 int stop_two_cpus(unsigned int cpu1, unsigned int cpu2, cpu_stop_fn_t fn, void *arg);
-bool stop_one_cpu_nowait(unsigned int cpu, cpu_stop_fn_t fn, void *arg,
+void stop_one_cpu_nowait(unsigned int cpu, cpu_stop_fn_t fn, void *arg,
 			 struct cpu_stop_work *work_buf);
 int stop_cpus(const struct cpumask *cpumask, cpu_stop_fn_t fn, void *arg);
 int try_stop_cpus(const struct cpumask *cpumask, cpu_stop_fn_t fn, void *arg);
 void stop_machine_park(int cpu);
 void stop_machine_unpark(int cpu);
-void stop_machine_yield(const struct cpumask *cpumask);
 
 #else	/* CONFIG_SMP */
 
@@ -67,7 +65,7 @@ static void stop_one_cpu_nowait_workfn(struct work_struct *work)
 	preempt_enable();
 }
 
-static inline bool stop_one_cpu_nowait(unsigned int cpu,
+static inline void stop_one_cpu_nowait(unsigned int cpu,
 				       cpu_stop_fn_t fn, void *arg,
 				       struct cpu_stop_work *work_buf)
 {
@@ -76,10 +74,7 @@ static inline bool stop_one_cpu_nowait(unsigned int cpu,
 		work_buf->fn = fn;
 		work_buf->arg = arg;
 		schedule_work(&work_buf->work);
-		return true;
 	}
-
-	return false;
 }
 
 static inline int stop_cpus(const struct cpumask *cpumask,
@@ -118,29 +113,15 @@ static inline int try_stop_cpus(const struct cpumask *cpumask,
  * @fn() runs.
  *
  * This can be thought of as a very heavy write lock, equivalent to
- * grabbing every spinlock in the kernel.
- *
- * Protects against CPU hotplug.
- */
+ * grabbing every spinlock in the kernel. */
 int stop_machine(cpu_stop_fn_t fn, void *data, const struct cpumask *cpus);
-
-/**
- * stop_machine_cpuslocked: freeze the machine on all CPUs and run this function
- * @fn: the function to run
- * @data: the data ptr for the @fn()
- * @cpus: the cpus to run the @fn() on (NULL = any online cpu)
- *
- * Same as above. Must be called from with in a cpus_read_lock() protected
- * region. Avoids nested calls to cpus_read_lock().
- */
-int stop_machine_cpuslocked(cpu_stop_fn_t fn, void *data, const struct cpumask *cpus);
 
 int stop_machine_from_inactive_cpu(cpu_stop_fn_t fn, void *data,
 				   const struct cpumask *cpus);
 #else	/* CONFIG_SMP || CONFIG_HOTPLUG_CPU */
 
-static __always_inline int stop_machine_cpuslocked(cpu_stop_fn_t fn, void *data,
-					  const struct cpumask *cpus)
+static inline int stop_machine(cpu_stop_fn_t fn, void *data,
+				 const struct cpumask *cpus)
 {
 	unsigned long flags;
 	int ret;
@@ -150,15 +131,8 @@ static __always_inline int stop_machine_cpuslocked(cpu_stop_fn_t fn, void *data,
 	return ret;
 }
 
-static __always_inline int
-stop_machine(cpu_stop_fn_t fn, void *data, const struct cpumask *cpus)
-{
-	return stop_machine_cpuslocked(fn, data, cpus);
-}
-
-static __always_inline int
-stop_machine_from_inactive_cpu(cpu_stop_fn_t fn, void *data,
-			       const struct cpumask *cpus)
+static inline int stop_machine_from_inactive_cpu(cpu_stop_fn_t fn, void *data,
+						 const struct cpumask *cpus)
 {
 	return stop_machine(fn, data, cpus);
 }

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Linux driver for System z and s390 unit record devices
  * (z/VM virtual punch, reader, printer)
@@ -16,7 +15,7 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/cio.h>
 #include <asm/ccwdev.h>
 #include <asm/debug.h>
@@ -111,7 +110,7 @@ static struct urdev *urdev_alloc(struct ccw_device *cdev)
 	mutex_init(&urd->io_mutex);
 	init_waitqueue_head(&urd->wait);
 	spin_lock_init(&urd->open_lock);
-	refcount_set(&urd->ref_count,  1);
+	atomic_set(&urd->ref_count,  1);
 	urd->cdev = cdev;
 	get_device(&cdev->dev);
 	return urd;
@@ -127,7 +126,7 @@ static void urdev_free(struct urdev *urd)
 
 static void urdev_get(struct urdev *urd)
 {
-	refcount_inc(&urd->ref_count);
+	atomic_inc(&urd->ref_count);
 }
 
 static struct urdev *urdev_get_from_cdev(struct ccw_device *cdev)
@@ -160,7 +159,7 @@ static struct urdev *urdev_get_from_devno(u16 devno)
 
 static void urdev_put(struct urdev *urd)
 {
-	if (refcount_dec_and_test(&urd->ref_count))
+	if (atomic_dec_and_test(&urd->ref_count))
 		urdev_free(urd);
 }
 
@@ -242,7 +241,7 @@ static struct ccw1 *alloc_chan_prog(const char __user *ubuf, int rec_count,
 	 * That means we allocate room for CCWs to cover count/reclen
 	 * records plus a NOP.
 	 */
-	cpa = kcalloc(rec_count + 1, sizeof(struct ccw1),
+	cpa = kzalloc((rec_count + 1) * sizeof(struct ccw1),
 		      GFP_KERNEL | GFP_DMA);
 	if (!cpa)
 		return ERR_PTR(-ENOMEM);
@@ -307,11 +306,10 @@ static void ur_int_handler(struct ccw_device *cdev, unsigned long intparm,
 {
 	struct urdev *urd;
 
-	if (!IS_ERR(irb)) {
-		TRACE("ur_int_handler: intparm=0x%lx cstat=%02x dstat=%02x res=%u\n",
-		      intparm, irb->scsw.cmd.cstat, irb->scsw.cmd.dstat,
-		      irb->scsw.cmd.count);
-	}
+	TRACE("ur_int_handler: intparm=0x%lx cstat=%02x dstat=%02x res=%u\n",
+	      intparm, irb->scsw.cmd.cstat, irb->scsw.cmd.dstat,
+	      irb->scsw.cmd.count);
+
 	if (!intparm) {
 		TRACE("ur_int_handler: unsolicited interrupt\n");
 		return;
@@ -784,11 +782,24 @@ static int ur_release(struct inode *inode, struct file *file)
 
 static loff_t ur_llseek(struct file *file, loff_t offset, int whence)
 {
+	loff_t newpos;
+
 	if ((file->f_flags & O_ACCMODE) != O_RDONLY)
 		return -ESPIPE; /* seek allowed only for reader */
 	if (offset % PAGE_SIZE)
 		return -ESPIPE; /* only multiples of 4K allowed */
-	return no_seek_end_llseek(file, offset, whence);
+	switch (whence) {
+	case 0: /* SEEK_SET */
+		newpos = offset;
+		break;
+	case 1: /* SEEK_CUR */
+		newpos = file->f_pos + offset;
+		break;
+	default:
+		return -EINVAL;
+	}
+	file->f_pos = newpos;
+	return newpos;
 }
 
 static const struct file_operations ur_fops = {
@@ -893,9 +904,10 @@ static int ur_set_online(struct ccw_device *cdev)
 	}
 
 	urd->char_device->ops = &ur_fops;
+	urd->char_device->dev = MKDEV(major, minor);
 	urd->char_device->owner = ur_fops.owner;
 
-	rc = cdev_add(urd->char_device, MKDEV(major, minor), 1);
+	rc = cdev_add(urd->char_device, urd->char_device->dev, 1);
 	if (rc)
 		goto fail_free_cdev;
 	if (urd->cdev->id.cu_type == READER_PUNCH_DEVTYPE) {
@@ -946,7 +958,7 @@ static int ur_set_offline_force(struct ccw_device *cdev, int force)
 		rc = -EBUSY;
 		goto fail_urdev_put;
 	}
-	if (!force && (refcount_read(&urd->ref_count) > 2)) {
+	if (!force && (atomic_read(&urd->ref_count) > 2)) {
 		/* There is still a user of urd (e.g. ur_open) */
 		TRACE("ur_set_offline: BUSY\n");
 		rc = -EBUSY;

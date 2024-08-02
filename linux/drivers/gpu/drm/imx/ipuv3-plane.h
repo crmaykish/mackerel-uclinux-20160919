@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __IPUV3_PLANE_H__
 #define __IPUV3_PLANE_H__
 
@@ -19,14 +18,18 @@ struct ipu_plane {
 
 	struct ipu_soc		*ipu;
 	struct ipuv3_channel	*ipu_ch;
-	struct ipuv3_channel	*alpha_ch;
 	struct dmfc_channel	*dmfc;
 	struct ipu_dp		*dp;
 
 	int			dma;
 	int			dp_flow;
 
-	bool			disabling;
+	int			x;
+	int			y;
+	int			w;
+	int			h;
+
+	bool			enabled;
 };
 
 struct ipu_plane *ipu_plane_init(struct drm_device *dev, struct ipu_soc *ipu,
@@ -41,13 +44,14 @@ int ipu_plane_mode_set(struct ipu_plane *plane, struct drm_crtc *crtc,
 		       uint32_t src_x, uint32_t src_y, uint32_t src_w,
 		       uint32_t src_h, bool interlaced);
 
+void ipu_plane_enable(struct ipu_plane *plane);
+void ipu_plane_disable(struct ipu_plane *plane);
+int ipu_plane_set_base(struct ipu_plane *plane, struct drm_framebuffer *fb,
+		       int x, int y);
+
 int ipu_plane_get_resources(struct ipu_plane *plane);
 void ipu_plane_put_resources(struct ipu_plane *plane);
 
 int ipu_plane_irq(struct ipu_plane *plane);
-
-void ipu_plane_disable(struct ipu_plane *ipu_plane, bool disable_dp_channel);
-void ipu_plane_disable_deferred(struct drm_plane *plane);
-bool ipu_plane_atomic_update_pending(struct drm_plane *plane);
 
 #endif

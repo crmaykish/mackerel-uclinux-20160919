@@ -1,7 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
  /***************************************************************************
  *
  * Copyright (C) 2007,2008  SMSC
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  ***************************************************************************
  */
@@ -64,7 +76,9 @@ struct smsc9420_pdata {
 	bool rx_csum;
 	u32 msg_enable;
 
+	struct phy_device *phy_dev;
 	struct mii_bus *mii_bus;
+	int phy_irq[PHY_MAX_ADDR];
 	int last_duplex;
 	int last_carrier;
 };
@@ -213,10 +227,36 @@ static int smsc9420_eeprom_reload(struct smsc9420_pdata *pd)
 /* Standard ioctls for mii-tool */
 static int smsc9420_do_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
-	if (!netif_running(dev) || !dev->phydev)
+	struct smsc9420_pdata *pd = netdev_priv(dev);
+
+	if (!netif_running(dev) || !pd->phy_dev)
 		return -EINVAL;
 
-	return phy_mii_ioctl(dev->phydev, ifr, cmd);
+	return phy_mii_ioctl(pd->phy_dev, ifr, cmd);
+}
+
+static int smsc9420_ethtool_get_settings(struct net_device *dev,
+					 struct ethtool_cmd *cmd)
+{
+	struct smsc9420_pdata *pd = netdev_priv(dev);
+
+	if (!pd->phy_dev)
+		return -ENODEV;
+
+	cmd->maxtxpkt = 1;
+	cmd->maxrxpkt = 1;
+	return phy_ethtool_gset(pd->phy_dev, cmd);
+}
+
+static int smsc9420_ethtool_set_settings(struct net_device *dev,
+					 struct ethtool_cmd *cmd)
+{
+	struct smsc9420_pdata *pd = netdev_priv(dev);
+
+	if (!pd->phy_dev)
+		return -ENODEV;
+
+	return phy_ethtool_sset(pd->phy_dev, cmd);
 }
 
 static void smsc9420_ethtool_get_drvinfo(struct net_device *netdev,
@@ -242,6 +282,16 @@ static void smsc9420_ethtool_set_msglevel(struct net_device *netdev, u32 data)
 	pd->msg_enable = data;
 }
 
+static int smsc9420_ethtool_nway_reset(struct net_device *netdev)
+{
+	struct smsc9420_pdata *pd = netdev_priv(netdev);
+
+	if (!pd->phy_dev)
+		return -ENODEV;
+
+	return phy_start_aneg(pd->phy_dev);
+}
+
 static int smsc9420_ethtool_getregslen(struct net_device *dev)
 {
 	/* all smsc9420 registers plus all phy registers */
@@ -253,7 +303,7 @@ smsc9420_ethtool_getregs(struct net_device *dev, struct ethtool_regs *regs,
 			 void *buf)
 {
 	struct smsc9420_pdata *pd = netdev_priv(dev);
-	struct phy_device *phy_dev = dev->phydev;
+	struct phy_device *phy_dev = pd->phy_dev;
 	unsigned int i, j = 0;
 	u32 *data = buf;
 
@@ -266,8 +316,7 @@ smsc9420_ethtool_getregs(struct net_device *dev, struct ethtool_regs *regs,
 		return;
 
 	for (i = 0; i <= 31; i++)
-		data[j++] = smsc9420_mii_read(phy_dev->mdio.bus,
-					      phy_dev->mdio.addr, i);
+		data[j++] = smsc9420_mii_read(phy_dev->bus, phy_dev->addr, i);
 }
 
 static void smsc9420_eeprom_enable_access(struct smsc9420_pdata *pd)
@@ -394,10 +443,12 @@ static int smsc9420_ethtool_set_eeprom(struct net_device *dev,
 }
 
 static const struct ethtool_ops smsc9420_ethtool_ops = {
+	.get_settings = smsc9420_ethtool_get_settings,
+	.set_settings = smsc9420_ethtool_set_settings,
 	.get_drvinfo = smsc9420_ethtool_get_drvinfo,
 	.get_msglevel = smsc9420_ethtool_get_msglevel,
 	.set_msglevel = smsc9420_ethtool_set_msglevel,
-	.nway_reset = phy_ethtool_nway_reset,
+	.nway_reset = smsc9420_ethtool_nway_reset,
 	.get_link = ethtool_op_get_link,
 	.get_eeprom_len = smsc9420_ethtool_get_eeprom_len,
 	.get_eeprom = smsc9420_ethtool_get_eeprom,
@@ -405,8 +456,6 @@ static const struct ethtool_ops smsc9420_ethtool_ops = {
 	.get_regs_len = smsc9420_ethtool_getregslen,
 	.get_regs = smsc9420_ethtool_getregs,
 	.get_ts_info = ethtool_op_get_ts_info,
-	.get_link_ksettings = phy_ethtool_get_link_ksettings,
-	.set_link_ksettings = phy_ethtool_set_link_ksettings,
 };
 
 /* Sets the device MAC address to dev_addr */
@@ -687,7 +736,7 @@ static int smsc9420_stop(struct net_device *dev)
 	ulong flags;
 
 	BUG_ON(!pd);
-	BUG_ON(!dev->phydev);
+	BUG_ON(!pd->phy_dev);
 
 	/* disable master interrupt */
 	spin_lock_irqsave(&pd->int_lock, flags);
@@ -708,9 +757,10 @@ static int smsc9420_stop(struct net_device *dev)
 
 	smsc9420_dmac_soft_reset(pd);
 
-	phy_stop(dev->phydev);
+	phy_stop(pd->phy_dev);
 
-	phy_disconnect(dev->phydev);
+	phy_disconnect(pd->phy_dev);
+	pd->phy_dev = NULL;
 	mdiobus_unregister(pd->mii_bus);
 	mdiobus_free(pd->mii_bus);
 
@@ -849,7 +899,7 @@ static int smsc9420_rx_poll(struct napi_struct *napi, int budget)
 	smsc9420_pci_flush_write(pd);
 
 	if (work_done < budget) {
-		napi_complete_done(&pd->napi, work_done);
+		napi_complete(&pd->napi);
 
 		/* re-enable RX DMA interrupts */
 		dma_intr_ena = smsc9420_reg_read(pd, DMAC_INTR_ENA);
@@ -1043,8 +1093,7 @@ static void smsc9420_set_multicast_list(struct net_device *dev)
 
 static void smsc9420_phy_update_flowcontrol(struct smsc9420_pdata *pd)
 {
-	struct net_device *dev = pd->dev;
-	struct phy_device *phy_dev = dev->phydev;
+	struct phy_device *phy_dev = pd->phy_dev;
 	u32 flow;
 
 	if (phy_dev->duplex == DUPLEX_FULL) {
@@ -1073,7 +1122,7 @@ static void smsc9420_phy_update_flowcontrol(struct smsc9420_pdata *pd)
 static void smsc9420_phy_adjust_link(struct net_device *dev)
 {
 	struct smsc9420_pdata *pd = netdev_priv(dev);
-	struct phy_device *phy_dev = dev->phydev;
+	struct phy_device *phy_dev = pd->phy_dev;
 	int carrier;
 
 	if (phy_dev->duplex != pd->last_duplex) {
@@ -1106,16 +1155,19 @@ static int smsc9420_mii_probe(struct net_device *dev)
 	struct smsc9420_pdata *pd = netdev_priv(dev);
 	struct phy_device *phydev = NULL;
 
-	BUG_ON(dev->phydev);
+	BUG_ON(pd->phy_dev);
 
 	/* Device only supports internal PHY at address 1 */
-	phydev = mdiobus_get_phy(pd->mii_bus, 1);
-	if (!phydev) {
+	if (!pd->mii_bus->phy_map[1]) {
 		netdev_err(dev, "no PHY found at address 1\n");
 		return -ENODEV;
 	}
 
-	phydev = phy_connect(dev, phydev_name(phydev),
+	phydev = pd->mii_bus->phy_map[1];
+	netif_info(pd, probe, pd->dev, "PHY addr %d, phy_id 0x%08X\n",
+		   phydev->addr, phydev->phy_id);
+
+	phydev = phy_connect(dev, dev_name(&phydev->dev),
 			     smsc9420_phy_adjust_link, PHY_INTERFACE_MODE_MII);
 
 	if (IS_ERR(phydev)) {
@@ -1123,13 +1175,15 @@ static int smsc9420_mii_probe(struct net_device *dev)
 		return PTR_ERR(phydev);
 	}
 
-	phy_set_max_speed(phydev, SPEED_100);
+	netdev_info(dev, "attached PHY driver [%s] (mii_bus:phy_addr=%s, irq=%d)\n",
+		    phydev->drv->name, dev_name(&phydev->dev), phydev->irq);
 
 	/* mask with MAC supported features */
-	phy_support_asym_pause(phydev);
+	phydev->supported &= (PHY_BASIC_FEATURES | SUPPORTED_Pause |
+			      SUPPORTED_Asym_Pause);
+	phydev->advertising = phydev->supported;
 
-	phy_attached_info(phydev);
-
+	pd->phy_dev = phydev;
 	pd->last_duplex = -1;
 	pd->last_carrier = -1;
 
@@ -1139,7 +1193,7 @@ static int smsc9420_mii_probe(struct net_device *dev)
 static int smsc9420_mii_init(struct net_device *dev)
 {
 	struct smsc9420_pdata *pd = netdev_priv(dev);
-	int err = -ENXIO;
+	int err = -ENXIO, i;
 
 	pd->mii_bus = mdiobus_alloc();
 	if (!pd->mii_bus) {
@@ -1152,6 +1206,9 @@ static int smsc9420_mii_init(struct net_device *dev)
 	pd->mii_bus->priv = pd;
 	pd->mii_bus->read = smsc9420_mii_read;
 	pd->mii_bus->write = smsc9420_mii_write;
+	pd->mii_bus->irq = pd->phy_irq;
+	for (i = 0; i < PHY_MAX_ADDR; ++i)
+		pd->mii_bus->irq[i] = PHY_POLL;
 
 	/* Mask all PHYs except ID 1 (internal) */
 	pd->mii_bus->phy_mask = ~(1 << 1);
@@ -1390,7 +1447,7 @@ static int smsc9420_open(struct net_device *dev)
 	}
 
 	/* Bring the PHY up */
-	phy_start(dev->phydev);
+	phy_start(pd->phy_dev);
 
 	napi_enable(&pd->napi);
 

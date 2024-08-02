@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * lp5523.c - LP5523, LP55231 LED Driver
  *
@@ -7,6 +6,20 @@
  *
  * Contact: Samu Onkalo <samu.p.onkalo@nokia.com>
  *          Milo(Woogyom) Kim <milo.kim@ti.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+ * 02110-1301 USA
  */
 
 #include <linux/delay.h>
@@ -155,13 +168,13 @@ static int lp5523_post_init_device(struct lp55xx_chip *chip)
 static void lp5523_load_engine(struct lp55xx_chip *chip)
 {
 	enum lp55xx_engine_index idx = chip->engine_idx;
-	static const u8 mask[] = {
+	u8 mask[] = {
 		[LP55XX_ENGINE_1] = LP5523_MODE_ENG1_M,
 		[LP55XX_ENGINE_2] = LP5523_MODE_ENG2_M,
 		[LP55XX_ENGINE_3] = LP5523_MODE_ENG3_M,
 	};
 
-	static const u8 val[] = {
+	u8 val[] = {
 		[LP55XX_ENGINE_1] = LP5523_LOAD_ENG1,
 		[LP55XX_ENGINE_2] = LP5523_LOAD_ENG2,
 		[LP55XX_ENGINE_3] = LP5523_LOAD_ENG3,
@@ -175,7 +188,7 @@ static void lp5523_load_engine(struct lp55xx_chip *chip)
 static void lp5523_load_engine_and_select_page(struct lp55xx_chip *chip)
 {
 	enum lp55xx_engine_index idx = chip->engine_idx;
-	static const u8 page_sel[] = {
+	u8 page_sel[] = {
 		[LP55XX_ENGINE_1] = LP5523_PAGE_ENG1,
 		[LP55XX_ENGINE_2] = LP5523_PAGE_ENG2,
 		[LP55XX_ENGINE_3] = LP5523_PAGE_ENG3,
@@ -195,7 +208,7 @@ static void lp5523_stop_all_engines(struct lp55xx_chip *chip)
 static void lp5523_stop_engine(struct lp55xx_chip *chip)
 {
 	enum lp55xx_engine_index idx = chip->engine_idx;
-	static const u8 mask[] = {
+	u8 mask[] = {
 		[LP55XX_ENGINE_1] = LP5523_MODE_ENG1_M,
 		[LP55XX_ENGINE_2] = LP5523_MODE_ENG2_M,
 		[LP55XX_ENGINE_3] = LP5523_MODE_ENG3_M,
@@ -305,14 +318,12 @@ static int lp5523_init_program_engine(struct lp55xx_chip *chip)
 
 	/* Let the programs run for couple of ms and check the engine status */
 	usleep_range(3000, 6000);
-	ret = lp55xx_read(chip, LP5523_REG_STATUS, &status);
-	if (ret)
-		goto out;
+	lp55xx_read(chip, LP5523_REG_STATUS, &status);
 	status &= LP5523_ENG_STATUS_MASK;
 
 	if (status != LP5523_ENG_STATUS_MASK) {
 		dev_err(&chip->cl->dev,
-			"could not configure LED engine, status = 0x%.2x\n",
+			"cound not configure LED engine, status = 0x%.2x\n",
 			status);
 		ret = -1;
 	}
@@ -376,7 +387,7 @@ static void lp5523_firmware_loaded(struct lp55xx_chip *chip)
 	}
 
 	/*
-	 * Program memory sequence
+	 * Program momery sequence
 	 *  1) set engine mode to "LOAD"
 	 *  2) write firmware data into program memory
 	 */
@@ -494,7 +505,7 @@ static int lp5523_load_mux(struct lp55xx_chip *chip, u16 mux, int nr)
 {
 	struct lp55xx_engine *engine = &chip->engines[nr - 1];
 	int ret;
-	static const u8 mux_page[] = {
+	u8 mux_page[] = {
 		[LP55XX_ENGINE_1] = LP5523_PAGE_MUX1,
 		[LP55XX_ENGINE_2] = LP5523_PAGE_MUX2,
 		[LP55XX_ENGINE_3] = LP5523_PAGE_MUX3,
@@ -791,16 +802,16 @@ leave:
 	return ret;
 }
 
-static int lp5523_led_brightness(struct lp55xx_led *led)
+static void lp5523_led_brightness_work(struct work_struct *work)
 {
+	struct lp55xx_led *led = container_of(work, struct lp55xx_led,
+					      brightness_work);
 	struct lp55xx_chip *chip = led->chip;
-	int ret;
 
 	mutex_lock(&chip->lock);
-	ret = lp55xx_write(chip, LP5523_REG_LED_PWM_BASE + led->chan_nr,
+	lp55xx_write(chip, LP5523_REG_LED_PWM_BASE + led->chan_nr,
 		     led->brightness);
 	mutex_unlock(&chip->lock);
-	return ret;
 }
 
 static LP55XX_DEV_ATTR_RW(engine1_mode, show_engine1_mode, store_engine1_mode);
@@ -856,7 +867,7 @@ static struct lp55xx_device_config lp5523_cfg = {
 	},
 	.max_channel  = LP5523_MAX_LEDS,
 	.post_init_device   = lp5523_post_init_device,
-	.brightness_fn      = lp5523_led_brightness,
+	.brightness_work_fn = lp5523_led_brightness_work,
 	.set_led_current    = lp5523_set_led_current,
 	.firmware_cb        = lp5523_firmware_loaded,
 	.run_engine         = lp5523_run_engine,
@@ -887,8 +898,8 @@ static int lp5523_probe(struct i2c_client *client,
 	if (!chip)
 		return -ENOMEM;
 
-	led = devm_kcalloc(&client->dev,
-			pdata->num_channels, sizeof(*led), GFP_KERNEL);
+	led = devm_kzalloc(&client->dev,
+			sizeof(*led) * pdata->num_channels, GFP_KERNEL);
 	if (!led)
 		return -ENOMEM;
 

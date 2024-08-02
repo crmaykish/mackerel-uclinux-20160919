@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * f_obex.c -- USB CDC OBEX function driver
  *
@@ -6,6 +5,11 @@
  * Contact: Felipe Balbi <felipe.balbi@nokia.com>
  *
  * Based on f_acm.c by Al Borchers and David Brownell.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 /* #define VERBOSE_DEBUG */
@@ -360,8 +364,7 @@ static int obex_bind(struct usb_configuration *c, struct usb_function *f)
 	obex_hs_ep_out_desc.bEndpointAddress =
 		obex_fs_ep_out_desc.bEndpointAddress;
 
-	status = usb_assign_descriptors(f, fs_function, hs_function, NULL,
-					NULL);
+	status = usb_assign_descriptors(f, fs_function, hs_function, NULL);
 	if (status)
 		goto fail;
 
@@ -407,7 +410,7 @@ static struct configfs_attribute *acm_attrs[] = {
 	NULL,
 };
 
-static const struct config_item_type obex_func_type = {
+static struct config_item_type obex_func_type = {
 	.ct_item_ops	= &obex_item_ops,
 	.ct_attrs	= acm_attrs,
 	.ct_owner	= THIS_MODULE,

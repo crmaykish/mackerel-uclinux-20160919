@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * nvec_ps2: mouse driver for a NVIDIA compliant embedded controller
  *
@@ -7,6 +6,11 @@
  * Authors:  Pierre-Hugues Husson <phhusson@free.fr>
  *           Ilya Petrov <ilya.muromec@gmail.com>
  *           Marc Dietrich <marvin24@gmx.de>
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -74,7 +78,7 @@ static int nvec_ps2_notifier(struct notifier_block *nb,
 			     unsigned long event_type, void *data)
 {
 	int i;
-	unsigned char *msg = data;
+	unsigned char *msg = (unsigned char *)data;
 
 	switch (event_type) {
 	case NVEC_PS2_EVT:
@@ -102,12 +106,13 @@ static int nvec_mouse_probe(struct platform_device *pdev)
 {
 	struct nvec_chip *nvec = dev_get_drvdata(pdev->dev.parent);
 	struct serio *ser_dev;
+	char mouse_reset[] = { NVEC_PS2, SEND_COMMAND, PSMOUSE_RST, 3 };
 
-	ser_dev = kzalloc(sizeof(*ser_dev), GFP_KERNEL);
+	ser_dev = devm_kzalloc(&pdev->dev, sizeof(struct serio), GFP_KERNEL);
 	if (!ser_dev)
 		return -ENOMEM;
 
-	ser_dev->id.type = SERIO_8042;
+	ser_dev->id.type = SERIO_PS_PSTHRU;
 	ser_dev->write = ps2_sendcommand;
 	ser_dev->start = ps2_startstreaming;
 	ser_dev->stop = ps2_stopstreaming;
@@ -121,6 +126,9 @@ static int nvec_mouse_probe(struct platform_device *pdev)
 	nvec_register_notifier(nvec, &ps2_dev.notifier, 0);
 
 	serio_register_port(ser_dev);
+
+	/* mouse reset */
+	nvec_write_async(nvec, mouse_reset, sizeof(mouse_reset));
 
 	return 0;
 }

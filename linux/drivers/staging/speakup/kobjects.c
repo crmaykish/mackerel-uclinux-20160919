@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Speakup kobject implementation
  *
@@ -27,7 +26,7 @@
  * This is called when a user reads the characters or chartab sys file.
  */
 static ssize_t chars_chartab_show(struct kobject *kobj,
-				  struct kobj_attribute *attr, char *buf)
+	struct kobj_attribute *attr, char *buf)
 {
 	int i;
 	int len = 0;
@@ -80,7 +79,7 @@ static ssize_t chars_chartab_show(struct kobject *kobj,
  * character descriptions or chartab entries.
  */
 static void report_char_chartab_status(int reset, int received, int used,
-				       int rejected, int do_characters)
+	int rejected, int do_characters)
 {
 	static char const *object_type[] = {
 		"character class entries",
@@ -93,13 +92,13 @@ static void report_char_chartab_status(int reset, int received, int used,
 		pr_info("%s reset to defaults\n", object_type[do_characters]);
 	} else if (received) {
 		len = snprintf(buf, sizeof(buf),
-			       " updated %d of %d %s\n",
-			       used, received, object_type[do_characters]);
+				" updated %d of %d %s\n",
+				used, received, object_type[do_characters]);
 		if (rejected)
 			snprintf(buf + (len - 1), sizeof(buf) - (len - 1),
 				 " with %d reject%s\n",
 				 rejected, rejected > 1 ? "s" : "");
-		pr_info("%s", buf);
+		printk(buf);
 	}
 }
 
@@ -107,10 +106,9 @@ static void report_char_chartab_status(int reset, int received, int used,
  * This is called when a user changes the characters or chartab parameters.
  */
 static ssize_t chars_chartab_store(struct kobject *kobj,
-				   struct kobj_attribute *attr,
-				   const char *buf, size_t count)
+	struct kobj_attribute *attr, const char *buf, size_t count)
 {
-	char *cp = (char *)buf;
+	char *cp = (char *) buf;
 	char *end = cp + count; /* the null at the end of the buffer */
 	char *linefeed = NULL;
 	char keyword[MAX_DESC_LEN + 1];
@@ -131,6 +129,7 @@ static ssize_t chars_chartab_store(struct kobject *kobj,
 
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
 	while (cp < end) {
+
 		while ((cp < end) && (*cp == ' ' || *cp == '\t'))
 			cp++;
 
@@ -154,10 +153,6 @@ static ssize_t chars_chartab_store(struct kobject *kobj,
 			continue;
 		}
 
-		/*
-		 * Do not replace with kstrtoul:
-		 * here we need temp to be updated
-		 */
 		index = simple_strtoul(cp, &temp, 10);
 		if (index > 255) {
 			rejected++;
@@ -219,7 +214,7 @@ static ssize_t chars_chartab_store(struct kobject *kobj,
 
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
 	report_char_chartab_status(reset, received, used, rejected,
-				   do_characters);
+		do_characters);
 	return retval;
 }
 
@@ -227,7 +222,7 @@ static ssize_t chars_chartab_store(struct kobject *kobj,
  * This is called when a user reads the keymap parameter.
  */
 static ssize_t keymap_show(struct kobject *kobj, struct kobj_attribute *attr,
-			   char *buf)
+	char *buf)
 {
 	char *cp = buf;
 	int i;
@@ -256,14 +251,14 @@ static ssize_t keymap_show(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 	cp += sprintf(cp, "0, %d\n", KEY_MAP_VER);
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
-	return (int)(cp - buf);
+	return (int)(cp-buf);
 }
 
 /*
  * This is called when a user changes the keymap parameter.
  */
 static ssize_t keymap_store(struct kobject *kobj, struct kobj_attribute *attr,
-			    const char *buf, size_t count)
+	const char *buf, size_t count)
 {
 	int i;
 	ssize_t ret = count;
@@ -293,13 +288,13 @@ static ssize_t keymap_store(struct kobject *kobj, struct kobj_attribute *attr,
 		cp = spk_s2uchar(cp, cp1);
 		cp1++;
 	}
-	i = (int)cp1[-2] + 1;
-	i *= (int)cp1[-1] + 1;
+	i = (int)cp1[-2]+1;
+	i *= (int)cp1[-1]+1;
 	i += 2; /* 0 and last map ver */
 	if (cp1[-3] != KEY_MAP_VER || cp1[-1] > 10 ||
-	    i + SHIFT_TBL_SIZE + 4 >= sizeof(spk_key_buf)) {
+			i+SHIFT_TBL_SIZE+4 >= sizeof(spk_key_buf)) {
 		pr_warn("i %d %d %d %d\n", i,
-			(int)cp1[-3], (int)cp1[-2], (int)cp1[-1]);
+				(int)cp1[-3], (int)cp1[-2], (int)cp1[-1]);
 		kfree(in_buff);
 		spin_unlock_irqrestore(&speakup_info.spinlock, flags);
 		return -EINVAL;
@@ -313,7 +308,7 @@ static ssize_t keymap_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (i != 0 || cp1[-1] != KEY_MAP_VER || cp1[-2] != 0) {
 		ret = -EINVAL;
 		pr_warn("end %d %d %d %d\n", i,
-			(int)cp1[-3], (int)cp1[-2], (int)cp1[-1]);
+				(int)cp1[-3], (int)cp1[-2], (int)cp1[-1]);
 	} else {
 		if (spk_set_key_info(in_buff, spk_key_buf)) {
 			spk_set_key_info(spk_key_defaults, spk_key_buf);
@@ -330,7 +325,7 @@ static ssize_t keymap_store(struct kobject *kobj, struct kobj_attribute *attr,
  * This is called when a user changes the value of the silent parameter.
  */
 static ssize_t silent_store(struct kobject *kobj, struct kobj_attribute *attr,
-			    const char *buf, size_t count)
+	const char *buf, size_t count)
 {
 	int len;
 	struct vc_data *vc = vc_cons[fg_console].d;
@@ -349,15 +344,15 @@ static ssize_t silent_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return -EINVAL;
 	}
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
-	if (ch & 2) {
+	if (ch&2) {
 		shut = 1;
 		spk_do_flush();
 	} else {
 		shut = 0;
 	}
-	if (ch & 4)
+	if (ch&4)
 		shut |= 0x40;
-	if (ch & 1)
+	if (ch&1)
 		spk_shut_up |= shut;
 	else
 		spk_shut_up &= ~shut;
@@ -369,7 +364,7 @@ static ssize_t silent_store(struct kobject *kobj, struct kobj_attribute *attr,
  * This is called when a user reads the synth setting.
  */
 static ssize_t synth_show(struct kobject *kobj, struct kobj_attribute *attr,
-			  char *buf)
+	char *buf)
 {
 	int rv;
 
@@ -384,7 +379,7 @@ static ssize_t synth_show(struct kobject *kobj, struct kobj_attribute *attr,
  * This is called when a user requests to change synthesizers.
  */
 static ssize_t synth_store(struct kobject *kobj, struct kobj_attribute *attr,
-			   const char *buf, size_t count)
+	const char *buf, size_t count)
 {
 	int len;
 	char new_synth_name[10];
@@ -392,12 +387,12 @@ static ssize_t synth_store(struct kobject *kobj, struct kobj_attribute *attr,
 	len = strlen(buf);
 	if (len < 2 || len > 9)
 		return -EINVAL;
-	memcpy(new_synth_name, buf, len);
+	strncpy(new_synth_name, buf, len);
 	if (new_synth_name[len - 1] == '\n')
 		len--;
 	new_synth_name[len] = '\0';
 	spk_strlwr(new_synth_name);
-	if (synth && !strcmp(new_synth_name, synth->name)) {
+	if ((synth != NULL) && (!strcmp(new_synth_name, synth->name))) {
 		pr_warn("%s already in use\n", new_synth_name);
 	} else if (synth_init(new_synth_name) != 0) {
 		pr_warn("failed to init synth %s\n", new_synth_name);
@@ -410,20 +405,17 @@ static ssize_t synth_store(struct kobject *kobj, struct kobj_attribute *attr,
  * This is called when text is sent to the synth via the synth_direct file.
  */
 static ssize_t synth_direct_store(struct kobject *kobj,
-				  struct kobj_attribute *attr,
-				  const char *buf, size_t count)
+	struct kobj_attribute *attr, const char *buf, size_t count)
 {
 	u_char tmp[256];
 	int len;
 	int bytes;
 	const char *ptr = buf;
-	unsigned long flags;
 
 	if (!synth)
 		return -EPERM;
 
 	len = strlen(buf);
-	spin_lock_irqsave(&speakup_info.spinlock, flags);
 	while (len > 0) {
 		bytes = min_t(size_t, len, 250);
 		strncpy(tmp, ptr, bytes);
@@ -433,7 +425,6 @@ static ssize_t synth_direct_store(struct kobject *kobj,
 		ptr += bytes;
 		len -= bytes;
 	}
-	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
 	return count;
 }
 
@@ -441,7 +432,7 @@ static ssize_t synth_direct_store(struct kobject *kobj,
  * This function is called when a user reads the version.
  */
 static ssize_t version_show(struct kobject *kobj, struct kobj_attribute *attr,
-			    char *buf)
+	char *buf)
 {
 	char *cp;
 
@@ -457,7 +448,7 @@ static ssize_t version_show(struct kobject *kobj, struct kobj_attribute *attr,
  * This is called when a user reads the punctuation settings.
  */
 static ssize_t punc_show(struct kobject *kobj, struct kobj_attribute *attr,
-			 char *buf)
+	char *buf)
 {
 	int i;
 	char *cp = buf;
@@ -477,27 +468,27 @@ static ssize_t punc_show(struct kobject *kobj, struct kobj_attribute *attr,
 	var = spk_get_punc_var(p_header->var_id);
 	if (!var) {
 		pr_warn("var is null, p_header->var_id is %i\n",
-			p_header->var_id);
+				p_header->var_id);
 		return -EINVAL;
 	}
 
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
-	pb = (struct st_bits_data *)&spk_punc_info[var->value];
+	pb = (struct st_bits_data *) &spk_punc_info[var->value];
 	mask = pb->mask;
 	for (i = 33; i < 128; i++) {
-		if (!(spk_chartab[i] & mask))
+		if (!(spk_chartab[i]&mask))
 			continue;
 		*cp++ = (char)i;
 	}
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
-	return cp - buf;
+	return cp-buf;
 }
 
 /*
  * This is called when a user changes the punctuation settings.
  */
 static ssize_t punc_store(struct kobject *kobj, struct kobj_attribute *attr,
-			  const char *buf, size_t count)
+			 const char *buf, size_t count)
 {
 	int x;
 	struct st_var_header *p_header;
@@ -519,11 +510,11 @@ static ssize_t punc_store(struct kobject *kobj, struct kobj_attribute *attr,
 	var = spk_get_punc_var(p_header->var_id);
 	if (!var) {
 		pr_warn("var is null, p_header->var_id is %i\n",
-			p_header->var_id);
+				p_header->var_id);
 		return -EINVAL;
 	}
 
-	memcpy(punc_buf, buf, x);
+	strncpy(punc_buf, buf, x);
 
 	while (x && punc_buf[x - 1] == '\n')
 		x--;
@@ -544,12 +535,12 @@ static ssize_t punc_store(struct kobject *kobj, struct kobj_attribute *attr,
  * This function is called when a user reads one of the variable parameters.
  */
 ssize_t spk_var_show(struct kobject *kobj, struct kobj_attribute *attr,
-		     char *buf)
+	char *buf)
 {
 	int rv = 0;
 	struct st_var_header *param;
 	struct var_t *var;
-	char *cp1;
+		char *cp1;
 	char *cp;
 	char ch;
 	unsigned long flags;
@@ -559,7 +550,7 @@ ssize_t spk_var_show(struct kobject *kobj, struct kobj_attribute *attr,
 		return -EINVAL;
 
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
-	var = (struct var_t *)param->data;
+	var = (struct var_t *) param->data;
 	switch (param->var_type) {
 	case VAR_NUM:
 	case VAR_TIME:
@@ -581,14 +572,14 @@ ssize_t spk_var_show(struct kobject *kobj, struct kobj_attribute *attr,
 			*cp1++ = '"';
 			*cp1++ = '\n';
 			*cp1 = '\0';
-			rv = cp1 - buf;
+			rv = cp1-buf;
 		} else {
 			rv = sprintf(buf, "\"\"\n");
 		}
 		break;
 	default:
 		rv = sprintf(buf, "Bad parameter  %s, type %i\n",
-			     param->name, param->var_type);
+			param->name, param->var_type);
 		break;
 	}
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
@@ -600,7 +591,7 @@ EXPORT_SYMBOL_GPL(spk_var_show);
  * Used to reset either default_pitch or default_vol.
  */
 static inline void spk_reset_default_value(char *header_name,
-					   int *synth_default_value, int idx)
+					int *synth_default_value, int idx)
 {
 	struct st_var_header *param;
 
@@ -620,7 +611,7 @@ static inline void spk_reset_default_value(char *header_name,
  * variable parameters.
  */
 ssize_t spk_var_store(struct kobject *kobj, struct kobj_attribute *attr,
-		      const char *buf, size_t count)
+			 const char *buf, size_t count)
 {
 	struct st_var_header *param;
 	int ret;
@@ -669,9 +660,9 @@ ssize_t spk_var_store(struct kobject *kobj, struct kobj_attribute *attr,
 			var_data = param->data;
 			value = var_data->u.n.value;
 			spk_reset_default_value("pitch", synth->default_pitch,
-						value);
+				value);
 			spk_reset_default_value("vol", synth->default_vol,
-						value);
+				value);
 		}
 		break;
 	case VAR_STRING:
@@ -686,7 +677,7 @@ ssize_t spk_var_store(struct kobject *kobj, struct kobj_attribute *attr,
 		ret = spk_set_string_var(cp, param, len);
 		if (ret == -E2BIG)
 			pr_warn("value too long for %s\n",
-				param->name);
+					param->name);
 		break;
 	default:
 		pr_warn("%s unknown type %d\n",
@@ -706,7 +697,7 @@ EXPORT_SYMBOL_GPL(spk_var_store);
  */
 
 static ssize_t message_show_helper(char *buf, enum msg_index_t first,
-				   enum msg_index_t last)
+	enum msg_index_t last)
 {
 	size_t bufsize = PAGE_SIZE;
 	char *buf_pointer = buf;
@@ -719,7 +710,7 @@ static ssize_t message_show_helper(char *buf, enum msg_index_t first,
 		if (bufsize <= 1)
 			break;
 		printed = scnprintf(buf_pointer, bufsize, "%d\t%s\n",
-				    index, spk_msg_get(cursor));
+			index, spk_msg_get(cursor));
 		buf_pointer += printed;
 		bufsize -= printed;
 	}
@@ -728,7 +719,7 @@ static ssize_t message_show_helper(char *buf, enum msg_index_t first,
 }
 
 static void report_msg_status(int reset, int received, int used,
-			      int rejected, char *groupname)
+	int rejected, char *groupname)
 {
 	int len;
 	char buf[160];
@@ -744,14 +735,14 @@ static void report_msg_status(int reset, int received, int used,
 			snprintf(buf + (len - 1), sizeof(buf) - (len - 1),
 				 " with %d reject%s\n",
 				 rejected, rejected > 1 ? "s" : "");
-		pr_info("%s", buf);
+		printk(buf);
 	}
 }
 
 static ssize_t message_store_helper(const char *buf, size_t count,
-				    struct msg_group_t *group)
+	struct msg_group_t *group)
 {
-	char *cp = (char *)buf;
+	char *cp = (char *) buf;
 	char *end = cp + count;
 	char *linefeed = NULL;
 	char *temp = NULL;
@@ -768,6 +759,7 @@ static ssize_t message_store_helper(const char *buf, size_t count,
 	enum msg_index_t curmessage;
 
 	while (cp < end) {
+
 		while ((cp < end) && (*cp == ' ' || *cp == '\t'))
 			cp++;
 
@@ -791,10 +783,6 @@ static ssize_t message_store_helper(const char *buf, size_t count,
 			continue;
 		}
 
-		/*
-		 * Do not replace with kstrtoul:
-		 * here we need temp to be updated
-		 */
 		index = simple_strtoul(cp, &temp, 10);
 
 		while ((temp < linefeed) && (*temp == ' ' || *temp == '\t'))
@@ -837,15 +825,13 @@ static ssize_t message_store_helper(const char *buf, size_t count,
 }
 
 static ssize_t message_show(struct kobject *kobj,
-			    struct kobj_attribute *attr, char *buf)
+	struct kobj_attribute *attr, char *buf)
 {
 	ssize_t retval = 0;
 	struct msg_group_t *group = spk_find_msg_group(attr->attr.name);
 	unsigned long flags;
 
-	if (WARN_ON(!group))
-		return -EINVAL;
-
+	BUG_ON(!group);
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
 	retval = message_show_helper(buf, group->start, group->end);
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
@@ -853,13 +839,11 @@ static ssize_t message_show(struct kobject *kobj,
 }
 
 static ssize_t message_store(struct kobject *kobj, struct kobj_attribute *attr,
-			     const char *buf, size_t count)
+	const char *buf, size_t count)
 {
 	struct msg_group_t *group = spk_find_msg_group(attr->attr.name);
 
-	if (WARN_ON(!group))
-		return -EINVAL;
-
+	BUG_ON(!group);
 	return message_store_helper(buf, count, group);
 }
 
@@ -878,66 +862,66 @@ static struct kobj_attribute version_attribute =
 	__ATTR_RO(version);
 
 static struct kobj_attribute delimiters_attribute =
-	__ATTR(delimiters, 0644, punc_show, punc_store);
+	__ATTR(delimiters, S_IWUSR|S_IRUGO, punc_show, punc_store);
 static struct kobj_attribute ex_num_attribute =
-	__ATTR(ex_num, 0644, punc_show, punc_store);
+	__ATTR(ex_num, S_IWUSR|S_IRUGO, punc_show, punc_store);
 static struct kobj_attribute punc_all_attribute =
-	__ATTR(punc_all, 0644, punc_show, punc_store);
+	__ATTR(punc_all, S_IWUSR|S_IRUGO, punc_show, punc_store);
 static struct kobj_attribute punc_most_attribute =
-	__ATTR(punc_most, 0644, punc_show, punc_store);
+	__ATTR(punc_most, S_IWUSR|S_IRUGO, punc_show, punc_store);
 static struct kobj_attribute punc_some_attribute =
-	__ATTR(punc_some, 0644, punc_show, punc_store);
+	__ATTR(punc_some, S_IWUSR|S_IRUGO, punc_show, punc_store);
 static struct kobj_attribute repeats_attribute =
-	__ATTR(repeats, 0644, punc_show, punc_store);
+	__ATTR(repeats, S_IWUSR|S_IRUGO, punc_show, punc_store);
 
 static struct kobj_attribute attrib_bleep_attribute =
-	__ATTR(attrib_bleep, 0644, spk_var_show, spk_var_store);
+	__ATTR(attrib_bleep, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute bell_pos_attribute =
-	__ATTR(bell_pos, 0644, spk_var_show, spk_var_store);
+	__ATTR(bell_pos, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute bleep_time_attribute =
-	__ATTR(bleep_time, 0644, spk_var_show, spk_var_store);
+	__ATTR(bleep_time, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute bleeps_attribute =
-	__ATTR(bleeps, 0644, spk_var_show, spk_var_store);
+	__ATTR(bleeps, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute cursor_time_attribute =
-	__ATTR(cursor_time, 0644, spk_var_show, spk_var_store);
+	__ATTR(cursor_time, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute key_echo_attribute =
-	__ATTR(key_echo, 0644, spk_var_show, spk_var_store);
+	__ATTR(key_echo, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute no_interrupt_attribute =
-	__ATTR(no_interrupt, 0644, spk_var_show, spk_var_store);
+	__ATTR(no_interrupt, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute punc_level_attribute =
-	__ATTR(punc_level, 0644, spk_var_show, spk_var_store);
+	__ATTR(punc_level, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute reading_punc_attribute =
-	__ATTR(reading_punc, 0644, spk_var_show, spk_var_store);
+	__ATTR(reading_punc, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute say_control_attribute =
-	__ATTR(say_control, 0644, spk_var_show, spk_var_store);
+	__ATTR(say_control, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute say_word_ctl_attribute =
-	__ATTR(say_word_ctl, 0644, spk_var_show, spk_var_store);
+	__ATTR(say_word_ctl, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 static struct kobj_attribute spell_delay_attribute =
-	__ATTR(spell_delay, 0644, spk_var_show, spk_var_store);
+	__ATTR(spell_delay, S_IWUSR|S_IRUGO, spk_var_show, spk_var_store);
 
 /*
  * These attributes are i18n related.
  */
 static struct kobj_attribute announcements_attribute =
-	__ATTR(announcements, 0644, message_show, message_store);
+	__ATTR(announcements, S_IWUSR|S_IRUGO, message_show, message_store);
 static struct kobj_attribute characters_attribute =
-	__ATTR(characters, 0644, chars_chartab_show,
+	__ATTR(characters, S_IWUSR|S_IRUGO, chars_chartab_show,
 	       chars_chartab_store);
 static struct kobj_attribute chartab_attribute =
-	__ATTR(chartab, 0644, chars_chartab_show,
+	__ATTR(chartab, S_IWUSR|S_IRUGO, chars_chartab_show,
 	       chars_chartab_store);
 static struct kobj_attribute ctl_keys_attribute =
-	__ATTR(ctl_keys, 0644, message_show, message_store);
+	__ATTR(ctl_keys, S_IWUSR|S_IRUGO, message_show, message_store);
 static struct kobj_attribute colors_attribute =
-	__ATTR(colors, 0644, message_show, message_store);
+	__ATTR(colors, S_IWUSR|S_IRUGO, message_show, message_store);
 static struct kobj_attribute formatted_attribute =
-	__ATTR(formatted, 0644, message_show, message_store);
+	__ATTR(formatted, S_IWUSR|S_IRUGO, message_show, message_store);
 static struct kobj_attribute function_names_attribute =
-	__ATTR(function_names, 0644, message_show, message_store);
+	__ATTR(function_names, S_IWUSR|S_IRUGO, message_show, message_store);
 static struct kobj_attribute key_names_attribute =
-	__ATTR(key_names, 0644, message_show, message_store);
+	__ATTR(key_names, S_IWUSR|S_IRUGO, message_show, message_store);
 static struct kobj_attribute states_attribute =
-	__ATTR(states, 0644, message_show, message_store);
+	__ATTR(states, S_IWUSR|S_IRUGO, message_show, message_store);
 
 /*
  * Create groups of attributes so that we can create and destroy them all
@@ -989,11 +973,11 @@ static struct attribute *i18n_attrs[] = {
  * created for the attributes with the directory being the name of the
  * attribute group.
  */
-static const struct attribute_group main_attr_group = {
+static struct attribute_group main_attr_group = {
 	.attrs = main_attrs,
 };
 
-static const struct attribute_group i18n_attr_group = {
+static struct attribute_group i18n_attr_group = {
 	.attrs = i18n_attrs,
 	.name = "i18n",
 };

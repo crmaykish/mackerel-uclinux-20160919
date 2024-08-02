@@ -1,15 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/compiler.h>
-#include <stdio.h>
-#include <string.h>
 #include "builtin.h"
 #include "perf.h"
 #include "debug.h"
-#include <subcmd/parse-options.h>
-#include "data-convert.h"
+#include "parse-options.h"
 #include "data-convert-bt.h"
 
-typedef int (*data_cmd_fn_t)(int argc, const char **argv);
+typedef int (*data_cmd_fn_t)(int argc, const char **argv, const char *prefix);
 
 struct data_cmd {
 	const char	*name;
@@ -53,26 +49,23 @@ static const char * const data_convert_usage[] = {
 	NULL
 };
 
-static int cmd_data_convert(int argc, const char **argv)
+static int cmd_data_convert(int argc, const char **argv,
+			    const char *prefix __maybe_unused)
 {
 	const char *to_ctf     = NULL;
-	struct perf_data_convert_opts opts = {
-		.force = false,
-		.all = false,
-	};
+	bool force = false;
 	const struct option options[] = {
 		OPT_INCR('v', "verbose", &verbose, "be more verbose"),
 		OPT_STRING('i', "input", &input_name, "file", "input file name"),
 #ifdef HAVE_LIBBABELTRACE_SUPPORT
 		OPT_STRING(0, "to-ctf", &to_ctf, NULL, "Convert to CTF format"),
 #endif
-		OPT_BOOLEAN('f', "force", &opts.force, "don't complain, do it"),
-		OPT_BOOLEAN(0, "all", &opts.all, "Convert all events"),
+		OPT_BOOLEAN('f', "force", &force, "don't complain, do it"),
 		OPT_END()
 	};
 
 #ifndef HAVE_LIBBABELTRACE_SUPPORT
-	pr_err("No conversion support compiled in. perf should be compiled with environment variables LIBBABELTRACE=1 and LIBBABELTRACE_DIR=/path/to/libbabeltrace/\n");
+	pr_err("No conversion support compiled in.\n");
 	return -1;
 #endif
 
@@ -85,7 +78,7 @@ static int cmd_data_convert(int argc, const char **argv)
 
 	if (to_ctf) {
 #ifdef HAVE_LIBBABELTRACE_SUPPORT
-		return bt_convert__perf2ctf(input_name, to_ctf, &opts);
+		return bt_convert__perf2ctf(input_name, to_ctf, force);
 #else
 		pr_err("The libbabeltrace support is not compiled in.\n");
 		return -1;
@@ -100,7 +93,7 @@ static struct data_cmd data_cmds[] = {
 	{ .name = NULL, },
 };
 
-int cmd_data(int argc, const char **argv)
+int cmd_data(int argc, const char **argv, const char *prefix)
 {
 	struct data_cmd *cmd;
 	const char *cmdstr;
@@ -120,7 +113,7 @@ int cmd_data(int argc, const char **argv)
 		if (strcmp(cmd->name, cmdstr))
 			continue;
 
-		return cmd->fn(argc, argv);
+		return cmd->fn(argc, argv, prefix);
 	}
 
 	pr_err("Unknown command: %s\n", cmdstr);

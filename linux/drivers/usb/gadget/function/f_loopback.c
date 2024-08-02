@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * f_loopback.c - USB peripheral loopback configuration driver
  *
  * Copyright (C) 2003-2008 David Brownell
  * Copyright (C) 2008 by Nokia Corporation
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 /* #define VERBOSE_DEBUG */
@@ -207,7 +211,7 @@ autoconf_fail:
 	ss_loop_sink_desc.bEndpointAddress = fs_loop_sink_desc.bEndpointAddress;
 
 	ret = usb_assign_descriptors(f, fs_loopback_descs, hs_loopback_descs,
-			ss_loopback_descs, ss_loopback_descs);
+			ss_loopback_descs);
 	if (ret)
 		return ret;
 
@@ -304,7 +308,9 @@ static void disable_loopback(struct f_loopback *loop)
 
 static inline struct usb_request *lb_alloc_ep_req(struct usb_ep *ep, int len)
 {
-	return alloc_ep_req(ep, len);
+	struct f_loopback	*loop = ep->driver_data;
+
+	return alloc_ep_req(ep, len, loop->buflen);
 }
 
 static int alloc_requests(struct usb_composite_dev *cdev,
@@ -327,7 +333,7 @@ static int alloc_requests(struct usb_composite_dev *cdev,
 		if (!in_req)
 			goto fail;
 
-		out_req = lb_alloc_ep_req(loop->out_ep, loop->buflen);
+		out_req = lb_alloc_ep_req(loop->out_ep, 0);
 		if (!out_req)
 			goto fail_in;
 
@@ -552,7 +558,7 @@ static struct configfs_attribute *lb_attrs[] = {
 	NULL,
 };
 
-static const struct config_item_type lb_func_type = {
+static struct config_item_type lb_func_type = {
 	.ct_item_ops    = &lb_item_ops,
 	.ct_attrs	= lb_attrs,
 	.ct_owner       = THIS_MODULE,
@@ -587,9 +593,13 @@ DECLARE_USB_FUNCTION(Loopback, loopback_alloc_instance, loopback_alloc);
 
 int __init lb_modinit(void)
 {
-	return usb_function_register(&Loopbackusb_func);
-}
+	int ret;
 
+	ret = usb_function_register(&Loopbackusb_func);
+	if (ret)
+		return ret;
+	return ret;
+}
 void __exit lb_modexit(void)
 {
 	usb_function_unregister(&Loopbackusb_func);

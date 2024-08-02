@@ -1,9 +1,10 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * fireworks.h - a part of driver for Fireworks based devices
  *
  * Copyright (c) 2009-2010 Clemens Ladisch
  * Copyright (c) 2013-2014 Takashi Sakamoto
+ *
+ * Licensed under the terms of the GNU General Public License, version 2.
  */
 #ifndef SOUND_FIREWORKS_H_INCLUDED
 #define SOUND_FIREWORKS_H_INCLUDED
@@ -16,7 +17,6 @@
 #include <linux/mod_devicetable.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-#include <linux/sched/signal.h>
 
 #include <sound/core.h>
 #include <sound/initval.h>
@@ -65,9 +65,6 @@ struct snd_efw {
 	struct mutex mutex;
 	spinlock_t lock;
 
-	bool registered;
-	struct delayed_work dwork;
-
 	/* for transaction */
 	u32 seqnum;
 	bool resp_addr_changable;
@@ -84,11 +81,13 @@ struct snd_efw {
 	unsigned int pcm_capture_channels[SND_EFW_MULTIPLIER_MODES];
 	unsigned int pcm_playback_channels[SND_EFW_MULTIPLIER_MODES];
 
+	struct amdtp_stream *master;
 	struct amdtp_stream tx_stream;
 	struct amdtp_stream rx_stream;
 	struct cmp_connection out_conn;
 	struct cmp_connection in_conn;
-	unsigned int substreams_counter;
+	atomic_t capture_substreams;
+	atomic_t playback_substreams;
 
 	/* hardware metering parameters */
 	unsigned int phys_out;
@@ -107,8 +106,7 @@ struct snd_efw {
 	u8 *resp_buf;
 	u8 *pull_ptr;
 	u8 *push_ptr;
-
-	struct amdtp_domain domain;
+	unsigned int resp_queues;
 };
 
 int snd_efw_transaction_cmd(struct fw_unit *unit,
@@ -207,8 +205,7 @@ int snd_efw_command_get_sampling_rate(struct snd_efw *efw, unsigned int *rate);
 int snd_efw_command_set_sampling_rate(struct snd_efw *efw, unsigned int rate);
 
 int snd_efw_stream_init_duplex(struct snd_efw *efw);
-int snd_efw_stream_reserve_duplex(struct snd_efw *efw, unsigned int rate);
-int snd_efw_stream_start_duplex(struct snd_efw *efw);
+int snd_efw_stream_start_duplex(struct snd_efw *efw, unsigned int rate);
 void snd_efw_stream_stop_duplex(struct snd_efw *efw);
 void snd_efw_stream_update_duplex(struct snd_efw *efw);
 void snd_efw_stream_destroy_duplex(struct snd_efw *efw);

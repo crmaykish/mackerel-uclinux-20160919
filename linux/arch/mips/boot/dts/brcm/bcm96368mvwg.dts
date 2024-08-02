@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /dts-v1/;
 
 /include/ "bcm6368.dtsi"
@@ -23,10 +22,10 @@
 };
 
 /* FIXME: need to set up USB_CTRL registers first */
-&ehci {
+&ehci0 {
 	status = "disabled";
 };
 
-&ohci {
+&ohci0 {
 	status = "disabled";
 };

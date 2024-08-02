@@ -35,19 +35,14 @@
  * close to the one of the R600 family (R600 likely being an evolution
  * of the RS600 GART block).
  */
-
-#include <linux/io-64-nonatomic-lo-hi.h>
-
-#include <drm/drm_device.h>
-#include <drm/drm_pci.h>
-#include <drm/drm_vblank.h>
-
-#include "atom.h"
+#include <drm/drmP.h>
 #include "radeon.h"
 #include "radeon_asic.h"
 #include "radeon_audio.h"
-#include "rs600_reg_safe.h"
+#include "atom.h"
 #include "rs600d.h"
+
+#include "rs600_reg_safe.h"
 
 static void rs600_gpu_init(struct radeon_device *rdev);
 int rs600_mc_wait_for_idle(struct radeon_device *rdev);
@@ -115,7 +110,7 @@ void avivo_wait_for_vblank(struct radeon_device *rdev, int crtc)
 	}
 }
 
-void rs600_page_flip(struct radeon_device *rdev, int crtc_id, u64 crtc_base, bool async)
+void rs600_page_flip(struct radeon_device *rdev, int crtc_id, u64 crtc_base)
 {
 	struct radeon_crtc *radeon_crtc = rdev->mode_info.crtcs[crtc_id];
 	u32 tmp = RREG32(AVIVO_D1GRPH_UPDATE + radeon_crtc->crtc_offset);
@@ -126,8 +121,6 @@ void rs600_page_flip(struct radeon_device *rdev, int crtc_id, u64 crtc_base, boo
 	WREG32(AVIVO_D1GRPH_UPDATE + radeon_crtc->crtc_offset, tmp);
 
 	/* update the scanout addresses */
-	WREG32(AVIVO_D1GRPH_FLIP_CONTROL + radeon_crtc->crtc_offset,
-	       async ? AVIVO_D1GRPH_SURFACE_UPDATE_H_RETRACE_EN : 0);
 	WREG32(AVIVO_D1GRPH_SECONDARY_SURFACE_ADDRESS + radeon_crtc->crtc_offset,
 	       (u32)crtc_base);
 	WREG32(AVIVO_D1GRPH_PRIMARY_SURFACE_ADDRESS + radeon_crtc->crtc_offset,
@@ -420,8 +413,7 @@ void rs600_hpd_init(struct radeon_device *rdev)
 		default:
 			break;
 		}
-		if (radeon_connector->hpd.hpd != RADEON_HPD_NONE)
-			enable |= 1 << radeon_connector->hpd.hpd;
+		enable |= 1 << radeon_connector->hpd.hpd;
 		radeon_hpd_set_polarity(rdev, radeon_connector->hpd.hpd);
 	}
 	radeon_irq_kms_enable_hpd(rdev, enable);
@@ -447,13 +439,12 @@ void rs600_hpd_fini(struct radeon_device *rdev)
 		default:
 			break;
 		}
-		if (radeon_connector->hpd.hpd != RADEON_HPD_NONE)
-			disable |= 1 << radeon_connector->hpd.hpd;
+		disable |= 1 << radeon_connector->hpd.hpd;
 	}
 	radeon_irq_kms_disable_hpd(rdev, disable);
 }
 
-int rs600_asic_reset(struct radeon_device *rdev, bool hard)
+int rs600_asic_reset(struct radeon_device *rdev)
 {
 	struct rv515_mc_save save;
 	u32 status, tmp;

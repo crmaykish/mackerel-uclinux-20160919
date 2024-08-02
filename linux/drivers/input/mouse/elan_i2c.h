@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Elan I2C/SMBus Touchpad driver
  *
@@ -9,6 +8,10 @@
  * Based on cyapa driver:
  * copyright (c) 2011-2012 Cypress Semiconductor, Inc.
  * copyright (c) 2011-2012 Google, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation.
  *
  * Trademarks are the property of their respective owners.
  */
@@ -23,8 +26,6 @@
 #define ETP_DISABLE_CALIBRATE	0x0000
 #define ETP_DISABLE_POWER	0x0001
 #define ETP_PRESSURE_OFFSET	25
-
-#define ETP_CALIBRATE_MAX_LEN	3
 
 /* IAP Firmware handling */
 #define ETP_PRODUCT_ID_FORMAT_STRING	"%d.0"
@@ -57,7 +58,7 @@ struct elan_transport_ops {
 
 	int (*get_version)(struct i2c_client *client, bool iap, u8 *version);
 	int (*get_sm_version)(struct i2c_client *client,
-			      u16 *ic_type, u8 *version, u8 *clickpad);
+			      u8* ic_type, u8 *version);
 	int (*get_checksum)(struct i2c_client *client, bool iap, u16 *csum);
 	int (*get_product_id)(struct i2c_client *client, u16 *id);
 
@@ -81,7 +82,6 @@ struct elan_transport_ops {
 	int (*get_report)(struct i2c_client *client, u8 *report);
 	int (*get_pressure_adjustment)(struct i2c_client *client,
 				       int *adjustment);
-	int (*get_pattern)(struct i2c_client *client, u8 *pattern);
 };
 
 extern const struct elan_transport_ops elan_smbus_ops, elan_i2c_ops;

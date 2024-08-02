@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * strlen.S (c) 1995 David Mosberger (davidm@cs.arizona.edu)
  *
@@ -12,7 +11,7 @@
  *	  do this instead of the 9 instructions that
  *	  binary search needs).
  */
-#include <asm/export.h>
+
 	.set noreorder
 	.set noat
 
@@ -56,4 +55,3 @@ done:	subq	$0, $16, $0
 	ret	$31, ($26)
 
 	.end	strlen
-	EXPORT_SYMBOL(strlen)

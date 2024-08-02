@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * IRQ offload/bypass manager
  *
  * Copyright (C) 2015 Red Hat, Inc.
  * Copyright (c) 2015 Linaro Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * Various virtualization hardware acceleration techniques allow bypassing or
  * offloading interrupts received from devices around the host kernel.  Posted
@@ -86,9 +89,6 @@ int irq_bypass_register_producer(struct irq_bypass_producer *producer)
 	struct irq_bypass_producer *tmp;
 	struct irq_bypass_consumer *consumer;
 
-	if (!producer->token)
-		return -EINVAL;
-
 	might_sleep();
 
 	if (!try_module_get(THIS_MODULE))
@@ -136,9 +136,6 @@ void irq_bypass_unregister_producer(struct irq_bypass_producer *producer)
 	struct irq_bypass_producer *tmp;
 	struct irq_bypass_consumer *consumer;
 
-	if (!producer->token)
-		return;
-
 	might_sleep();
 
 	if (!try_module_get(THIS_MODULE))
@@ -180,8 +177,7 @@ int irq_bypass_register_consumer(struct irq_bypass_consumer *consumer)
 	struct irq_bypass_consumer *tmp;
 	struct irq_bypass_producer *producer;
 
-	if (!consumer->token ||
-	    !consumer->add_producer || !consumer->del_producer)
+	if (!consumer->add_producer || !consumer->del_producer)
 		return -EINVAL;
 
 	might_sleep();
@@ -192,7 +188,7 @@ int irq_bypass_register_consumer(struct irq_bypass_consumer *consumer)
 	mutex_lock(&lock);
 
 	list_for_each_entry(tmp, &consumers, node) {
-		if (tmp->token == consumer->token || tmp == consumer) {
+		if (tmp->token == consumer->token) {
 			mutex_unlock(&lock);
 			module_put(THIS_MODULE);
 			return -EBUSY;
@@ -231,9 +227,6 @@ void irq_bypass_unregister_consumer(struct irq_bypass_consumer *consumer)
 	struct irq_bypass_consumer *tmp;
 	struct irq_bypass_producer *producer;
 
-	if (!consumer->token)
-		return;
-
 	might_sleep();
 
 	if (!try_module_get(THIS_MODULE))
@@ -242,7 +235,7 @@ void irq_bypass_unregister_consumer(struct irq_bypass_consumer *consumer)
 	mutex_lock(&lock);
 
 	list_for_each_entry(tmp, &consumers, node) {
-		if (tmp != consumer)
+		if (tmp->token != consumer->token)
 			continue;
 
 		list_for_each_entry(producer, &producers, node) {

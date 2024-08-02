@@ -1,6 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * i8259 interrupt controller driver.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 #undef DEBUG
 
@@ -64,9 +68,9 @@ unsigned int i8259_irq(void)
 		if (!pci_intack)
 			outb(0x0B, 0x20);	/* ISR register */
 		if(~inb(0x20) & 0x80)
-			irq = 0;
+			irq = NO_IRQ;
 	} else if (irq == 0xff)
-		irq = 0;
+		irq = NO_IRQ;
 
 	if (lock)
 		raw_spin_unlock(&i8259_lock);
@@ -141,21 +145,21 @@ static struct resource pic1_iores = {
 	.name = "8259 (master)",
 	.start = 0x20,
 	.end = 0x21,
-	.flags = IORESOURCE_IO | IORESOURCE_BUSY,
+	.flags = IORESOURCE_BUSY,
 };
 
 static struct resource pic2_iores = {
 	.name = "8259 (slave)",
 	.start = 0xa0,
 	.end = 0xa1,
-	.flags = IORESOURCE_IO | IORESOURCE_BUSY,
+	.flags = IORESOURCE_BUSY,
 };
 
 static struct resource pic_edgectrl_iores = {
 	.name = "8259 edge control",
 	.start = 0x4d0,
 	.end = 0x4d1,
-	.flags = IORESOURCE_IO | IORESOURCE_BUSY,
+	.flags = IORESOURCE_BUSY,
 };
 
 static int i8259_host_match(struct irq_domain *h, struct device_node *node,
@@ -234,7 +238,7 @@ void i8259_init(struct device_node *node, unsigned long intack_addr)
 	/* init master interrupt controller */
 	outb(0x11, 0x20); /* Start init sequence */
 	outb(0x00, 0x21); /* Vector base */
-	outb(0x04, 0x21); /* edge triggered, Cascade (slave) on IRQ2 */
+	outb(0x04, 0x21); /* edge tiggered, Cascade (slave) on IRQ2 */
 	outb(0x01, 0x21); /* Select 8086 mode */
 
 	/* init slave interrupt controller */

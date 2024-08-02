@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * RTC related functions
  */
@@ -14,7 +13,7 @@
 #include <asm/x86_init.h>
 #include <asm/time.h>
 #include <asm/intel-mid.h>
-#include <asm/setup.h>
+#include <asm/rtc.h>
 
 #ifdef CONFIG_X86_32
 /*
@@ -39,40 +38,31 @@ EXPORT_SYMBOL(rtc_lock);
  * jump to the next second precisely 500 ms later. Check the Motorola
  * MC146818A or Dallas DS12887 data sheet for details.
  */
-int mach_set_rtc_mmss(const struct timespec64 *now)
+int mach_set_rtc_mmss(const struct timespec *now)
 {
-	unsigned long long nowtime = now->tv_sec;
+	unsigned long nowtime = now->tv_sec;
 	struct rtc_time tm;
 	int retval = 0;
 
-	rtc_time64_to_tm(nowtime, &tm);
+	rtc_time_to_tm(nowtime, &tm);
 	if (!rtc_valid_tm(&tm)) {
-		retval = mc146818_set_time(&tm);
+		retval = set_rtc_time(&tm);
 		if (retval)
 			printk(KERN_ERR "%s: RTC write failed with error %d\n",
 			       __func__, retval);
 	} else {
 		printk(KERN_ERR
-		       "%s: Invalid RTC value: write of %llx to RTC failed\n",
+		       "%s: Invalid RTC value: write of %lx to RTC failed\n",
 			__func__, nowtime);
 		retval = -EINVAL;
 	}
 	return retval;
 }
 
-void mach_get_cmos_time(struct timespec64 *now)
+void mach_get_cmos_time(struct timespec *now)
 {
 	unsigned int status, year, mon, day, hour, min, sec, century = 0;
 	unsigned long flags;
-
-	/*
-	 * If pm_trace abused the RTC as storage, set the timespec to 0,
-	 * which tells the caller that this RTC value is unusable.
-	 */
-	if (!pm_trace_rtc_valid()) {
-		now->tv_sec = now->tv_nsec = 0;
-		return;
-	}
 
 	spin_lock_irqsave(&rtc_lock, flags);
 
@@ -118,7 +108,7 @@ void mach_get_cmos_time(struct timespec64 *now)
 	} else
 		year += CMOS_YEARS_OFFS;
 
-	now->tv_sec = mktime64(year, mon, day, hour, min, sec);
+	now->tv_sec = mktime(year, mon, day, hour, min, sec);
 	now->tv_nsec = 0;
 }
 
@@ -145,13 +135,13 @@ void rtc_cmos_write(unsigned char val, unsigned char addr)
 }
 EXPORT_SYMBOL(rtc_cmos_write);
 
-int update_persistent_clock64(struct timespec64 now)
+int update_persistent_clock(struct timespec now)
 {
 	return x86_platform.set_wallclock(&now);
 }
 
 /* not static: needed by APM */
-void read_persistent_clock64(struct timespec64 *ts)
+void read_persistent_clock(struct timespec *ts)
 {
 	x86_platform.get_wallclock(ts);
 }
@@ -195,7 +185,22 @@ static __init int add_rtc_cmos(void)
 		}
 	}
 #endif
-	if (!x86_platform.legacy.rtc)
+	if (of_have_populated_dt())
+		return 0;
+
+	/* Intel MID platforms don't have ioport rtc */
+	if (intel_mid_identify_cpu())
+		return -ENODEV;
+
+#ifdef CONFIG_ACPI
+	if (acpi_gbl_FADT.boot_flags & ACPI_FADT_NO_CMOS_RTC) {
+		/* This warning can likely go away again in a year or two. */
+		pr_info("ACPI: not registering RTC platform device\n");
+		return -ENODEV;
+	}
+#endif
+
+	if (paravirt_enabled() && !paravirt_has(RTC))
 		return -ENODEV;
 
 	platform_device_register(&rtc_device);

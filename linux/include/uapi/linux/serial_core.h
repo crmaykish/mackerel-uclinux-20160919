@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0+ WITH Linux-syscall-note */
 /*
  *  linux/drivers/char/serial_core.h
  *
@@ -57,6 +56,7 @@
 #define PORT_ALTR_16550_F128 28 /* Altera 16550 UART with 128 FIFOs */
 #define PORT_RT2880	29	/* Ralink RT2880 internal UART */
 #define PORT_16550A_FSL64 30	/* Freescale 16550 UART with 64 FIFOs */
+#define PORT_MAX_8250	30	/* max port ID */
 
 /*
  * ARM specific type numbers.  These are not currently guaranteed
@@ -69,22 +69,11 @@
 #define PORT_CLPS711X	33
 #define PORT_SA1100	34
 #define PORT_UART00	35
-#define PORT_OWL	36
 #define PORT_21285	37
 
 /* Sparc type numbers.  */
 #define PORT_SUNZILOG	38
 #define PORT_SUNSAB	39
-
-/* Nuvoton UART */
-#define PORT_NPCM	40
-
-/* NVIDIA Tegra Combined UART */
-#define PORT_TEGRA_TCU	41
-
-/* Intel EG20 */
-#define PORT_PCH_8LINE	44
-#define PORT_PCH_2LINE	45
 
 /* DEC */
 #define PORT_DZ		46
@@ -93,7 +82,7 @@
 /* Parisc type numbers. */
 #define PORT_MUX	48
 
-/* Atmel AT91 SoC */
+/* Atmel AT91 / AT32 SoC */
 #define PORT_ATMEL	49
 
 /* Macintosh Zilog type numbers */
@@ -129,7 +118,7 @@
 /* Motorola i.MX SoC */
 #define PORT_IMX	62
 
-/* Marvell MPSC (obsolete unused) */
+/* Marvell MPSC */
 #define PORT_MPSC	63
 
 /* TXX9 type number */
@@ -150,6 +139,9 @@
 
 #define PORT_PNX8XXX	70
 
+/* Hilscher netx */
+#define PORT_NETX	71
+
 /* SUN4V Hypervisor Console */
 #define PORT_SUNHV	72
 
@@ -160,6 +152,9 @@
 
 /* Blackfin bf5xx */
 #define PORT_BFIN	75
+
+/* Micrel KS8695 */
+#define PORT_KS8695	76
 
 /* Broadcom SB1250, etc. SOC */
 #define PORT_SB1250_DUART	77
@@ -181,7 +176,7 @@
 
 #define PORT_S3C6400	84
 
-/* NWPSERIAL, now removed */
+/* NWPSERIAL */
 #define PORT_NWPSERIAL	85
 
 /* MAX3100 */
@@ -209,8 +204,8 @@
 /* MAX310X */
 #define PORT_MAX310X	94
 
-/* TI DA8xx/66AK2x */
-#define PORT_DA830	95
+/* High Speed UART for Medfield */
+#define PORT_MFD	95
 
 /* TI OMAP-UART */
 #define PORT_OMAP	96
@@ -266,31 +261,7 @@
 /* STM32 USART */
 #define PORT_STM32	113
 
-/* MVEBU UART */
-#define PORT_MVEBU	114
-
-/* Microchip PIC32 UART */
-#define PORT_PIC32	115
-
-/* MPS2 UART */
-#define PORT_MPS2UART	116
-
-/* MediaTek BTIF */
-#define PORT_MTK_BTIF	117
-
-/* RDA UART */
-#define PORT_RDA	118
-
-/* Socionext Milbeaut UART */
-#define PORT_MLB_USIO	119
-
-/* SiFive UART */
-#define PORT_SIFIVE_V0	120
-
-/* Sunix UART */
-#define PORT_SUNIX	121
-
-/* Freescale Linflex UART */
-#define PORT_LINFLEXUART	122
+/* Micrel KSZ8692 */
+#define PORT_KS8692	114
 
 #endif /* _UAPILINUX_SERIAL_CORE_H */

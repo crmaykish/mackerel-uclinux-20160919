@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  sst_pvt.c - Intel SST Driver for audio engine
  *
@@ -8,6 +7,15 @@
  *		Dharageswari R <dharageswari.r@intel.com>
  *		KP Jeeja <jeeja.kp@intel.com>
  *  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; version 2 of the License.
+ *
+ *  This program is distributed in the hope that it will be useful, but
+ *  WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  General Public License for more details.
  *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
@@ -158,7 +166,7 @@ int sst_create_ipc_msg(struct ipc_post **arg, bool large)
 {
 	struct ipc_post *msg;
 
-	msg = kzalloc(sizeof(*msg), GFP_ATOMIC);
+	msg = kzalloc(sizeof(struct ipc_post), GFP_ATOMIC);
 	if (!msg)
 		return -ENOMEM;
 	if (large) {
@@ -271,15 +279,17 @@ int sst_prepare_and_post_msg(struct intel_sst_drv *sst,
 
 	if (response) {
 		ret = sst_wait_timeout(sst, block);
-		if (ret < 0)
+		if (ret < 0) {
 			goto out;
-
-		if (data && block->data) {
-			*data = kmemdup(block->data, block->size, GFP_KERNEL);
-			if (!*data) {
+		} else if(block->data) {
+			if (!data)
+				goto out;
+			*data = kzalloc(block->size, GFP_KERNEL);
+			if (!(*data)) {
 				ret = -ENOMEM;
 				goto out;
-			}
+			} else
+				memcpy(data, (void *) block->data, block->size);
 		}
 	}
 out:
@@ -350,6 +360,14 @@ int sst_assign_pvt_id(struct intel_sst_drv *drv)
 	change_bit(local, &drv->pvt_id);
 	spin_unlock(&drv->block_lock);
 	return local;
+}
+
+void sst_init_stream(struct stream_info *stream,
+		int codec, int sst_id, int ops, u8 slot)
+{
+	stream->status = STREAM_INIT;
+	stream->prev = STREAM_UN_INIT;
+	stream->ops = ops;
 }
 
 int sst_validate_strid(

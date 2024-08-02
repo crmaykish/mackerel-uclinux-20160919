@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ixp4xx PATA/Compact Flash driver
  * Copyright (C) 2006-07 Tower Technologies
@@ -10,6 +9,11 @@
  * on the ixp4xx. In the irq is not available, you might
  * want to modify both this driver and libata to run in
  * polling mode.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #include <linux/kernel.h>
@@ -36,13 +40,13 @@ static int ixp4xx_set_mode(struct ata_link *link, struct ata_device **error)
 	return 0;
 }
 
-static unsigned int ixp4xx_mmio_data_xfer(struct ata_queued_cmd *qc,
+static unsigned int ixp4xx_mmio_data_xfer(struct ata_device *dev,
 				unsigned char *buf, unsigned int buflen, int rw)
 {
 	unsigned int i;
 	unsigned int words = buflen >> 1;
 	u16 *buf16 = (u16 *) buf;
-	struct ata_port *ap = qc->dev->link->ap;
+	struct ata_port *ap = dev->link->ap;
 	void __iomem *mmio = ap->ioaddr.data_addr;
 	struct ixp4xx_pata_data *data = dev_get_platdata(ap->host->dev);
 
@@ -135,12 +139,12 @@ static void ixp4xx_setup_port(struct ata_port *ap,
 
 static int ixp4xx_pata_probe(struct platform_device *pdev)
 {
+	unsigned int irq;
 	struct resource *cs0, *cs1;
 	struct ata_host *host;
 	struct ata_port *ap;
 	struct ixp4xx_pata_data *data = dev_get_platdata(&pdev->dev);
 	int ret;
-	int irq;
 
 	cs0 = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	cs1 = platform_get_resource(pdev, IORESOURCE_MEM, 1);
@@ -165,12 +169,8 @@ static int ixp4xx_pata_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq > 0)
+	if (irq)
 		irq_set_irq_type(irq, IRQ_TYPE_EDGE_RISING);
-	else if (irq < 0)
-		return irq;
-	else
-		return -EINVAL;
 
 	/* Setup expansion bus chip selects */
 	*data->cs0_cfg = data->cs0_bits;

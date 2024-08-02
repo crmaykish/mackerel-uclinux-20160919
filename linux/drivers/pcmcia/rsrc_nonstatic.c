@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * rsrc_nonstatic.c -- Resource management routines for !SS_CAP_STATIC_MAP sockets
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * The initial developer of the original code is David A. Hinds
  * <dahinds@users.sourceforge.net>.  Portions created by David A. Hinds
@@ -364,7 +367,7 @@ static int do_validate_mem(struct pcmcia_socket *s,
 		}
 	}
 
-	dev_dbg(&s->dev, "cs: memory probe 0x%06lx-0x%06lx: %pr %pr %u %u %u",
+	dev_dbg(&s->dev, "cs: memory probe 0x%06lx-0x%06lx: %p %p %u %u %u",
 		base, base+size-1, res1, res2, ret, info1, info2);
 
 	free_region(res2);
@@ -690,9 +693,6 @@ static struct resource *__nonstatic_find_io_region(struct pcmcia_socket *s,
 	unsigned long min = base;
 	int ret;
 
-	if (!res)
-		return NULL;
-
 	data.mask = align - 1;
 	data.offset = base & data.mask;
 	data.map = &s_data->io_db;
@@ -811,9 +811,6 @@ static struct resource *nonstatic_find_mem_region(u_long base, u_long num,
 	struct pcmcia_align_data data;
 	unsigned long min, max;
 	int ret, i, j;
-
-	if (!res)
-		return NULL;
 
 	low = low || !(s->features & SS_CAP_PAGE_REGS);
 
@@ -1053,8 +1050,6 @@ static void nonstatic_release_resource_db(struct pcmcia_socket *s)
 		q = p->next;
 		kfree(p);
 	}
-
-	kfree(data);
 }
 
 

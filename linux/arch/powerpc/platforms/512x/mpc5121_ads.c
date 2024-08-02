@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2007, 2008 Freescale Semiconductor, Inc. All rights reserved.
  *
@@ -6,6 +5,12 @@
  *
  * Description:
  * MPC5121 ADS board setup
+ *
+ * This is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
  */
 
 #include <linux/kernel.h>
@@ -52,12 +57,9 @@ static void __init mpc5121_ads_init_IRQ(void)
  */
 static int __init mpc5121_ads_probe(void)
 {
-	if (!of_machine_is_compatible("fsl,mpc5121ads"))
-		return 0;
+	unsigned long root = of_get_flat_dt_root();
 
-	mpc512x_init_early();
-
-	return 1;
+	return of_flat_dt_is_compatible(root, "fsl,mpc5121ads");
 }
 
 define_machine(mpc5121_ads) {
@@ -65,6 +67,7 @@ define_machine(mpc5121_ads) {
 	.probe			= mpc5121_ads_probe,
 	.setup_arch		= mpc5121_ads_setup_arch,
 	.init			= mpc512x_init,
+	.init_early		= mpc512x_init_early,
 	.init_IRQ		= mpc5121_ads_init_IRQ,
 	.get_irq		= ipic_get_irq,
 	.calibrate_decr		= generic_calibrate_decr,

@@ -1,15 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	sc520_freq.c: cpufreq driver for the AMD Elan sc520
  *
  *	Copyright (C) 2005 Sean Young <sean@mess.org>
  *
+ *	This program is free software; you can redistribute it and/or
+ *	modify it under the terms of the GNU General Public License
+ *	as published by the Free Software Foundation; either version
+ *	2 of the License, or (at your option) any later version.
+ *
  *	Based on elanfreq.c
  *
  *	2005-03-30: - initial revision
  */
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -28,6 +30,8 @@
 
 static __u8 __iomem *cpuctl;
 
+#define PFX "sc520_freq: "
+
 static struct cpufreq_frequency_table sc520_freq_table[] = {
 	{0, 0x01,	100000},
 	{0, 0x02,	133000},
@@ -40,8 +44,8 @@ static unsigned int sc520_freq_get_cpu_frequency(unsigned int cpu)
 
 	switch (clockspeed_reg & 0x03) {
 	default:
-		pr_err("error: cpuctl register has unexpected value %02x\n",
-		       clockspeed_reg);
+		printk(KERN_ERR PFX "error: cpuctl register has unexpected "
+				"value %02x\n", clockspeed_reg);
 	case 0x01:
 		return 100000;
 	case 0x02:
@@ -79,9 +83,8 @@ static int sc520_freq_cpu_init(struct cpufreq_policy *policy)
 
 	/* cpuinfo and default policy values */
 	policy->cpuinfo.transition_latency = 1000000; /* 1ms */
-	policy->freq_table = sc520_freq_table;
 
-	return 0;
+	return cpufreq_table_validate_and_show(policy, sc520_freq_table);
 }
 
 
@@ -109,7 +112,7 @@ static int __init sc520_freq_init(void)
 
 	cpuctl = ioremap((unsigned long)(MMCR_BASE + OFFS_CPUCTL), 1);
 	if (!cpuctl) {
-		pr_err("sc520_freq: error: failed to remap memory\n");
+		printk(KERN_ERR "sc520_freq: error: failed to remap memory\n");
 		return -ENOMEM;
 	}
 

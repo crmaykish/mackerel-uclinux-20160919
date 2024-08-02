@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  linux/fs/hpfs/hpfs_fn.h
  *
@@ -19,14 +18,15 @@
 #include <linux/pagemap.h>
 #include <linux/buffer_head.h>
 #include <linux/slab.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/blkdev.h>
 #include <asm/unaligned.h>
 
 #include "hpfs.h"
 
 #define EIOERROR  EIO
-#define EFSERROR  EUCLEAN
+#define EFSERROR  EPERM
+#define EMEMERROR ENOMEM
 
 #define ANODE_ALLOC_FWD	512
 #define FNODE_ALLOC_FWD	0
@@ -242,7 +242,7 @@ extern const struct file_operations hpfs_dir_ops;
 
 /* dnode.c */
 
-int hpfs_add_pos(struct inode *, loff_t *);
+void hpfs_add_pos(struct inode *, loff_t *);
 void hpfs_del_pos(struct inode *, loff_t *);
 struct hpfs_dirent *hpfs_add_de(struct super_block *, struct dnode *,
 				const unsigned char *, unsigned, secno);
@@ -334,21 +334,16 @@ long hpfs_ioctl(struct file *file, unsigned cmd, unsigned long arg);
  * local time (HPFS) to GMT (Unix)
  */
 
-static inline time64_t local_to_gmt(struct super_block *s, time64_t t)
+static inline time_t local_to_gmt(struct super_block *s, time32_t t)
 {
 	extern struct timezone sys_tz;
 	return t + sys_tz.tz_minuteswest * 60 + hpfs_sb(s)->sb_timeshift;
 }
 
-static inline time32_t gmt_to_local(struct super_block *s, time64_t t)
+static inline time32_t gmt_to_local(struct super_block *s, time_t t)
 {
 	extern struct timezone sys_tz;
 	return t - sys_tz.tz_minuteswest * 60 - hpfs_sb(s)->sb_timeshift;
-}
-
-static inline time32_t local_get_seconds(struct super_block *s)
-{
-	return gmt_to_local(s, ktime_get_real_seconds());
 }
 
 /*

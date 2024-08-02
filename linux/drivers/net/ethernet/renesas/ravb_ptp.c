@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /* PTP 1588 clock using the Renesas Ethernet AVB
  *
  * Copyright (C) 2013-2015 Renesas Electronics Corporation
  * Copyright (C) 2015 Renesas Solutions Corp.
- * Copyright (C) 2015-2016 Cogent Embedded, Inc. <source@cogentembedded.com>
+ * Copyright (C) 2015 Cogent Embedded, Inc. <source@cogentembedded.com>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
  */
 
 #include "ravb.h"
@@ -17,7 +21,7 @@ static int ravb_ptp_tcr_request(struct ravb_private *priv, u32 request)
 	if (error)
 		return error;
 
-	ravb_modify(ndev, GCCR, request, request);
+	ravb_write(ndev, ravb_read(ndev, GCCR) | request, GCCR);
 	return ravb_wait(ndev, GCCR, GCCR_TCR, GCCR_TCR_NOREQ);
 }
 
@@ -181,13 +185,7 @@ static int ravb_ptp_extts(struct ptp_clock_info *ptp,
 						 ptp.info);
 	struct net_device *ndev = priv->ndev;
 	unsigned long flags;
-
-	/* Reject requests with unsupported flags */
-	if (req->flags & ~(PTP_ENABLE_FEATURE |
-			   PTP_RISING_EDGE |
-			   PTP_FALLING_EDGE |
-			   PTP_STRICT_FLAGS))
-		return -EOPNOTSUPP;
+	u32 gic;
 
 	if (req->index)
 		return -EINVAL;
@@ -197,12 +195,13 @@ static int ravb_ptp_extts(struct ptp_clock_info *ptp,
 	priv->ptp.extts[req->index] = on;
 
 	spin_lock_irqsave(&priv->lock, flags);
-	if (priv->chip_id == RCAR_GEN2)
-		ravb_modify(ndev, GIC, GIC_PTCE, on ? GIC_PTCE : 0);
-	else if (on)
-		ravb_write(ndev, GIE_PTCS, GIE);
+	gic = ravb_read(ndev, GIC);
+	if (on)
+		gic |= GIC_PTCE;
 	else
-		ravb_write(ndev, GID_PTCD, GID);
+		gic &= ~GIC_PTCE;
+	ravb_write(ndev, gic, GIC);
+	mmiowb();
 	spin_unlock_irqrestore(&priv->lock, flags);
 
 	return 0;
@@ -217,10 +216,7 @@ static int ravb_ptp_perout(struct ptp_clock_info *ptp,
 	struct ravb_ptp_perout *perout;
 	unsigned long flags;
 	int error = 0;
-
-	/* Reject requests with unsupported flags */
-	if (req->flags)
-		return -EOPNOTSUPP;
+	u32 gic;
 
 	if (req->index)
 		return -EINVAL;
@@ -252,10 +248,9 @@ static int ravb_ptp_perout(struct ptp_clock_info *ptp,
 		error = ravb_ptp_update_compare(priv, (u32)start_ns);
 		if (!error) {
 			/* Unmask interrupt */
-			if (priv->chip_id == RCAR_GEN2)
-				ravb_modify(ndev, GIC, GIC_PTME, GIC_PTME);
-			else
-				ravb_write(ndev, GIE_PTMS0, GIE);
+			gic = ravb_read(ndev, GIC);
+			gic |= GIC_PTME;
+			ravb_write(ndev, gic, GIC);
 		}
 	} else	{
 		spin_lock_irqsave(&priv->lock, flags);
@@ -264,11 +259,11 @@ static int ravb_ptp_perout(struct ptp_clock_info *ptp,
 		perout->period = 0;
 
 		/* Mask interrupt */
-		if (priv->chip_id == RCAR_GEN2)
-			ravb_modify(ndev, GIC, GIC_PTME, 0);
-		else
-			ravb_write(ndev, GID_PTMD0, GID);
+		gic = ravb_read(ndev, GIC);
+		gic &= ~GIC_PTME;
+		ravb_write(ndev, gic, GIC);
 	}
+	mmiowb();
 	spin_unlock_irqrestore(&priv->lock, flags);
 
 	return error;
@@ -301,7 +296,7 @@ static const struct ptp_clock_info ravb_ptp_info = {
 };
 
 /* Caller must hold the lock */
-void ravb_ptp_interrupt(struct net_device *ndev)
+irqreturn_t ravb_ptp_interrupt(struct net_device *ndev)
 {
 	struct ravb_private *priv = netdev_priv(ndev);
 	u32 gis = ravb_read(ndev, GIS);
@@ -324,13 +319,19 @@ void ravb_ptp_interrupt(struct net_device *ndev)
 		}
 	}
 
-	ravb_write(ndev, ~(gis | GIS_RESERVED), GIS);
+	if (gis) {
+		ravb_write(ndev, ~gis, GIS);
+		return IRQ_HANDLED;
+	}
+
+	return IRQ_NONE;
 }
 
 void ravb_ptp_init(struct net_device *ndev, struct platform_device *pdev)
 {
 	struct ravb_private *priv = netdev_priv(ndev);
 	unsigned long flags;
+	u32 gccr;
 
 	priv->ptp.info = ravb_ptp_info;
 
@@ -339,7 +340,9 @@ void ravb_ptp_init(struct net_device *ndev, struct platform_device *pdev)
 
 	spin_lock_irqsave(&priv->lock, flags);
 	ravb_wait(ndev, GCCR, GCCR_TCR, GCCR_TCR_NOREQ);
-	ravb_modify(ndev, GCCR, GCCR_TCSS, GCCR_TCSS_ADJGPTP);
+	gccr = ravb_read(ndev, GCCR) & ~GCCR_TCSS;
+	ravb_write(ndev, gccr | GCCR_TCSS_ADJGPTP, GCCR);
+	mmiowb();
 	spin_unlock_irqrestore(&priv->lock, flags);
 
 	priv->ptp.clock = ptp_clock_register(&priv->ptp.info, &pdev->dev);

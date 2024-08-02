@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Soundfont generic routines.
  *	It is intended that these should be used by any driver that is willing
@@ -6,6 +5,20 @@
  *
  *  Copyright (C) 1999 Steve Ratcliffe
  *  Copyright (c) 1999-2000 Takashi Iwai <tiwai@suse.de>
+ *
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 /*
  * Deal with reading in of a soundfont.  Code follows the OSS way
@@ -697,6 +710,7 @@ load_data(struct snd_sf_list *sflist, const void __user *data, long count)
 	struct snd_soundfont *sf;
 	struct soundfont_sample_info sample_info;
 	struct snd_sf_sample *sp;
+	long off;
 
 	/* patch must be opened */
 	if ((sf = sflist->currsf) == NULL)
@@ -705,16 +719,12 @@ load_data(struct snd_sf_list *sflist, const void __user *data, long count)
 	if (is_special_type(sf->type))
 		return -EINVAL;
 
-	if (count < (long)sizeof(sample_info)) {
-		return -EINVAL;
-	}
 	if (copy_from_user(&sample_info, data, sizeof(sample_info)))
 		return -EFAULT;
-	data += sizeof(sample_info);
-	count -= sizeof(sample_info);
 
-	// SoundFont uses S16LE samples.
-	if (sample_info.size * 2 != count)
+	off = sizeof(sample_info);
+
+	if (sample_info.size != (count-off)/2)
 		return -EINVAL;
 
 	/* Check for dup */
@@ -741,7 +751,7 @@ load_data(struct snd_sf_list *sflist, const void __user *data, long count)
 		int  rc;
 		rc = sflist->callback.sample_new
 			(sflist->callback.private_data, sp, sflist->memhdr,
-			 data, count);
+			 data + off, count - off);
 		if (rc < 0) {
 			sf_sample_delete(sflist, sf, sp);
 			return rc;
@@ -846,8 +856,6 @@ calc_gus_envelope_time(int rate, int start, int end)
 	int r, p, t;
 	r = (3 - ((rate >> 6) & 3)) * 3;
 	p = rate & 0x3f;
-	if (!p)
-		p = 1;
 	t = end - start;
 	if (t < 0) t = -t;
 	if (13 > r)
@@ -954,11 +962,9 @@ load_guspatch(struct snd_sf_list *sflist, const char __user *data,
 	}
 	if (copy_from_user(&patch, data, sizeof(patch)))
 		return -EFAULT;
+	
 	count -= sizeof(patch);
 	data += sizeof(patch);
-
-	if ((patch.len << (patch.mode & WAVE_16_BITS ? 1 : 0)) != count)
-		return -EINVAL;
 
 	sf = newsf(sflist, SNDRV_SFNT_PAT_TYPE_GUS|SNDRV_SFNT_PAT_SHARED, NULL);
 	if (sf == NULL)

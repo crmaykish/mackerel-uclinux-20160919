@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * cs.c -- Kernel Card Services - core services
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * The initial developer of the original code is David A. Hinds
  * <dahinds@users.sourceforge.net>.  Portions created by David A. Hinds
@@ -449,20 +452,17 @@ static int socket_insert(struct pcmcia_socket *skt)
 
 static int socket_suspend(struct pcmcia_socket *skt)
 {
-	if ((skt->state & SOCKET_SUSPEND) && !(skt->state & SOCKET_IN_RESUME))
+	if (skt->state & SOCKET_SUSPEND)
 		return -EBUSY;
 
 	mutex_lock(&skt->ops_mutex);
-	/* store state on first suspend, but not after spurious wakeups */
-	if (!(skt->state & SOCKET_IN_RESUME))
-		skt->suspended_state = skt->state;
+	skt->suspended_state = skt->state;
 
 	skt->socket = dead_socket;
 	skt->ops->set_socket(skt, &skt->socket);
 	if (skt->ops->suspend)
 		skt->ops->suspend(skt);
 	skt->state |= SOCKET_SUSPEND;
-	skt->state &= ~SOCKET_IN_RESUME;
 	mutex_unlock(&skt->ops_mutex);
 	return 0;
 }
@@ -475,7 +475,6 @@ static int socket_early_resume(struct pcmcia_socket *skt)
 	skt->ops->set_socket(skt, &skt->socket);
 	if (skt->state & SOCKET_PRESENT)
 		skt->resume_status = socket_setup(skt, resume_delay);
-	skt->state |= SOCKET_IN_RESUME;
 	mutex_unlock(&skt->ops_mutex);
 	return 0;
 }
@@ -485,7 +484,7 @@ static int socket_late_resume(struct pcmcia_socket *skt)
 	int ret = 0;
 
 	mutex_lock(&skt->ops_mutex);
-	skt->state &= ~(SOCKET_SUSPEND | SOCKET_IN_RESUME);
+	skt->state &= ~SOCKET_SUSPEND;
 	mutex_unlock(&skt->ops_mutex);
 
 	if (!(skt->state & SOCKET_PRESENT)) {
@@ -605,7 +604,6 @@ static int pccardd(void *__skt)
 		dev_warn(&skt->dev, "PCMCIA: unable to register socket\n");
 		skt->thread = NULL;
 		complete(&skt->thread_done);
-		put_device(&skt->dev);
 		return 0;
 	}
 	ret = pccard_sysfs_add_socket(&skt->dev);
@@ -667,16 +665,18 @@ static int pccardd(void *__skt)
 		if (events || sysfs_events)
 			continue;
 
-		set_current_state(TASK_INTERRUPTIBLE);
 		if (kthread_should_stop())
 			break;
 
+		set_current_state(TASK_INTERRUPTIBLE);
+
 		schedule();
+
+		/* make sure we are running */
+		__set_current_state(TASK_RUNNING);
 
 		try_to_freeze();
 	}
-	/* make sure we are running before we exit */
-	__set_current_state(TASK_RUNNING);
 
 	/* shut down socket, if a device is still present */
 	if (skt->state & SOCKET_PRESENT) {

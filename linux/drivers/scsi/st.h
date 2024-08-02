@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
 #ifndef _ST_H
 #define _ST_H
@@ -148,6 +147,8 @@ struct scsi_tape {
 	unsigned char immediate_filemark;	/* write filemark immediately */
 	int tape_type;
 	int long_timeout;	/* timeout for commands known to take long time */
+
+	unsigned long max_pfn;	/* the maximum page number reachable by the HBA */
 
 	/* Mode characteristics */
 	struct st_modedef modes[ST_NBR_MODES];

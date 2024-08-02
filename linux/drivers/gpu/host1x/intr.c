@@ -1,8 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Tegra host1x Interrupt Management
  *
  * Copyright (c) 2010-2013, NVIDIA Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/clk.h>
@@ -111,20 +122,18 @@ static void action_submit_complete(struct host1x_waitlist *waiter)
 static void action_wakeup(struct host1x_waitlist *waiter)
 {
 	wait_queue_head_t *wq = waiter->data;
-
 	wake_up(wq);
 }
 
 static void action_wakeup_interruptible(struct host1x_waitlist *waiter)
 {
 	wait_queue_head_t *wq = waiter->data;
-
 	wake_up_interruptible(wq);
 }
 
 typedef void (*action_handler)(struct host1x_waitlist *waiter);
 
-static const action_handler action_handlers[HOST1X_INTR_ACTION_COUNT] = {
+static action_handler action_handlers[HOST1X_INTR_ACTION_COUNT] = {
 	action_submit_complete,
 	action_wakeup,
 	action_wakeup_interruptible,
@@ -133,7 +142,7 @@ static const action_handler action_handlers[HOST1X_INTR_ACTION_COUNT] = {
 static void run_handlers(struct list_head completed[HOST1X_INTR_ACTION_COUNT])
 {
 	struct list_head *head = completed;
-	unsigned int i;
+	int i;
 
 	for (i = 0; i < HOST1X_INTR_ACTION_COUNT; ++i, ++head) {
 		action_handler handler = action_handlers[i];
@@ -200,11 +209,11 @@ static void syncpt_thresh_work(struct work_struct *work)
 				host1x_syncpt_load(host->syncpt + id));
 }
 
-int host1x_intr_add_action(struct host1x *host, struct host1x_syncpt *syncpt,
-			   u32 thresh, enum host1x_intr_action action,
-			   void *data, struct host1x_waitlist *waiter,
-			   void **ref)
+int host1x_intr_add_action(struct host1x *host, u32 id, u32 thresh,
+			   enum host1x_intr_action action, void *data,
+			   struct host1x_waitlist *waiter, void **ref)
 {
+	struct host1x_syncpt *syncpt;
 	int queue_was_empty;
 
 	if (waiter == NULL) {
@@ -223,17 +232,19 @@ int host1x_intr_add_action(struct host1x *host, struct host1x_syncpt *syncpt,
 	waiter->data = data;
 	waiter->count = 1;
 
+	syncpt = host->syncpt + id;
+
 	spin_lock(&syncpt->intr.lock);
 
 	queue_was_empty = list_empty(&syncpt->intr.wait_head);
 
 	if (add_waiter_to_queue(waiter, &syncpt->intr.wait_head)) {
 		/* added at head of list - new threshold value */
-		host1x_hw_intr_set_syncpt_threshold(host, syncpt->id, thresh);
+		host1x_hw_intr_set_syncpt_threshold(host, id, thresh);
 
 		/* added as first waiter - enable interrupt */
 		if (queue_was_empty)
-			host1x_hw_intr_enable_syncpt_intr(host, syncpt->id);
+			host1x_hw_intr_enable_syncpt_intr(host, id);
 	}
 
 	spin_unlock(&syncpt->intr.lock);
@@ -243,7 +254,7 @@ int host1x_intr_add_action(struct host1x *host, struct host1x_syncpt *syncpt,
 	return 0;
 }
 
-void host1x_intr_put_ref(struct host1x *host, unsigned int id, void *ref)
+void host1x_intr_put_ref(struct host1x *host, u32 id, void *ref)
 {
 	struct host1x_waitlist *waiter = ref;
 	struct host1x_syncpt *syncpt;
@@ -266,6 +277,9 @@ int host1x_intr_init(struct host1x *host, unsigned int irq_sync)
 
 	mutex_init(&host->intr_mutex);
 	host->intr_syncpt_irq = irq_sync;
+	host->intr_wq = create_workqueue("host_syncpt");
+	if (!host->intr_wq)
+		return -ENOMEM;
 
 	for (id = 0; id < nb_pts; ++id) {
 		struct host1x_syncpt *syncpt = host->syncpt + id;
@@ -274,7 +288,7 @@ int host1x_intr_init(struct host1x *host, unsigned int irq_sync)
 		INIT_LIST_HEAD(&syncpt->intr.wait_head);
 		snprintf(syncpt->intr.thresh_irq_name,
 			 sizeof(syncpt->intr.thresh_irq_name),
-			 "host1x_sp_%02u", id);
+			 "host1x_sp_%02d", id);
 	}
 
 	host1x_intr_start(host);
@@ -285,6 +299,7 @@ int host1x_intr_init(struct host1x *host, unsigned int irq_sync)
 void host1x_intr_deinit(struct host1x *host)
 {
 	host1x_intr_stop(host);
+	destroy_workqueue(host->intr_wq);
 }
 
 void host1x_intr_start(struct host1x *host)
@@ -327,7 +342,7 @@ void host1x_intr_stop(struct host1x *host)
 		if (!list_empty(&syncpt[id].intr.wait_head)) {
 			/* output diagnostics */
 			mutex_unlock(&host->intr_mutex);
-			pr_warn("%s cannot stop syncpt intr id=%u\n",
+			pr_warn("%s cannot stop syncpt intr id=%d\n",
 				__func__, id);
 			return;
 		}

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for MT9T001 CMOS Image Sensor from Aptina (Micron)
  *
@@ -7,6 +6,10 @@
  * Based on the MT9M001 driver,
  *
  * Copyright (C) 2008, Guennadi Liakhovetski <kernel@pengutronix.de>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -18,7 +21,7 @@
 #include <linux/videodev2.h>
 #include <linux/v4l2-mediabus.h>
 
-#include <media/i2c/mt9t001.h>
+#include <media/mt9t001.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
@@ -230,21 +233,10 @@ static int __mt9t001_set_power(struct mt9t001 *mt9t001, bool on)
 	ret = mt9t001_reset(mt9t001);
 	if (ret < 0) {
 		dev_err(&client->dev, "Failed to reset the camera\n");
-		goto e_power;
+		return ret;
 	}
 
-	ret = v4l2_ctrl_handler_setup(&mt9t001->ctrls);
-	if (ret < 0) {
-		dev_err(&client->dev, "Failed to set up control handlers\n");
-		goto e_power;
-	}
-
-	return 0;
-
-e_power:
-	mt9t001_power_off(mt9t001);
-
-	return ret;
+	return v4l2_ctrl_handler_setup(&mt9t001->ctrls);
 }
 
 /* -----------------------------------------------------------------------------
@@ -634,7 +626,7 @@ static int mt9t001_s_ctrl(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-static const struct v4l2_ctrl_ops mt9t001_ctrl_ops = {
+static struct v4l2_ctrl_ops mt9t001_ctrl_ops = {
 	.s_ctrl = mt9t001_s_ctrl,
 };
 
@@ -819,15 +811,15 @@ static int mt9t001_close(struct v4l2_subdev *subdev, struct v4l2_subdev_fh *fh)
 	return mt9t001_set_power(subdev, 0);
 }
 
-static const struct v4l2_subdev_core_ops mt9t001_subdev_core_ops = {
+static struct v4l2_subdev_core_ops mt9t001_subdev_core_ops = {
 	.s_power = mt9t001_set_power,
 };
 
-static const struct v4l2_subdev_video_ops mt9t001_subdev_video_ops = {
+static struct v4l2_subdev_video_ops mt9t001_subdev_video_ops = {
 	.s_stream = mt9t001_s_stream,
 };
 
-static const struct v4l2_subdev_pad_ops mt9t001_subdev_pad_ops = {
+static struct v4l2_subdev_pad_ops mt9t001_subdev_pad_ops = {
 	.enum_mbus_code = mt9t001_enum_mbus_code,
 	.enum_frame_size = mt9t001_enum_frame_size,
 	.get_fmt = mt9t001_get_format,
@@ -836,13 +828,13 @@ static const struct v4l2_subdev_pad_ops mt9t001_subdev_pad_ops = {
 	.set_selection = mt9t001_set_selection,
 };
 
-static const struct v4l2_subdev_ops mt9t001_subdev_ops = {
+static struct v4l2_subdev_ops mt9t001_subdev_ops = {
 	.core = &mt9t001_subdev_core_ops,
 	.video = &mt9t001_subdev_video_ops,
 	.pad = &mt9t001_subdev_pad_ops,
 };
 
-static const struct v4l2_subdev_internal_ops mt9t001_subdev_internal_ops = {
+static struct v4l2_subdev_internal_ops mt9t001_subdev_internal_ops = {
 	.registered = mt9t001_registered,
 	.open = mt9t001_open,
 	.close = mt9t001_close,
@@ -940,9 +932,8 @@ static int mt9t001_probe(struct i2c_client *client,
 	mt9t001->subdev.internal_ops = &mt9t001_subdev_internal_ops;
 	mt9t001->subdev.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 
-	mt9t001->subdev.entity.function = MEDIA_ENT_F_CAM_SENSOR;
 	mt9t001->pad.flags = MEDIA_PAD_FL_SOURCE;
-	ret = media_entity_pads_init(&mt9t001->subdev.entity, 1, &mt9t001->pad);
+	ret = media_entity_init(&mt9t001->subdev.entity, 1, &mt9t001->pad, 0);
 
 done:
 	if (ret < 0) {

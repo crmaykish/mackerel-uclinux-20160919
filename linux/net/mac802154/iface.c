@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2007-2012 Siemens AG
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  * Written by:
  * Dmitry Eremin-Solenikov <dbaryshkov@gmail.com>
@@ -518,6 +526,8 @@ static void mac802154_wpan_free(struct net_device *dev)
 	struct ieee802154_sub_if_data *sdata = IEEE802154_DEV_TO_SUB_IF(dev);
 
 	mac802154_llsec_destroy(&sdata->sec);
+
+	free_netdev(dev);
 }
 
 static void ieee802154_if_setup(struct net_device *dev)
@@ -583,8 +593,7 @@ ieee802154_setup_sdata(struct ieee802154_sub_if_data *sdata,
 					sdata->dev->dev_addr);
 
 		sdata->dev->header_ops = &mac802154_header_ops;
-		sdata->dev->needs_free_netdev = true;
-		sdata->dev->priv_destructor = mac802154_wpan_free;
+		sdata->dev->destructor = mac802154_wpan_free;
 		sdata->dev->netdev_ops = &mac802154_wpan_ops;
 		sdata->dev->ml_priv = &mac802154_mlme_wpan;
 		wpan_dev->promiscuous_mode = false;
@@ -599,7 +608,7 @@ ieee802154_setup_sdata(struct ieee802154_sub_if_data *sdata,
 
 		break;
 	case NL802154_IFTYPE_MONITOR:
-		sdata->dev->needs_free_netdev = true;
+		sdata->dev->destructor = free_netdev;
 		sdata->dev->netdev_ops = &mac802154_monitor_ops;
 		wpan_dev->promiscuous_mode = true;
 		break;
@@ -654,14 +663,12 @@ ieee802154_if_add(struct ieee802154_local *local, const char *name,
 
 	/* TODO check this */
 	SET_NETDEV_DEV(ndev, &local->phy->dev);
-	dev_net_set(ndev, wpan_phy_net(local->hw.phy));
 	sdata = netdev_priv(ndev);
 	ndev->ieee802154_ptr = &sdata->wpan_dev;
 	memcpy(sdata->name, ndev->name, IFNAMSIZ);
 	sdata->dev = ndev;
 	sdata->wpan_dev.wpan_phy = local->hw.phy;
 	sdata->local = local;
-	INIT_LIST_HEAD(&sdata->wpan_dev.list);
 
 	/* setup type-dependent data */
 	ret = ieee802154_setup_sdata(sdata, type);

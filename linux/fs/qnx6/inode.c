@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * QNX6 file system, Linux implementation.
  *
@@ -30,14 +29,14 @@ static const struct super_operations qnx6_sops;
 
 static void qnx6_put_super(struct super_block *sb);
 static struct inode *qnx6_alloc_inode(struct super_block *sb);
-static void qnx6_free_inode(struct inode *inode);
+static void qnx6_destroy_inode(struct inode *inode);
 static int qnx6_remount(struct super_block *sb, int *flags, char *data);
 static int qnx6_statfs(struct dentry *dentry, struct kstatfs *buf);
 static int qnx6_show_options(struct seq_file *seq, struct dentry *root);
 
 static const struct super_operations qnx6_sops = {
 	.alloc_inode	= qnx6_alloc_inode,
-	.free_inode	= qnx6_free_inode,
+	.destroy_inode	= qnx6_destroy_inode,
 	.put_super	= qnx6_put_super,
 	.statfs		= qnx6_statfs,
 	.remount_fs	= qnx6_remount,
@@ -57,7 +56,7 @@ static int qnx6_show_options(struct seq_file *seq, struct dentry *root)
 static int qnx6_remount(struct super_block *sb, int *flags, char *data)
 {
 	sync_filesystem(sb);
-	*flags |= SB_RDONLY;
+	*flags |= MS_RDONLY;
 	return 0;
 }
 
@@ -428,9 +427,7 @@ mmi_success:
 	}
 	s->s_op = &qnx6_sops;
 	s->s_magic = QNX6_SUPER_MAGIC;
-	s->s_flags |= SB_RDONLY;        /* Yup, read-only yet */
-	s->s_time_min = 0;
-	s->s_time_max = U32_MAX;
+	s->s_flags |= MS_RDONLY;        /* Yup, read-only yet */
 
 	/* ease the later tree level calculations */
 	sbi = QNX6_SB(s);
@@ -545,8 +542,8 @@ struct inode *qnx6_iget(struct super_block *sb, unsigned ino)
 		iget_failed(inode);
 		return ERR_PTR(-EIO);
 	}
-	n = (ino - 1) >> (PAGE_SHIFT - QNX6_INODE_SIZE_BITS);
-	offs = (ino - 1) & (~PAGE_MASK >> QNX6_INODE_SIZE_BITS);
+	n = (ino - 1) >> (PAGE_CACHE_SHIFT - QNX6_INODE_SIZE_BITS);
+	offs = (ino - 1) & (~PAGE_CACHE_MASK >> QNX6_INODE_SIZE_BITS);
 	mapping = sbi->inodes->i_mapping;
 	page = read_mapping_page(mapping, n, NULL);
 	if (IS_ERR(page)) {
@@ -585,7 +582,6 @@ struct inode *qnx6_iget(struct super_block *sb, unsigned ino)
 		inode->i_mapping->a_ops = &qnx6_aops;
 	} else if (S_ISLNK(inode->i_mode)) {
 		inode->i_op = &page_symlink_inode_operations;
-		inode_nohighmem(inode);
 		inode->i_mapping->a_ops = &qnx6_aops;
 	} else
 		init_special_inode(inode, inode->i_mode, 0);
@@ -605,9 +601,15 @@ static struct inode *qnx6_alloc_inode(struct super_block *sb)
 	return &ei->vfs_inode;
 }
 
-static void qnx6_free_inode(struct inode *inode)
+static void qnx6_i_callback(struct rcu_head *head)
 {
+	struct inode *inode = container_of(head, struct inode, i_rcu);
 	kmem_cache_free(qnx6_inode_cachep, QNX6_I(inode));
+}
+
+static void qnx6_destroy_inode(struct inode *inode)
+{
+	call_rcu(&inode->i_rcu, qnx6_i_callback);
 }
 
 static void init_once(void *foo)
@@ -622,7 +624,7 @@ static int init_inodecache(void)
 	qnx6_inode_cachep = kmem_cache_create("qnx6_inode_cache",
 					     sizeof(struct qnx6_inode_info),
 					     0, (SLAB_RECLAIM_ACCOUNT|
-						SLAB_MEM_SPREAD|SLAB_ACCOUNT),
+						SLAB_MEM_SPREAD),
 					     init_once);
 	if (!qnx6_inode_cachep)
 		return -ENOMEM;

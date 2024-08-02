@@ -1,7 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /***************************************************************************
  *   Copyright (C) 2010-2012 Hans de Goede <hdegoede@redhat.com>           *
  *                                                                         *
+ *   This program is free software; you can redistribute it and/or modify  *
+ *   it under the terms of the GNU General Public License as published by  *
+ *   the Free Software Foundation; either version 2 of the License, or     *
+ *   (at your option) any later version.                                   *
+ *                                                                         *
+ *   This program is distributed in the hope that it will be useful,       *
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of        *
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the         *
+ *   GNU General Public License for more details.                          *
+ *                                                                         *
+ *   You should have received a copy of the GNU General Public License     *
+ *   along with this program; if not, write to the                         *
+ *   Free Software Foundation, Inc.,                                       *
+ *   59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.             *
  ***************************************************************************/
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -15,7 +28,9 @@
 #include <linux/delay.h>
 #include <linux/fs.h>
 #include <linux/watchdog.h>
+#include <linux/miscdevice.h>
 #include <linux/uaccess.h>
+#include <linux/kref.h>
 #include <linux/slab.h>
 #include "sch56xx-common.h"
 
@@ -52,6 +67,7 @@ MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started (default="
 struct sch56xx_watchdog_data {
 	u16 addr;
 	struct mutex *io_lock;
+	struct kref kref;
 	struct watchdog_info wdinfo;
 	struct watchdog_device wddev;
 	u8 watchdog_preset;
@@ -242,6 +258,15 @@ EXPORT_SYMBOL(sch56xx_read_virtual_reg12);
  * Watchdog routines
  */
 
+/* Release our data struct when we're unregistered *and*
+   all references to our watchdog device are released */
+static void watchdog_release_resources(struct kref *r)
+{
+	struct sch56xx_watchdog_data *data =
+		container_of(r, struct sch56xx_watchdog_data, kref);
+	kfree(data);
+}
+
 static int watchdog_set_timeout(struct watchdog_device *wddev,
 				unsigned int timeout)
 {
@@ -370,12 +395,28 @@ static int watchdog_stop(struct watchdog_device *wddev)
 	return 0;
 }
 
+static void watchdog_ref(struct watchdog_device *wddev)
+{
+	struct sch56xx_watchdog_data *data = watchdog_get_drvdata(wddev);
+
+	kref_get(&data->kref);
+}
+
+static void watchdog_unref(struct watchdog_device *wddev)
+{
+	struct sch56xx_watchdog_data *data = watchdog_get_drvdata(wddev);
+
+	kref_put(&data->kref, watchdog_release_resources);
+}
+
 static const struct watchdog_ops watchdog_ops = {
 	.owner		= THIS_MODULE,
 	.start		= watchdog_start,
 	.stop		= watchdog_stop,
 	.ping		= watchdog_trigger,
 	.set_timeout	= watchdog_set_timeout,
+	.ref		= watchdog_ref,
+	.unref		= watchdog_unref,
 };
 
 struct sch56xx_watchdog_data *sch56xx_watchdog_register(struct device *parent,
@@ -407,6 +448,7 @@ struct sch56xx_watchdog_data *sch56xx_watchdog_register(struct device *parent,
 
 	data->addr = addr;
 	data->io_lock = io_lock;
+	kref_init(&data->kref);
 
 	strlcpy(data->wdinfo.identity, "sch56xx watchdog",
 		sizeof(data->wdinfo.identity));
@@ -424,7 +466,7 @@ struct sch56xx_watchdog_data *sch56xx_watchdog_register(struct device *parent,
 	if (nowayout)
 		set_bit(WDOG_NO_WAY_OUT, &data->wddev.status);
 	if (output_enable & SCH56XX_WDOG_OUTPUT_ENABLE)
-		set_bit(WDOG_HW_RUNNING, &data->wddev.status);
+		set_bit(WDOG_ACTIVE, &data->wddev.status);
 
 	/* Since the watchdog uses a downcounter there is no register to read
 	   the BIOS set timeout from (if any was set at all) ->
@@ -452,7 +494,8 @@ EXPORT_SYMBOL(sch56xx_watchdog_register);
 void sch56xx_watchdog_unregister(struct sch56xx_watchdog_data *data)
 {
 	watchdog_unregister_device(&data->wddev);
-	kfree(data);
+	kref_put(&data->kref, watchdog_release_resources);
+	/* Don't touch data after this it may have been free-ed! */
 }
 EXPORT_SYMBOL(sch56xx_watchdog_unregister);
 

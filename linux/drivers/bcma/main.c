@@ -136,17 +136,18 @@ static bool bcma_is_core_needed_early(u16 core_id)
 	return false;
 }
 
-static struct device_node *bcma_of_find_child_device(struct device *parent,
+#if defined(CONFIG_OF) && defined(CONFIG_OF_ADDRESS)
+static struct device_node *bcma_of_find_child_device(struct platform_device *parent,
 						     struct bcma_device *core)
 {
 	struct device_node *node;
 	u64 size;
 	const __be32 *reg;
 
-	if (!parent->of_node)
+	if (!parent || !parent->dev.of_node)
 		return NULL;
 
-	for_each_child_of_node(parent->of_node, node) {
+	for_each_child_of_node(parent->dev.of_node, node) {
 		reg = of_get_address(node, 0, &size, NULL);
 		if (!reg)
 			continue;
@@ -156,7 +157,7 @@ static struct device_node *bcma_of_find_child_device(struct device *parent,
 	return NULL;
 }
 
-static int bcma_of_irq_parse(struct device *parent,
+static int bcma_of_irq_parse(struct platform_device *parent,
 			     struct bcma_device *core,
 			     struct of_phandle_args *out_irq, int num)
 {
@@ -169,7 +170,7 @@ static int bcma_of_irq_parse(struct device *parent,
 			return rc;
 	}
 
-	out_irq->np = parent->of_node;
+	out_irq->np = parent->dev.of_node;
 	out_irq->args_count = 1;
 	out_irq->args[0] = num;
 
@@ -177,13 +178,13 @@ static int bcma_of_irq_parse(struct device *parent,
 	return of_irq_parse_raw(laddr, out_irq);
 }
 
-static unsigned int bcma_of_get_irq(struct device *parent,
+static unsigned int bcma_of_get_irq(struct platform_device *parent,
 				    struct bcma_device *core, int num)
 {
 	struct of_phandle_args out_irq;
 	int ret;
 
-	if (!IS_ENABLED(CONFIG_OF_IRQ) || !parent->of_node)
+	if (!parent || !parent->dev.of_node)
 		return 0;
 
 	ret = bcma_of_irq_parse(parent, core, &out_irq, num);
@@ -196,7 +197,7 @@ static unsigned int bcma_of_get_irq(struct device *parent,
 	return irq_create_of_mapping(&out_irq);
 }
 
-static void bcma_of_fill_device(struct device *parent,
+static void bcma_of_fill_device(struct platform_device *parent,
 				struct bcma_device *core)
 {
 	struct device_node *node;
@@ -206,9 +207,18 @@ static void bcma_of_fill_device(struct device *parent,
 		core->dev.of_node = node;
 
 	core->irq = bcma_of_get_irq(parent, core, 0);
-
-	of_dma_configure(&core->dev, node, false);
 }
+#else
+static void bcma_of_fill_device(struct platform_device *parent,
+				struct bcma_device *core)
+{
+}
+static inline unsigned int bcma_of_get_irq(struct platform_device *parent,
+					   struct bcma_device *core, int num)
+{
+	return 0;
+}
+#endif /* CONFIG_OF */
 
 unsigned int bcma_core_irq(struct bcma_device *core, int num)
 {
@@ -223,8 +233,8 @@ unsigned int bcma_core_irq(struct bcma_device *core, int num)
 			mips_irq = bcma_core_mips_irq(core);
 			return mips_irq <= 4 ? mips_irq + 2 : 0;
 		}
-		if (bus->dev)
-			return bcma_of_get_irq(bus->dev, core, num);
+		if (bus->host_pdev)
+			return bcma_of_get_irq(bus->host_pdev, core, num);
 		return 0;
 	case BCMA_HOSTTYPE_SDIO:
 		return 0;
@@ -236,30 +246,51 @@ EXPORT_SYMBOL(bcma_core_irq);
 
 void bcma_prepare_core(struct bcma_bus *bus, struct bcma_device *core)
 {
-	device_initialize(&core->dev);
 	core->dev.release = bcma_release_core_dev;
 	core->dev.bus = &bcma_bus_type;
 	dev_set_name(&core->dev, "bcma%d:%d", bus->num, core->core_index);
-	core->dev.parent = bus->dev;
-	if (bus->dev)
-		bcma_of_fill_device(bus->dev, core);
 
 	switch (bus->hosttype) {
 	case BCMA_HOSTTYPE_PCI:
-		core->dma_dev = bus->dev;
+		core->dev.parent = &bus->host_pci->dev;
+		core->dma_dev = &bus->host_pci->dev;
 		core->irq = bus->host_pci->irq;
 		break;
 	case BCMA_HOSTTYPE_SOC:
-		if (IS_ENABLED(CONFIG_OF) && bus->dev) {
-			core->dma_dev = bus->dev;
+		core->dev.dma_mask = &core->dev.coherent_dma_mask;
+		if (bus->host_pdev) {
+			core->dma_dev = &bus->host_pdev->dev;
+			core->dev.parent = &bus->host_pdev->dev;
+			bcma_of_fill_device(bus->host_pdev, core);
 		} else {
-			core->dev.dma_mask = &core->dev.coherent_dma_mask;
 			core->dma_dev = &core->dev;
 		}
 		break;
 	case BCMA_HOSTTYPE_SDIO:
 		break;
 	}
+}
+
+struct device *bcma_bus_get_host_dev(struct bcma_bus *bus)
+{
+	switch (bus->hosttype) {
+	case BCMA_HOSTTYPE_PCI:
+		if (bus->host_pci)
+			return &bus->host_pci->dev;
+		else
+			return NULL;
+	case BCMA_HOSTTYPE_SOC:
+		if (bus->host_pdev)
+			return &bus->host_pdev->dev;
+		else
+			return NULL;
+	case BCMA_HOSTTYPE_SDIO:
+		if (bus->host_sdio)
+			return &bus->host_sdio->dev;
+		else
+			return NULL;
+	}
+	return NULL;
 }
 
 void bcma_init_bus(struct bcma_bus *bus)
@@ -278,10 +309,11 @@ static void bcma_register_core(struct bcma_bus *bus, struct bcma_device *core)
 {
 	int err;
 
-	err = device_add(&core->dev);
+	err = device_register(&core->dev);
 	if (err) {
 		bcma_err(bus, "Could not register dev for core 0x%03X\n",
 			 core->id.id);
+		put_device(&core->dev);
 		return;
 	}
 	core->dev_registered = true;
@@ -318,7 +350,7 @@ static int bcma_register_devices(struct bcma_bus *bus)
 		bcma_register_core(bus, core);
 	}
 
-#ifdef CONFIG_BCMA_PFLASH
+#ifdef CONFIG_BCMA_DRIVER_MIPS
 	if (bus->drv_cc.pflash.present) {
 		err = platform_device_register(&bcma_pflash_dev);
 		if (err)
@@ -372,7 +404,7 @@ void bcma_unregister_cores(struct bcma_bus *bus)
 	/* Now noone uses internally-handled cores, we can free them */
 	list_for_each_entry_safe(core, tmp, &bus->cores, list) {
 		list_del(&core->list);
-		put_device(&core->dev);
+		kfree(core);
 	}
 }
 
@@ -380,6 +412,7 @@ int bcma_bus_register(struct bcma_bus *bus)
 {
 	int err;
 	struct bcma_device *core;
+	struct device *dev;
 
 	/* Scan for devices (cores) */
 	err = bcma_bus_scan(bus);
@@ -402,8 +435,10 @@ int bcma_bus_register(struct bcma_bus *bus)
 		bcma_core_pci_early_init(&bus->drv_pci[0]);
 	}
 
-	if (bus->dev)
-		of_platform_default_populate(bus->dev->of_node, NULL, bus->dev);
+	dev = bcma_bus_get_host_dev(bus);
+	if (dev) {
+		of_platform_default_populate(dev->of_node, NULL, dev);
+	}
 
 	/* Cores providing flash access go before SPROM init */
 	list_for_each_entry(core, &bus->cores, list) {
@@ -605,11 +640,8 @@ static int bcma_device_probe(struct device *dev)
 					       drv);
 	int err = 0;
 
-	get_device(dev);
 	if (adrv->probe)
 		err = adrv->probe(core);
-	if (err)
-		put_device(dev);
 
 	return err;
 }
@@ -622,7 +654,6 @@ static int bcma_device_remove(struct device *dev)
 
 	if (adrv->remove)
 		adrv->remove(core);
-	put_device(dev);
 
 	return 0;
 }
@@ -637,36 +668,11 @@ static int bcma_device_uevent(struct device *dev, struct kobj_uevent_env *env)
 			      core->id.rev, core->id.class);
 }
 
-static unsigned int bcma_bus_registered;
-
-/*
- * If built-in, bus has to be registered early, before any driver calls
- * bcma_driver_register.
- * Otherwise registering driver would trigger BUG in driver_register.
- */
-static int __init bcma_init_bus_register(void)
-{
-	int err;
-
-	if (bcma_bus_registered)
-		return 0;
-
-	err = bus_register(&bcma_bus_type);
-	if (!err)
-		bcma_bus_registered = 1;
-
-	return err;
-}
-#ifndef MODULE
-fs_initcall(bcma_init_bus_register);
-#endif
-
-/* Main initialization has to be done with SPI/mtd/NAND/SPROM available */
 static int __init bcma_modinit(void)
 {
 	int err;
 
-	err = bcma_init_bus_register();
+	err = bus_register(&bcma_bus_type);
 	if (err)
 		return err;
 
@@ -685,7 +691,7 @@ static int __init bcma_modinit(void)
 
 	return err;
 }
-module_init(bcma_modinit);
+fs_initcall(bcma_modinit);
 
 static void __exit bcma_modexit(void)
 {

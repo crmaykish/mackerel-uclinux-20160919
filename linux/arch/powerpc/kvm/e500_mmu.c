@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2008-2013 Freescale Semiconductor, Inc. All rights reserved.
  *
@@ -11,6 +10,10 @@
  * Description:
  * This file is based on arch/powerpc/kvm/44x_tlb.c,
  * by Hollis Blanchard <hollisb@us.ibm.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License, version 2, as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -510,7 +513,7 @@ void kvmppc_mmu_itlb_miss(struct kvm_vcpu *vcpu)
 {
 	unsigned int as = !!(vcpu->arch.shared->msr & MSR_IS);
 
-	kvmppc_e500_deliver_tlb_miss(vcpu, vcpu->arch.regs.nip, as);
+	kvmppc_e500_deliver_tlb_miss(vcpu, vcpu->arch.pc, as);
 }
 
 void kvmppc_mmu_dtlb_miss(struct kvm_vcpu *vcpu)
@@ -740,7 +743,7 @@ int kvm_vcpu_ioctl_config_tlb(struct kvm_vcpu *vcpu,
 	char *virt;
 	struct page **pages;
 	struct tlbe_priv *privs[2] = {};
-	u64 *g2h_bitmap;
+	u64 *g2h_bitmap = NULL;
 	size_t array_len;
 	u32 sets;
 	int num_pages, ret, i;
@@ -776,44 +779,41 @@ int kvm_vcpu_ioctl_config_tlb(struct kvm_vcpu *vcpu,
 
 	num_pages = DIV_ROUND_UP(cfg->array + array_len - 1, PAGE_SIZE) -
 		    cfg->array / PAGE_SIZE;
-	pages = kmalloc_array(num_pages, sizeof(*pages), GFP_KERNEL);
+	pages = kmalloc(sizeof(struct page *) * num_pages, GFP_KERNEL);
 	if (!pages)
 		return -ENOMEM;
 
-	ret = get_user_pages_fast(cfg->array, num_pages, FOLL_WRITE, pages);
+	ret = get_user_pages_fast(cfg->array, num_pages, 1, pages);
 	if (ret < 0)
-		goto free_pages;
+		goto err_pages;
 
 	if (ret != num_pages) {
 		num_pages = ret;
 		ret = -EFAULT;
-		goto put_pages;
+		goto err_put_page;
 	}
 
 	virt = vmap(pages, num_pages, VM_MAP, PAGE_KERNEL);
 	if (!virt) {
 		ret = -ENOMEM;
-		goto put_pages;
+		goto err_put_page;
 	}
 
-	privs[0] = kcalloc(params.tlb_sizes[0], sizeof(*privs[0]), GFP_KERNEL);
-	if (!privs[0]) {
+	privs[0] = kzalloc(sizeof(struct tlbe_priv) * params.tlb_sizes[0],
+			   GFP_KERNEL);
+	privs[1] = kzalloc(sizeof(struct tlbe_priv) * params.tlb_sizes[1],
+			   GFP_KERNEL);
+
+	if (!privs[0] || !privs[1]) {
 		ret = -ENOMEM;
-		goto put_pages;
+		goto err_privs;
 	}
 
-	privs[1] = kcalloc(params.tlb_sizes[1], sizeof(*privs[1]), GFP_KERNEL);
-	if (!privs[1]) {
-		ret = -ENOMEM;
-		goto free_privs_first;
-	}
-
-	g2h_bitmap = kcalloc(params.tlb_sizes[1],
-			     sizeof(*g2h_bitmap),
-			     GFP_KERNEL);
+	g2h_bitmap = kzalloc(sizeof(u64) * params.tlb_sizes[1],
+	                     GFP_KERNEL);
 	if (!g2h_bitmap) {
 		ret = -ENOMEM;
-		goto free_privs_second;
+		goto err_privs;
 	}
 
 	free_gtlb(vcpu_e500);
@@ -845,14 +845,16 @@ int kvm_vcpu_ioctl_config_tlb(struct kvm_vcpu *vcpu,
 
 	kvmppc_recalc_tlb1map_range(vcpu_e500);
 	return 0;
- free_privs_second:
-	kfree(privs[1]);
- free_privs_first:
+
+err_privs:
 	kfree(privs[0]);
- put_pages:
+	kfree(privs[1]);
+
+err_put_page:
 	for (i = 0; i < num_pages; i++)
 		put_page(pages[i]);
- free_pages:
+
+err_pages:
 	kfree(pages);
 	return ret;
 }
@@ -902,9 +904,11 @@ static int vcpu_mmu_init(struct kvm_vcpu *vcpu,
 int kvmppc_e500_tlb_init(struct kvmppc_vcpu_e500 *vcpu_e500)
 {
 	struct kvm_vcpu *vcpu = &vcpu_e500->vcpu;
+	int entry_size = sizeof(struct kvm_book3e_206_tlb_entry);
+	int entries = KVM_E500_TLB0_SIZE + KVM_E500_TLB1_SIZE;
 
 	if (e500_mmu_host_init(vcpu_e500))
-		goto free_vcpu;
+		goto err;
 
 	vcpu_e500->gtlb_params[0].entries = KVM_E500_TLB0_SIZE;
 	vcpu_e500->gtlb_params[1].entries = KVM_E500_TLB1_SIZE;
@@ -916,39 +920,37 @@ int kvmppc_e500_tlb_init(struct kvmppc_vcpu_e500 *vcpu_e500)
 	vcpu_e500->gtlb_params[1].ways = KVM_E500_TLB1_SIZE;
 	vcpu_e500->gtlb_params[1].sets = 1;
 
-	vcpu_e500->gtlb_arch = kmalloc_array(KVM_E500_TLB0_SIZE +
-					     KVM_E500_TLB1_SIZE,
-					     sizeof(*vcpu_e500->gtlb_arch),
-					     GFP_KERNEL);
+	vcpu_e500->gtlb_arch = kmalloc(entries * entry_size, GFP_KERNEL);
 	if (!vcpu_e500->gtlb_arch)
 		return -ENOMEM;
 
 	vcpu_e500->gtlb_offset[0] = 0;
 	vcpu_e500->gtlb_offset[1] = KVM_E500_TLB0_SIZE;
 
-	vcpu_e500->gtlb_priv[0] = kcalloc(vcpu_e500->gtlb_params[0].entries,
-					  sizeof(struct tlbe_ref),
+	vcpu_e500->gtlb_priv[0] = kzalloc(sizeof(struct tlbe_ref) *
+					  vcpu_e500->gtlb_params[0].entries,
 					  GFP_KERNEL);
 	if (!vcpu_e500->gtlb_priv[0])
-		goto free_vcpu;
+		goto err;
 
-	vcpu_e500->gtlb_priv[1] = kcalloc(vcpu_e500->gtlb_params[1].entries,
-					  sizeof(struct tlbe_ref),
+	vcpu_e500->gtlb_priv[1] = kzalloc(sizeof(struct tlbe_ref) *
+					  vcpu_e500->gtlb_params[1].entries,
 					  GFP_KERNEL);
 	if (!vcpu_e500->gtlb_priv[1])
-		goto free_vcpu;
+		goto err;
 
-	vcpu_e500->g2h_tlb1_map = kcalloc(vcpu_e500->gtlb_params[1].entries,
-					  sizeof(*vcpu_e500->g2h_tlb1_map),
+	vcpu_e500->g2h_tlb1_map = kzalloc(sizeof(u64) *
+					  vcpu_e500->gtlb_params[1].entries,
 					  GFP_KERNEL);
 	if (!vcpu_e500->g2h_tlb1_map)
-		goto free_vcpu;
+		goto err;
 
 	vcpu_mmu_init(vcpu, vcpu_e500->gtlb_params);
 
 	kvmppc_recalc_tlb1map_range(vcpu_e500);
 	return 0;
- free_vcpu:
+
+err:
 	free_gtlb(vcpu_e500);
 	return -1;
 }

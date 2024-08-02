@@ -1,16 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /******************************************************************************
 *******************************************************************************
 **
 **  Copyright (C) Sistina Software, Inc.  1997-2003  All rights reserved.
 **  Copyright (C) 2004-2011 Red Hat, Inc.  All rights reserved.
 **
+**  This copyrighted material is made available to anyone wishing to use,
+**  modify, copy, or redistribute it subject to the terms and conditions
+**  of the GNU General Public License v.2.
 **
 *******************************************************************************
 ******************************************************************************/
 
 #include <linux/kernel.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/configfs.h>
 #include <linux/slab.h>
 #include <linux/in.h>
@@ -71,16 +73,12 @@ struct dlm_cluster {
 	unsigned int cl_toss_secs;
 	unsigned int cl_scan_secs;
 	unsigned int cl_log_debug;
-	unsigned int cl_log_info;
 	unsigned int cl_protocol;
 	unsigned int cl_timewarn_cs;
 	unsigned int cl_waitwarn_us;
 	unsigned int cl_new_rsb_count;
 	unsigned int cl_recover_callbacks;
 	char cl_cluster_name[DLM_LOCKSPACE_LEN];
-
-	struct dlm_spaces *sps;
-	struct dlm_comms *cms;
 };
 
 static struct dlm_cluster *config_item_to_cluster(struct config_item *i)
@@ -97,7 +95,6 @@ enum {
 	CLUSTER_ATTR_TOSS_SECS,
 	CLUSTER_ATTR_SCAN_SECS,
 	CLUSTER_ATTR_LOG_DEBUG,
-	CLUSTER_ATTR_LOG_INFO,
 	CLUSTER_ATTR_PROTOCOL,
 	CLUSTER_ATTR_TIMEWARN_CS,
 	CLUSTER_ATTR_WAITWARN_US,
@@ -169,7 +166,6 @@ CLUSTER_ATTR(recover_timer, 1);
 CLUSTER_ATTR(toss_secs, 1);
 CLUSTER_ATTR(scan_secs, 1);
 CLUSTER_ATTR(log_debug, 0);
-CLUSTER_ATTR(log_info, 0);
 CLUSTER_ATTR(protocol, 0);
 CLUSTER_ATTR(timewarn_cs, 1);
 CLUSTER_ATTR(waitwarn_us, 0);
@@ -184,7 +180,6 @@ static struct configfs_attribute *cluster_attrs[] = {
 	[CLUSTER_ATTR_TOSS_SECS] = &cluster_attr_toss_secs,
 	[CLUSTER_ATTR_SCAN_SECS] = &cluster_attr_scan_secs,
 	[CLUSTER_ATTR_LOG_DEBUG] = &cluster_attr_log_debug,
-	[CLUSTER_ATTR_LOG_INFO] = &cluster_attr_log_info,
 	[CLUSTER_ATTR_PROTOCOL] = &cluster_attr_protocol,
 	[CLUSTER_ATTR_TIMEWARN_CS] = &cluster_attr_timewarn_cs,
 	[CLUSTER_ATTR_WAITWARN_US] = &cluster_attr_waitwarn_us,
@@ -219,7 +214,6 @@ struct dlm_space {
 	struct list_head members;
 	struct mutex members_lock;
 	int members_count;
-	struct dlm_nodes *nds;
 };
 
 struct dlm_comms {
@@ -284,44 +278,44 @@ static struct configfs_item_operations node_ops = {
 	.release = release_node,
 };
 
-static const struct config_item_type clusters_type = {
+static struct config_item_type clusters_type = {
 	.ct_group_ops = &clusters_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static const struct config_item_type cluster_type = {
+static struct config_item_type cluster_type = {
 	.ct_item_ops = &cluster_ops,
 	.ct_attrs = cluster_attrs,
 	.ct_owner = THIS_MODULE,
 };
 
-static const struct config_item_type spaces_type = {
+static struct config_item_type spaces_type = {
 	.ct_group_ops = &spaces_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static const struct config_item_type space_type = {
+static struct config_item_type space_type = {
 	.ct_item_ops = &space_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static const struct config_item_type comms_type = {
+static struct config_item_type comms_type = {
 	.ct_group_ops = &comms_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static const struct config_item_type comm_type = {
+static struct config_item_type comm_type = {
 	.ct_item_ops = &comm_ops,
 	.ct_attrs = comm_attrs,
 	.ct_owner = THIS_MODULE,
 };
 
-static const struct config_item_type nodes_type = {
+static struct config_item_type nodes_type = {
 	.ct_group_ops = &nodes_ops,
 	.ct_owner = THIS_MODULE,
 };
 
-static const struct config_item_type node_type = {
+static struct config_item_type node_type = {
 	.ct_item_ops = &node_ops,
 	.ct_attrs = node_attrs,
 	.ct_owner = THIS_MODULE,
@@ -349,23 +343,24 @@ static struct config_group *make_cluster(struct config_group *g,
 	struct dlm_cluster *cl = NULL;
 	struct dlm_spaces *sps = NULL;
 	struct dlm_comms *cms = NULL;
+	void *gps = NULL;
 
 	cl = kzalloc(sizeof(struct dlm_cluster), GFP_NOFS);
+	gps = kcalloc(3, sizeof(struct config_group *), GFP_NOFS);
 	sps = kzalloc(sizeof(struct dlm_spaces), GFP_NOFS);
 	cms = kzalloc(sizeof(struct dlm_comms), GFP_NOFS);
 
-	if (!cl || !sps || !cms)
+	if (!cl || !gps || !sps || !cms)
 		goto fail;
-
-	cl->sps = sps;
-	cl->cms = cms;
 
 	config_group_init_type_name(&cl->group, name, &cluster_type);
 	config_group_init_type_name(&sps->ss_group, "spaces", &spaces_type);
 	config_group_init_type_name(&cms->cs_group, "comms", &comms_type);
 
-	configfs_add_default_group(&sps->ss_group, &cl->group);
-	configfs_add_default_group(&cms->cs_group, &cl->group);
+	cl->group.default_groups = gps;
+	cl->group.default_groups[0] = &sps->ss_group;
+	cl->group.default_groups[1] = &cms->cs_group;
+	cl->group.default_groups[2] = NULL;
 
 	cl->cl_tcp_port = dlm_config.ci_tcp_port;
 	cl->cl_buffer_size = dlm_config.ci_buffer_size;
@@ -374,7 +369,6 @@ static struct config_group *make_cluster(struct config_group *g,
 	cl->cl_toss_secs = dlm_config.ci_toss_secs;
 	cl->cl_scan_secs = dlm_config.ci_scan_secs;
 	cl->cl_log_debug = dlm_config.ci_log_debug;
-	cl->cl_log_info = dlm_config.ci_log_info;
 	cl->cl_protocol = dlm_config.ci_protocol;
 	cl->cl_timewarn_cs = dlm_config.ci_timewarn_cs;
 	cl->cl_waitwarn_us = dlm_config.ci_waitwarn_us;
@@ -389,6 +383,7 @@ static struct config_group *make_cluster(struct config_group *g,
 
  fail:
 	kfree(cl);
+	kfree(gps);
 	kfree(sps);
 	kfree(cms);
 	return ERR_PTR(-ENOMEM);
@@ -397,8 +392,14 @@ static struct config_group *make_cluster(struct config_group *g,
 static void drop_cluster(struct config_group *g, struct config_item *i)
 {
 	struct dlm_cluster *cl = config_item_to_cluster(i);
+	struct config_item *tmp;
+	int j;
 
-	configfs_remove_default_groups(&cl->group);
+	for (j = 0; cl->group.default_groups[j]; j++) {
+		tmp = &cl->group.default_groups[j]->cg_item;
+		cl->group.default_groups[j] = NULL;
+		config_item_put(tmp);
+	}
 
 	space_list = NULL;
 	comm_list = NULL;
@@ -409,9 +410,7 @@ static void drop_cluster(struct config_group *g, struct config_item *i)
 static void release_cluster(struct config_item *i)
 {
 	struct dlm_cluster *cl = config_item_to_cluster(i);
-
-	kfree(cl->sps);
-	kfree(cl->cms);
+	kfree(cl->group.default_groups);
 	kfree(cl);
 }
 
@@ -419,26 +418,30 @@ static struct config_group *make_space(struct config_group *g, const char *name)
 {
 	struct dlm_space *sp = NULL;
 	struct dlm_nodes *nds = NULL;
+	void *gps = NULL;
 
 	sp = kzalloc(sizeof(struct dlm_space), GFP_NOFS);
+	gps = kcalloc(2, sizeof(struct config_group *), GFP_NOFS);
 	nds = kzalloc(sizeof(struct dlm_nodes), GFP_NOFS);
 
-	if (!sp || !nds)
+	if (!sp || !gps || !nds)
 		goto fail;
 
 	config_group_init_type_name(&sp->group, name, &space_type);
-
 	config_group_init_type_name(&nds->ns_group, "nodes", &nodes_type);
-	configfs_add_default_group(&nds->ns_group, &sp->group);
+
+	sp->group.default_groups = gps;
+	sp->group.default_groups[0] = &nds->ns_group;
+	sp->group.default_groups[1] = NULL;
 
 	INIT_LIST_HEAD(&sp->members);
 	mutex_init(&sp->members_lock);
 	sp->members_count = 0;
-	sp->nds = nds;
 	return &sp->group;
 
  fail:
 	kfree(sp);
+	kfree(gps);
 	kfree(nds);
 	return ERR_PTR(-ENOMEM);
 }
@@ -446,17 +449,24 @@ static struct config_group *make_space(struct config_group *g, const char *name)
 static void drop_space(struct config_group *g, struct config_item *i)
 {
 	struct dlm_space *sp = config_item_to_space(i);
+	struct config_item *tmp;
+	int j;
 
 	/* assert list_empty(&sp->members) */
 
-	configfs_remove_default_groups(&sp->group);
+	for (j = 0; sp->group.default_groups[j]; j++) {
+		tmp = &sp->group.default_groups[j]->cg_item;
+		sp->group.default_groups[j] = NULL;
+		config_item_put(tmp);
+	}
+
 	config_item_put(i);
 }
 
 static void release_space(struct config_item *i)
 {
 	struct dlm_space *sp = config_item_to_space(i);
-	kfree(sp->nds);
+	kfree(sp->group.default_groups);
 	kfree(sp);
 }
 
@@ -865,7 +875,6 @@ int dlm_our_addr(struct sockaddr_storage *addr, int num)
 #define DEFAULT_TOSS_SECS         10
 #define DEFAULT_SCAN_SECS          5
 #define DEFAULT_LOG_DEBUG          0
-#define DEFAULT_LOG_INFO           1
 #define DEFAULT_PROTOCOL           0
 #define DEFAULT_TIMEWARN_CS      500 /* 5 sec = 500 centiseconds */
 #define DEFAULT_WAITWARN_US	   0
@@ -881,7 +890,6 @@ struct dlm_config_info dlm_config = {
 	.ci_toss_secs = DEFAULT_TOSS_SECS,
 	.ci_scan_secs = DEFAULT_SCAN_SECS,
 	.ci_log_debug = DEFAULT_LOG_DEBUG,
-	.ci_log_info = DEFAULT_LOG_INFO,
 	.ci_protocol = DEFAULT_PROTOCOL,
 	.ci_timewarn_cs = DEFAULT_TIMEWARN_CS,
 	.ci_waitwarn_us = DEFAULT_WAITWARN_US,

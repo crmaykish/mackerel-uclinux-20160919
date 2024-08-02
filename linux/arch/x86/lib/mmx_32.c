@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *	MMX 3DNow! library helper functions
  *
@@ -19,22 +18,12 @@
  */
 #include <linux/hardirq.h>
 #include <linux/string.h>
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/types.h>
 
 #include <asm/fpu/api.h>
 #include <asm/asm.h>
-
-/*
- * Use KFPU_387.  MMX instructions are not affected by MXCSR,
- * but both AMD and Intel documentation states that even integer MMX
- * operations will result in #MF if an exception is pending in FCW.
- *
- * EMMS is not needed afterwards because, after calling kernel_fpu_end(),
- * any subsequent user of the 387 stack will reinitialize it using
- * KFPU_387.
- */
 
 void *_mmx_memcpy(void *to, const void *from, size_t len)
 {
@@ -47,7 +36,7 @@ void *_mmx_memcpy(void *to, const void *from, size_t len)
 	p = to;
 	i = len >> 6; /* len/64 */
 
-	kernel_fpu_begin_mask(KFPU_387);
+	kernel_fpu_begin();
 
 	__asm__ __volatile__ (
 		"1: prefetch (%0)\n"		/* This set is 28 bytes */
@@ -137,7 +126,7 @@ static void fast_clear_page(void *page)
 {
 	int i;
 
-	kernel_fpu_begin_mask(KFPU_387);
+	kernel_fpu_begin();
 
 	__asm__ __volatile__ (
 		"  pxor %%mm0, %%mm0\n" : :
@@ -170,7 +159,7 @@ static void fast_copy_page(void *to, void *from)
 {
 	int i;
 
-	kernel_fpu_begin_mask(KFPU_387);
+	kernel_fpu_begin();
 
 	/*
 	 * maybe the prefetch stuff can go before the expensive fnsave...
@@ -257,7 +246,7 @@ static void fast_clear_page(void *page)
 {
 	int i;
 
-	kernel_fpu_begin_mask(KFPU_387);
+	kernel_fpu_begin();
 
 	__asm__ __volatile__ (
 		"  pxor %%mm0, %%mm0\n" : :
@@ -292,7 +281,7 @@ static void fast_copy_page(void *to, void *from)
 {
 	int i;
 
-	kernel_fpu_begin_mask(KFPU_387);
+	kernel_fpu_begin();
 
 	__asm__ __volatile__ (
 		"1: prefetch (%0)\n"

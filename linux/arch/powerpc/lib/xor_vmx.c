@@ -1,23 +1,28 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  * Copyright (C) IBM Corporation, 2012
  *
  * Author: Anton Blanchard <anton@au.ibm.com>
  */
-
-/*
- * Sparse (as at v0.5.0) gets very, very confused by this file.
- * Make it a bit simpler for it.
- */
-#if !defined(__CHECKER__)
 #include <altivec.h>
-#else
-#define vec_xor(a, b) a ^ b
-#define vector __attribute__((vector_size(16)))
-#endif
 
-#include "xor_vmx.h"
+#include <linux/preempt.h>
+#include <linux/export.h>
+#include <linux/sched.h>
+#include <asm/switch_to.h>
 
 typedef vector signed char unative_t;
 
@@ -49,12 +54,15 @@ typedef vector signed char unative_t;
 		V1##_3 = vec_xor(V1##_3, V2##_3);	\
 	} while (0)
 
-void __xor_altivec_2(unsigned long bytes, unsigned long *v1_in,
-		     unsigned long *v2_in)
+void xor_altivec_2(unsigned long bytes, unsigned long *v1_in,
+		   unsigned long *v2_in)
 {
 	DEFINE(v1);
 	DEFINE(v2);
 	unsigned long lines = bytes / (sizeof(unative_t)) / 4;
+
+	preempt_disable();
+	enable_kernel_altivec();
 
 	do {
 		LOAD(v1);
@@ -65,15 +73,21 @@ void __xor_altivec_2(unsigned long bytes, unsigned long *v1_in,
 		v1 += 4;
 		v2 += 4;
 	} while (--lines > 0);
-}
 
-void __xor_altivec_3(unsigned long bytes, unsigned long *v1_in,
-		     unsigned long *v2_in, unsigned long *v3_in)
+	preempt_enable();
+}
+EXPORT_SYMBOL(xor_altivec_2);
+
+void xor_altivec_3(unsigned long bytes, unsigned long *v1_in,
+		   unsigned long *v2_in, unsigned long *v3_in)
 {
 	DEFINE(v1);
 	DEFINE(v2);
 	DEFINE(v3);
 	unsigned long lines = bytes / (sizeof(unative_t)) / 4;
+
+	preempt_disable();
+	enable_kernel_altivec();
 
 	do {
 		LOAD(v1);
@@ -87,17 +101,23 @@ void __xor_altivec_3(unsigned long bytes, unsigned long *v1_in,
 		v2 += 4;
 		v3 += 4;
 	} while (--lines > 0);
-}
 
-void __xor_altivec_4(unsigned long bytes, unsigned long *v1_in,
-		     unsigned long *v2_in, unsigned long *v3_in,
-		     unsigned long *v4_in)
+	preempt_enable();
+}
+EXPORT_SYMBOL(xor_altivec_3);
+
+void xor_altivec_4(unsigned long bytes, unsigned long *v1_in,
+		   unsigned long *v2_in, unsigned long *v3_in,
+		   unsigned long *v4_in)
 {
 	DEFINE(v1);
 	DEFINE(v2);
 	DEFINE(v3);
 	DEFINE(v4);
 	unsigned long lines = bytes / (sizeof(unative_t)) / 4;
+
+	preempt_disable();
+	enable_kernel_altivec();
 
 	do {
 		LOAD(v1);
@@ -114,11 +134,14 @@ void __xor_altivec_4(unsigned long bytes, unsigned long *v1_in,
 		v3 += 4;
 		v4 += 4;
 	} while (--lines > 0);
-}
 
-void __xor_altivec_5(unsigned long bytes, unsigned long *v1_in,
-		     unsigned long *v2_in, unsigned long *v3_in,
-		     unsigned long *v4_in, unsigned long *v5_in)
+	preempt_enable();
+}
+EXPORT_SYMBOL(xor_altivec_4);
+
+void xor_altivec_5(unsigned long bytes, unsigned long *v1_in,
+		   unsigned long *v2_in, unsigned long *v3_in,
+		   unsigned long *v4_in, unsigned long *v5_in)
 {
 	DEFINE(v1);
 	DEFINE(v2);
@@ -126,6 +149,9 @@ void __xor_altivec_5(unsigned long bytes, unsigned long *v1_in,
 	DEFINE(v4);
 	DEFINE(v5);
 	unsigned long lines = bytes / (sizeof(unative_t)) / 4;
+
+	preempt_disable();
+	enable_kernel_altivec();
 
 	do {
 		LOAD(v1);
@@ -145,4 +171,7 @@ void __xor_altivec_5(unsigned long bytes, unsigned long *v1_in,
 		v4 += 4;
 		v5 += 4;
 	} while (--lines > 0);
+
+	preempt_enable();
 }
+EXPORT_SYMBOL(xor_altivec_5);

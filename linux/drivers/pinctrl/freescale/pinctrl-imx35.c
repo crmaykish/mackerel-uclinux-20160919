@@ -1,17 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0
-//
-// imx35 pinctrl driver.
-//
-// This driver was mostly copied from the imx51 pinctrl driver which has:
-//
-// Copyright (C) 2012 Freescale Semiconductor, Inc.
-// Copyright (C) 2012 Linaro, Inc.
-//
-// Author: Dong Aisheng <dong.aisheng@linaro.org>
+/*
+ * imx35 pinctrl driver.
+ *
+ * This driver was mostly copied from the imx51 pinctrl driver which has:
+ *
+ * Copyright (C) 2012 Freescale Semiconductor, Inc.
+ * Copyright (C) 2012 Linaro, Inc.
+ *
+ * Author: Dong Aisheng <dong.aisheng@linaro.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation.
+ */
 
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/io.h>
+#include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/pinctrl/pinctrl.h>
@@ -995,7 +1000,7 @@ static const struct pinctrl_pin_desc imx35_pinctrl_pads[] = {
 	IMX_PINCTRL_PIN(MX35_PAD_TEST_MODE),
 };
 
-static const struct imx_pinctrl_soc_info imx35_pinctrl_info = {
+static struct imx_pinctrl_soc_info imx35_pinctrl_info = {
 	.pins = imx35_pinctrl_pads,
 	.npins = ARRAY_SIZE(imx35_pinctrl_pads),
 };
@@ -1016,6 +1021,7 @@ static struct platform_driver imx35_pinctrl_driver = {
 		.of_match_table = imx35_pinctrl_of_match,
 	},
 	.probe = imx35_pinctrl_probe,
+	.remove = imx_pinctrl_remove,
 };
 
 static int __init imx35_pinctrl_init(void)
@@ -1023,3 +1029,12 @@ static int __init imx35_pinctrl_init(void)
 	return platform_driver_register(&imx35_pinctrl_driver);
 }
 arch_initcall(imx35_pinctrl_init);
+
+static void __exit imx35_pinctrl_exit(void)
+{
+	platform_driver_unregister(&imx35_pinctrl_driver);
+}
+module_exit(imx35_pinctrl_exit);
+MODULE_AUTHOR("Dong Aisheng <dong.aisheng@linaro.org>");
+MODULE_DESCRIPTION("Freescale IMX35 pinctrl driver");
+MODULE_LICENSE("GPL v2");

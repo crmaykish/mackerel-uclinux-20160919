@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  NET  is implemented using the  BSD Socket
@@ -13,6 +12,12 @@
  *
  *		Relocated to include/linux where it belongs by Alan Cox 
  *							<gw4pts@gw4pts.ampr.org>
+ *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
+ *
  */
 #ifndef _LINUX_ETHERDEVICE_H
 #define _LINUX_ETHERDEVICE_H
@@ -24,11 +29,7 @@
 #include <asm/bitsperlong.h>
 
 #ifdef __KERNEL__
-struct device;
-int eth_platform_get_mac_address(struct device *dev, u8 *mac_addr);
-unsigned char *arch_get_platform_mac_address(void);
-int nvmem_get_mac_address(struct device *dev, void *addrbuf);
-u32 eth_get_headlen(const struct net_device *dev, void *data, unsigned int len);
+u32 eth_get_headlen(void *data, unsigned int max_len);
 __be16 eth_type_trans(struct sk_buff *skb, struct net_device *dev);
 extern const struct header_ops eth_header_ops;
 
@@ -39,7 +40,6 @@ int eth_header_cache(const struct neighbour *neigh, struct hh_cache *hh,
 		     __be16 type);
 void eth_header_cache_update(struct hh_cache *hh, const struct net_device *dev,
 			     const unsigned char *haddr);
-__be16 eth_header_parse_protocol(const struct sk_buff *skb);
 int eth_prepare_mac_addr_change(struct net_device *dev, void *p);
 void eth_commit_mac_addr_change(struct net_device *dev, void *p);
 int eth_mac_addr(struct net_device *dev, void *p);
@@ -51,18 +51,13 @@ struct net_device *alloc_etherdev_mqs(int sizeof_priv, unsigned int txqs,
 #define alloc_etherdev(sizeof_priv) alloc_etherdev_mq(sizeof_priv, 1)
 #define alloc_etherdev_mq(sizeof_priv, count) alloc_etherdev_mqs(sizeof_priv, count, count)
 
-struct net_device *devm_alloc_etherdev_mqs(struct device *dev, int sizeof_priv,
-					   unsigned int txqs,
-					   unsigned int rxqs);
-#define devm_alloc_etherdev(dev, sizeof_priv) devm_alloc_etherdev_mqs(dev, sizeof_priv, 1, 1)
-
-struct sk_buff *eth_gro_receive(struct list_head *head, struct sk_buff *skb);
+struct sk_buff **eth_gro_receive(struct sk_buff **head,
+				 struct sk_buff *skb);
 int eth_gro_complete(struct sk_buff *skb, int nhoff);
 
 /* Reserved Ethernet Addresses per IEEE 802.1Q */
 static const u8 eth_reserved_addr_base[ETH_ALEN] __aligned(2) =
 { 0x01, 0x80, 0xc2, 0x00, 0x00, 0x00 };
-#define eth_stp_addr eth_reserved_addr_base
 
 /**
  * is_link_local_ether_addr - Determine if given Ethernet address is link-local
@@ -127,7 +122,7 @@ static inline bool is_multicast_ether_addr(const u8 *addr)
 #endif
 }
 
-static inline bool is_multicast_ether_addr_64bits(const u8 *addr)
+static inline bool is_multicast_ether_addr_64bits(const u8 addr[6+2])
 {
 #if defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) && BITS_PER_LONG == 64
 #ifdef __BIG_ENDIAN
@@ -289,18 +284,6 @@ static inline void ether_addr_copy(u8 *dst, const u8 *src)
 }
 
 /**
- * eth_hw_addr_set - Assign Ethernet address to a net_device
- * @dev: pointer to net_device structure
- * @addr: address to assign
- *
- * Assign given address to the net_device, addr_assign_type is not changed.
- */
-static inline void eth_hw_addr_set(struct net_device *dev, const u8 *addr)
-{
-	ether_addr_copy(dev->dev_addr, addr);
-}
-
-/**
  * eth_hw_addr_inherit - Copy dev_addr from another net_device
  * @dst: pointer to net_device to copy dev_addr to
  * @src: pointer to net_device to copy dev_addr from
@@ -353,7 +336,8 @@ static inline bool ether_addr_equal(const u8 *addr1, const u8 *addr2)
  * Please note that alignment of addr1 & addr2 are only guaranteed to be 16 bits.
  */
 
-static inline bool ether_addr_equal_64bits(const u8 *addr1, const u8 *addr2)
+static inline bool ether_addr_equal_64bits(const u8 addr1[6+2],
+					   const u8 addr2[6+2])
 {
 #if defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS) && BITS_PER_LONG == 64
 	u64 fold = (*(const u64 *)addr1) ^ (*(const u64 *)addr2);
@@ -384,86 +368,6 @@ static inline bool ether_addr_equal_unaligned(const u8 *addr1, const u8 *addr2)
 #else
 	return memcmp(addr1, addr2, ETH_ALEN) == 0;
 #endif
-}
-
-/**
- * ether_addr_equal_masked - Compare two Ethernet addresses with a mask
- * @addr1: Pointer to a six-byte array containing the 1st Ethernet address
- * @addr2: Pointer to a six-byte array containing the 2nd Ethernet address
- * @mask: Pointer to a six-byte array containing the Ethernet address bitmask
- *
- * Compare two Ethernet addresses with a mask, returns true if for every bit
- * set in the bitmask the equivalent bits in the ethernet addresses are equal.
- * Using a mask with all bits set is a slower ether_addr_equal.
- */
-static inline bool ether_addr_equal_masked(const u8 *addr1, const u8 *addr2,
-					   const u8 *mask)
-{
-	int i;
-
-	for (i = 0; i < ETH_ALEN; i++) {
-		if ((addr1[i] ^ addr2[i]) & mask[i])
-			return false;
-	}
-
-	return true;
-}
-
-/**
- * ether_addr_to_u64 - Convert an Ethernet address into a u64 value.
- * @addr: Pointer to a six-byte array containing the Ethernet address
- *
- * Return a u64 value of the address
- */
-static inline u64 ether_addr_to_u64(const u8 *addr)
-{
-	u64 u = 0;
-	int i;
-
-	for (i = 0; i < ETH_ALEN; i++)
-		u = u << 8 | addr[i];
-
-	return u;
-}
-
-/**
- * u64_to_ether_addr - Convert a u64 to an Ethernet address.
- * @u: u64 to convert to an Ethernet MAC address
- * @addr: Pointer to a six-byte array to contain the Ethernet address
- */
-static inline void u64_to_ether_addr(u64 u, u8 *addr)
-{
-	int i;
-
-	for (i = ETH_ALEN - 1; i >= 0; i--) {
-		addr[i] = u & 0xff;
-		u = u >> 8;
-	}
-}
-
-/**
- * eth_addr_dec - Decrement the given MAC address
- *
- * @addr: Pointer to a six-byte array containing Ethernet address to decrement
- */
-static inline void eth_addr_dec(u8 *addr)
-{
-	u64 u = ether_addr_to_u64(addr);
-
-	u--;
-	u64_to_ether_addr(u, addr);
-}
-
-/**
- * eth_addr_inc() - Increment the given MAC address.
- * @addr: Pointer to a six-byte array containing Ethernet address to increment.
- */
-static inline void eth_addr_inc(u8 *addr)
-{
-	u64 u = ether_addr_to_u64(addr);
-
-	u++;
-	u64_to_ether_addr(u, addr);
 }
 
 /**
@@ -529,31 +433,6 @@ static inline unsigned long compare_ether_header(const void *a, const void *b)
 	return (*(u16 *)a ^ *(u16 *)b) | (a32[0] ^ b32[0]) |
 	       (a32[1] ^ b32[1]) | (a32[2] ^ b32[2]);
 #endif
-}
-
-/**
- * eth_skb_pkt_type - Assign packet type if destination address does not match
- * @skb: Assigned a packet type if address does not match @dev address
- * @dev: Network device used to compare packet address against
- *
- * If the destination MAC address of the packet does not match the network
- * device address, assign an appropriate packet type.
- */
-static inline void eth_skb_pkt_type(struct sk_buff *skb,
-				    const struct net_device *dev)
-{
-	const struct ethhdr *eth = eth_hdr(skb);
-
-	if (unlikely(!ether_addr_equal_64bits(eth->h_dest, dev->dev_addr))) {
-		if (unlikely(is_multicast_ether_addr_64bits(eth->h_dest))) {
-			if (ether_addr_equal_64bits(eth->h_dest, dev->broadcast))
-				skb->pkt_type = PACKET_BROADCAST;
-			else
-				skb->pkt_type = PACKET_MULTICAST;
-		} else {
-			skb->pkt_type = PACKET_OTHERHOST;
-		}
-	}
 }
 
 /**

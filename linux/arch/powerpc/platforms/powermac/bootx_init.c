@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Early boot support code for BootX bootloader
  *
  *  Copyright (C) 2005 Ben. Herrenschmidt (benh@kernel.crashing.org)
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version
+ *  2 of the License, or (at your option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -80,7 +84,6 @@ static void __init bootx_printf(const char *format, ...)
 			break;
 		}
 	}
-	va_end(args);
 }
 #else /* CONFIG_BOOTX_TEXT */
 static void __init bootx_printf(const char *format, ...) {}
@@ -464,7 +467,7 @@ void __init bootx_init(unsigned long r3, unsigned long r4)
 	boot_infos_t *bi = (boot_infos_t *) r4;
 	unsigned long hdr;
 	unsigned long space;
-	unsigned long ptr;
+	unsigned long ptr, x;
 	char *model;
 	unsigned long offset = reloc_offset();
 
@@ -515,7 +518,7 @@ void __init bootx_init(unsigned long r3, unsigned long r4)
 			;
 	}
 	if (bi->architecture != BOOT_ARCH_PCI) {
-		bootx_printf(" !!! WARNING - Unsupported machine"
+		bootx_printf(" !!! WARNING - Usupported machine"
 			     " architecture !\n");
 		for (;;)
 			;
@@ -558,8 +561,6 @@ void __init bootx_init(unsigned long r3, unsigned long r4)
 	 * MMU switched OFF, so this should not be useful anymore.
 	 */
 	if (bi->version < 4) {
-		unsigned long x __maybe_unused;
-
 		bootx_printf("Touching pages...\n");
 
 		/*

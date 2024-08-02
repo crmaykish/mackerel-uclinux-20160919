@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (C) 1995, 1996, 1997 Paul M. Antoine and Harald Koerfgen
  * Copyright (C) 2000, 2001, 2002, 2003, 2005  Maciej W. Rozycki
@@ -6,7 +5,7 @@
  * Written by Ralf Baechle and Andreas Busse, modified for DECstation
  * support by Paul Antoine and Harald Koerfgen.
  *
- * completely rewritten:
+ * completly rewritten:
  * Copyright (C) 1998 Harald Koerfgen
  *
  * Rewritten extensively for controller-driven IRQ support
@@ -131,7 +130,7 @@
 		 */
 		mfc0	t0,CP0_CAUSE		# get pending interrupts
 		mfc0	t1,CP0_STATUS
-#if defined(CONFIG_32BIT) && defined(CONFIG_MIPS_FP_SUPPORT)
+#ifdef CONFIG_32BIT
 		lw	t2,cpu_fpu_mask
 #endif
 		andi	t0,ST0_IM		# CAUSE.CE may be non-zero!
@@ -139,7 +138,7 @@
 
 		beqz	t0,spurious
 
-#if defined(CONFIG_32BIT) && defined(CONFIG_MIPS_FP_SUPPORT)
+#ifdef CONFIG_32BIT
 		 and	t2,t0
 		bnez	t2,fpu			# handle FPU immediately
 #endif
@@ -147,14 +146,7 @@
 		/*
 		 * Find irq with highest priority
 		 */
-		# open coded PTR_LA t1, cpu_mask_nr_tbl
-#if defined(CONFIG_32BIT) || defined(KBUILD_64BIT_SYM32)
-		# open coded la t1, cpu_mask_nr_tbl
-		lui	t1, %hi(cpu_mask_nr_tbl)
-		addiu	t1, %lo(cpu_mask_nr_tbl)
-#else
-#error GCC `-msym32' option required for 64-bit DECstation builds
-#endif
+		 PTR_LA	t1,cpu_mask_nr_tbl
 1:		lw	t2,(t1)
 		nop
 		and	t2,t0
@@ -203,14 +195,7 @@
 		/*
 		 * Find irq with highest priority
 		 */
-		# open coded PTR_LA t1,asic_mask_nr_tbl
-#if defined(CONFIG_32BIT) || defined(KBUILD_64BIT_SYM32)
-		# open coded la t1, asic_mask_nr_tbl
-		lui	t1, %hi(asic_mask_nr_tbl)
-		addiu	t1, %lo(asic_mask_nr_tbl)
-#else
-#error GCC `-msym32' option required for 64-bit DECstation builds
-#endif
+		 PTR_LA	t1,asic_mask_nr_tbl
 2:		lw	t2,(t1)
 		nop
 		and	t2,t0
@@ -280,7 +265,7 @@ handle_it:
 		j	dec_irq_dispatch
 		 nop
 
-#if defined(CONFIG_32BIT) && defined(CONFIG_MIPS_FP_SUPPORT)
+#ifdef CONFIG_32BIT
 fpu:
 		lw	t0,fpu_kstat_irq
 		nop

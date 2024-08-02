@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
  /*
   * iio/adc/max1027.c
   * Copyright (C) 2014 Philippe Reynes
@@ -6,6 +5,10 @@
   * based on linux/drivers/iio/ad7923.c
   * Copyright 2011 Analog Devices Inc (from AD7923 Driver)
   * Copyright 2012 CS Systemes d'Information
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License version 2 as
+  * published by the Free Software Foundation.
   *
   * max1027.c
   *
@@ -235,9 +238,7 @@ static int max1027_read_single_value(struct iio_dev *indio_dev,
 
 	/* Configure conversion register with the requested chan */
 	st->reg = MAX1027_CONV_REG | MAX1027_CHAN(chan->channel) |
-		  MAX1027_NOSCAN;
-	if (chan->type == IIO_TEMP)
-		st->reg |= MAX1027_TEMP;
+		  MAX1027_NOSCAN | !!(chan->type == IIO_TEMP);
 	ret = spi_write(st->spi, &st->reg, 1);
 	if (ret < 0) {
 		dev_err(&indio_dev->dev,
@@ -359,9 +360,20 @@ static int max1027_set_trigger_state(struct iio_trigger *trig, bool state)
 	return 0;
 }
 
+static int max1027_validate_device(struct iio_trigger *trig,
+				   struct iio_dev *indio_dev)
+{
+	struct iio_dev *indio = iio_trigger_get_drvdata(trig);
+
+	if (indio != indio_dev)
+		return -EINVAL;
+
+	return 0;
+}
+
 static irqreturn_t max1027_trigger_handler(int irq, void *private)
 {
-	struct iio_poll_func *pf = private;
+	struct iio_poll_func *pf = (struct iio_poll_func *)private;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct max1027_state *st = iio_priv(indio_dev);
 
@@ -378,11 +390,13 @@ static irqreturn_t max1027_trigger_handler(int irq, void *private)
 }
 
 static const struct iio_trigger_ops max1027_trigger_ops = {
-	.validate_device = &iio_trigger_validate_own_device,
+	.owner = THIS_MODULE,
+	.validate_device = &max1027_validate_device,
 	.set_trigger_state = &max1027_set_trigger_state,
 };
 
 static const struct iio_info max1027_info = {
+	.driver_module = THIS_MODULE,
 	.read_raw = &max1027_read_raw,
 	.validate_trigger = &max1027_validate_trigger,
 	.debugfs_reg_access = &max1027_debugfs_reg_access,
@@ -412,24 +426,22 @@ static int max1027_probe(struct spi_device *spi)
 
 	indio_dev->name = spi_get_device_id(spi)->name;
 	indio_dev->dev.parent = &spi->dev;
-	indio_dev->dev.of_node = spi->dev.of_node;
 	indio_dev->info = &max1027_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = st->info->channels;
 	indio_dev->num_channels = st->info->num_channels;
 	indio_dev->available_scan_masks = st->info->available_scan_masks;
 
-	st->buffer = devm_kmalloc_array(&indio_dev->dev,
-				  indio_dev->num_channels, 2,
+	st->buffer = devm_kmalloc(&indio_dev->dev,
+				  indio_dev->num_channels * 2,
 				  GFP_KERNEL);
 	if (st->buffer == NULL) {
 		dev_err(&indio_dev->dev, "Can't allocate buffer\n");
 		return -ENOMEM;
 	}
 
-	ret = devm_iio_triggered_buffer_setup(&spi->dev, indio_dev,
-					&iio_pollfunc_store_time,
-					&max1027_trigger_handler, NULL);
+	ret = iio_triggered_buffer_setup(indio_dev, &iio_pollfunc_store_time,
+					 &max1027_trigger_handler, NULL);
 	if (ret < 0) {
 		dev_err(&indio_dev->dev, "Failed to setup buffer\n");
 		return ret;
@@ -440,7 +452,7 @@ static int max1027_probe(struct spi_device *spi)
 	if (st->trig == NULL) {
 		ret = -ENOMEM;
 		dev_err(&indio_dev->dev, "Failed to allocate iio trigger\n");
-		return ret;
+		goto fail_trigger_alloc;
 	}
 
 	st->trig->ops = &max1027_trigger_ops;
@@ -455,15 +467,7 @@ static int max1027_probe(struct spi_device *spi)
 					spi->dev.driver->name, st->trig);
 	if (ret < 0) {
 		dev_err(&indio_dev->dev, "Failed to allocate IRQ.\n");
-		return ret;
-	}
-
-	/* Internal reset */
-	st->reg = MAX1027_RST_REG;
-	ret = spi_write(st->spi, &st->reg, 1);
-	if (ret < 0) {
-		dev_err(&indio_dev->dev, "Failed to reset the ADC\n");
-		return ret;
+		goto fail_dev_register;
 	}
 
 	/* Disable averaging */
@@ -471,10 +475,34 @@ static int max1027_probe(struct spi_device *spi)
 	ret = spi_write(st->spi, &st->reg, 1);
 	if (ret < 0) {
 		dev_err(&indio_dev->dev, "Failed to configure averaging register\n");
-		return ret;
+		goto fail_dev_register;
 	}
 
-	return devm_iio_device_register(&spi->dev, indio_dev);
+	ret = iio_device_register(indio_dev);
+	if (ret < 0) {
+		dev_err(&indio_dev->dev, "Failed to register iio device\n");
+		goto fail_dev_register;
+	}
+
+	return 0;
+
+fail_dev_register:
+fail_trigger_alloc:
+	iio_triggered_buffer_cleanup(indio_dev);
+
+	return ret;
+}
+
+static int max1027_remove(struct spi_device *spi)
+{
+	struct iio_dev *indio_dev = spi_get_drvdata(spi);
+
+	pr_debug("%s: remove(spi = 0x%p)\n", __func__, spi);
+
+	iio_device_unregister(indio_dev);
+	iio_triggered_buffer_cleanup(indio_dev);
+
+	return 0;
 }
 
 static struct spi_driver max1027_driver = {
@@ -483,6 +511,7 @@ static struct spi_driver max1027_driver = {
 		.of_match_table = of_match_ptr(max1027_adc_dt_ids),
 	},
 	.probe		= max1027_probe,
+	.remove		= max1027_remove,
 	.id_table	= max1027_id,
 };
 module_spi_driver(max1027_driver);

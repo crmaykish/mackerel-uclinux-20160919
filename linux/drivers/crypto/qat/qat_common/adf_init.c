@@ -62,13 +62,23 @@ static void adf_service_add(struct service_hndl *service)
 	mutex_unlock(&service_lock);
 }
 
+/**
+ * adf_service_register() - Register acceleration service in the accel framework
+ * @service:    Pointer to the service
+ *
+ * Function adds the acceleration service to the acceleration framework.
+ * To be used by QAT device specific drivers.
+ *
+ * Return: 0 on success, error code otherwise.
+ */
 int adf_service_register(struct service_hndl *service)
 {
-	memset(service->init_status, 0, sizeof(service->init_status));
-	memset(service->start_status, 0, sizeof(service->start_status));
+	service->init_status = 0;
+	service->start_status = 0;
 	adf_service_add(service);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(adf_service_register);
 
 static void adf_service_remove(struct service_hndl *service)
 {
@@ -77,19 +87,25 @@ static void adf_service_remove(struct service_hndl *service)
 	mutex_unlock(&service_lock);
 }
 
+/**
+ * adf_service_unregister() - Unregister acceleration service from the framework
+ * @service:    Pointer to the service
+ *
+ * Function remove the acceleration service from the acceleration framework.
+ * To be used by QAT device specific drivers.
+ *
+ * Return: 0 on success, error code otherwise.
+ */
 int adf_service_unregister(struct service_hndl *service)
 {
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(service->init_status); i++) {
-		if (service->init_status[i] || service->start_status[i]) {
-			pr_err("QAT: Could not remove active service\n");
-			return -EFAULT;
-		}
+	if (service->init_status || service->start_status) {
+		pr_err("QAT: Could not remove active service\n");
+		return -EFAULT;
 	}
 	adf_service_remove(service);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(adf_service_unregister);
 
 /**
  * adf_dev_init() - Init data structures and services for the given accel device
@@ -105,7 +121,6 @@ int adf_dev_init(struct adf_accel_dev *accel_dev)
 	struct service_hndl *service;
 	struct list_head *list_itr;
 	struct adf_hw_device_data *hw_data = accel_dev->hw_device;
-	int ret;
 
 	if (!hw_data) {
 		dev_err(&GET_DEV(accel_dev),
@@ -168,13 +183,13 @@ int adf_dev_init(struct adf_accel_dev *accel_dev)
 				service->name);
 			return -EFAULT;
 		}
-		set_bit(accel_dev->accel_id, service->init_status);
+		set_bit(accel_dev->accel_id, &service->init_status);
 	}
 
 	hw_data->enable_error_correction(accel_dev);
-	ret = hw_data->enable_vf2pf_comms(accel_dev);
+	hw_data->enable_vf2pf_comms(accel_dev);
 
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(adf_dev_init);
 
@@ -215,7 +230,7 @@ int adf_dev_start(struct adf_accel_dev *accel_dev)
 				service->name);
 			return -EFAULT;
 		}
-		set_bit(accel_dev->accel_id, service->start_status);
+		set_bit(accel_dev->accel_id, &service->start_status);
 	}
 
 	clear_bit(ADF_STATUS_STARTING, &accel_dev->status);
@@ -241,9 +256,9 @@ EXPORT_SYMBOL_GPL(adf_dev_start);
  * is shuting down.
  * To be used by QAT device specific drivers.
  *
- * Return: void
+ * Return: 0 on success, error code otherwise.
  */
-void adf_dev_stop(struct adf_accel_dev *accel_dev)
+int adf_dev_stop(struct adf_accel_dev *accel_dev)
 {
 	struct service_hndl *service;
 	struct list_head *list_itr;
@@ -251,9 +266,9 @@ void adf_dev_stop(struct adf_accel_dev *accel_dev)
 	int ret;
 
 	if (!adf_dev_started(accel_dev) &&
-	    !test_bit(ADF_STATUS_STARTING, &accel_dev->status))
-		return;
-
+	    !test_bit(ADF_STATUS_STARTING, &accel_dev->status)) {
+		return 0;
+	}
 	clear_bit(ADF_STATUS_STARTING, &accel_dev->status);
 	clear_bit(ADF_STATUS_STARTED, &accel_dev->status);
 
@@ -264,14 +279,14 @@ void adf_dev_stop(struct adf_accel_dev *accel_dev)
 
 	list_for_each(list_itr, &service_table) {
 		service = list_entry(list_itr, struct service_hndl, list);
-		if (!test_bit(accel_dev->accel_id, service->start_status))
+		if (!test_bit(accel_dev->accel_id, &service->start_status))
 			continue;
 		ret = service->event_hld(accel_dev, ADF_EVENT_STOP);
 		if (!ret) {
-			clear_bit(accel_dev->accel_id, service->start_status);
+			clear_bit(accel_dev->accel_id, &service->start_status);
 		} else if (ret == -EAGAIN) {
 			wait = true;
-			clear_bit(accel_dev->accel_id, service->start_status);
+			clear_bit(accel_dev->accel_id, &service->start_status);
 		}
 	}
 
@@ -284,6 +299,8 @@ void adf_dev_stop(struct adf_accel_dev *accel_dev)
 		else
 			clear_bit(ADF_STATUS_AE_STARTED, &accel_dev->status);
 	}
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(adf_dev_stop);
 
@@ -322,17 +339,15 @@ void adf_dev_shutdown(struct adf_accel_dev *accel_dev)
 
 	list_for_each(list_itr, &service_table) {
 		service = list_entry(list_itr, struct service_hndl, list);
-		if (!test_bit(accel_dev->accel_id, service->init_status))
+		if (!test_bit(accel_dev->accel_id, &service->init_status))
 			continue;
 		if (service->event_hld(accel_dev, ADF_EVENT_SHUTDOWN))
 			dev_err(&GET_DEV(accel_dev),
 				"Failed to shutdown service %s\n",
 				service->name);
 		else
-			clear_bit(accel_dev->accel_id, service->init_status);
+			clear_bit(accel_dev->accel_id, &service->init_status);
 	}
-
-	hw_data->disable_iov(accel_dev);
 
 	if (test_bit(ADF_STATUS_IRQ_ALLOCATED, &accel_dev->status)) {
 		hw_data->free_irq(accel_dev);
@@ -349,8 +364,8 @@ void adf_dev_shutdown(struct adf_accel_dev *accel_dev)
 	if (hw_data->exit_admin_comms)
 		hw_data->exit_admin_comms(accel_dev);
 
+	hw_data->disable_iov(accel_dev);
 	adf_cleanup_etr_data(accel_dev);
-	adf_dev_restore(accel_dev);
 }
 EXPORT_SYMBOL_GPL(adf_dev_shutdown);
 

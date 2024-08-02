@@ -1,5 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
-#include "versatile-ab.dts"
+#include <versatile-ab.dts>
 
 / {
 	model = "ARM Versatile PB";
@@ -7,7 +6,7 @@
 
 	amba {
 		/* The Versatile PB is using more SIC IRQ lines than the AB */
-		sic: interrupt-controller@10003000 {
+		sic: intc@10003000 {
 			clear-mask = <0xffffffff>;
 			/*
 			 * Valid interrupt lines mask according to
@@ -40,7 +39,7 @@
 			clock-names = "apb_pclk";
 		};
 
-		pci@10001000 {
+		pci-controller@10001000 {
 			compatible = "arm,versatile-pci";
 			device_type = "pci";
 			reg = <0x10001000 0x1000

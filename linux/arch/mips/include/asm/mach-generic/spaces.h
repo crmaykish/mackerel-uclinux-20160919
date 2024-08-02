@@ -12,18 +12,12 @@
 
 #include <linux/const.h>
 
-#include <asm/mipsregs.h>
-
 /*
  * This gives the physical RAM offset.
  */
-#ifndef __ASSEMBLY__
-# if defined(CONFIG_MIPS_AUTO_PFN_OFFSET)
-#  define PHYS_OFFSET		((unsigned long)PFN_PHYS(ARCH_PFN_OFFSET))
-# elif !defined(PHYS_OFFSET)
-#  define PHYS_OFFSET		_AC(0, UL)
-# endif
-#endif /* __ASSEMBLY__ */
+#ifndef PHYS_OFFSET
+#define PHYS_OFFSET		_AC(0, UL)
+#endif
 
 #ifdef CONFIG_32BIT
 #ifdef CONFIG_KVM_GUEST
@@ -58,7 +52,11 @@
 #ifdef CONFIG_64BIT
 
 #ifndef CAC_BASE
-#define CAC_BASE	PHYS_TO_XKPHYS(read_c0_config() & CONF_CM_CMASK, 0)
+#ifdef CONFIG_DMA_NONCOHERENT
+#define CAC_BASE		_AC(0x9800000000000000, UL)
+#else
+#define CAC_BASE		_AC(0xa800000000000000, UL)
+#endif
 #endif
 
 #ifndef IO_BASE

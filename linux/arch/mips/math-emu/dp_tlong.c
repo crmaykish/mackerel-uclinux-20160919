@@ -1,10 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* IEEE754 floating point arithmetic
  * double precision: common utilities
  */
 /*
  * MIPS floating point support
  * Copyright (C) 1994-2000 Algorithmics Ltd.
+ *
+ *  This program is free software; you can distribute it and/or modify it
+ *  under the terms of the GNU General Public License (Version 2) as
+ *  published by the Free Software Foundation.
+ *
+ *  This program is distributed in the hope it will be useful, but WITHOUT
+ *  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ *  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ *  for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA.
  */
 
 #include "ieee754dp.h"
@@ -26,12 +38,9 @@ s64 ieee754dp_tlong(union ieee754dp x)
 	switch (xc) {
 	case IEEE754_CLASS_SNAN:
 	case IEEE754_CLASS_QNAN:
-		ieee754_setcx(IEEE754_INVALID_OPERATION);
-		return ieee754di_indef();
-
 	case IEEE754_CLASS_INF:
 		ieee754_setcx(IEEE754_INVALID_OPERATION);
-		return ieee754di_overflow(xs);
+		return ieee754di_indef();
 
 	case IEEE754_CLASS_ZERO:
 		return 0;
@@ -47,7 +56,7 @@ s64 ieee754dp_tlong(union ieee754dp x)
 		/* Set invalid. We will only use overflow for floating
 		   point overflow */
 		ieee754_setcx(IEEE754_INVALID_OPERATION);
-		return ieee754di_overflow(xs);
+		return ieee754di_indef();
 	}
 	/* oh gawd */
 	if (xe > DP_FBITS) {
@@ -88,7 +97,7 @@ s64 ieee754dp_tlong(union ieee754dp x)
 		if ((xm >> 63) != 0) {
 			/* This can happen after rounding */
 			ieee754_setcx(IEEE754_INVALID_OPERATION);
-			return ieee754di_overflow(xs);
+			return ieee754di_indef();
 		}
 		if (round || sticky)
 			ieee754_setcx(IEEE754_INEXACT);

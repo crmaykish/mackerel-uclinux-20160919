@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_HARDIRQ_H
 #define __ASM_HARDIRQ_H
 
@@ -6,8 +5,7 @@
 #include <linux/threads.h>
 #include <asm/irq.h>
 
-/* number of IPIS _not_ including IPI_CPU_BACKTRACE */
-#define NR_IPI	7
+#define NR_IPI	8
 
 typedef struct {
 	unsigned int __softirq_pending;

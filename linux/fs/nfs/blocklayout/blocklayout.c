@@ -102,15 +102,14 @@ static inline void put_parallel(struct parallel_io *p)
 }
 
 static struct bio *
-bl_submit_bio(struct bio *bio)
+bl_submit_bio(int rw, struct bio *bio)
 {
 	if (bio) {
 		get_parallel(bio->bi_private);
 		dprintk("%s submitting %s bio %u@%llu\n", __func__,
-			bio_op(bio) == READ ? "read" : "write",
-			bio->bi_iter.bi_size,
+			rw == READ ? "read" : "write", bio->bi_iter.bi_size,
 			(unsigned long long)bio->bi_iter.bi_sector);
-		submit_bio(bio);
+		submit_bio(rw, bio);
 	}
 	return NULL;
 }
@@ -130,16 +129,11 @@ bl_alloc_init_bio(int npg, struct block_device *bdev, sector_t disk_sector,
 
 	if (bio) {
 		bio->bi_iter.bi_sector = disk_sector;
-		bio_set_dev(bio, bdev);
+		bio->bi_bdev = bdev;
 		bio->bi_end_io = end_io;
 		bio->bi_private = par;
 	}
 	return bio;
-}
-
-static bool offset_in_map(u64 offset, struct pnfs_block_dev_map *map)
-{
-	return offset >= map->start && offset < map->start + map->len;
 }
 
 static struct bio *
@@ -161,10 +155,10 @@ do_add_page_to_bio(struct bio *bio, int npg, int rw, sector_t isect,
 
 	/* translate to physical disk offset */
 	disk_addr = (u64)isect << SECTOR_SHIFT;
-	if (!offset_in_map(disk_addr, map)) {
-		if (!dev->map(dev, disk_addr, map) || !offset_in_map(disk_addr, map))
+	if (disk_addr < map->start || disk_addr >= map->start + map->len) {
+		if (!dev->map(dev, disk_addr, map))
 			return ERR_PTR(-EIO);
-		bio = bl_submit_bio(bio);
+		bio = bl_submit_bio(rw, bio);
 	}
 	disk_addr += map->disk_offset;
 	disk_addr -= map->start;
@@ -180,49 +174,24 @@ retry:
 				disk_addr >> SECTOR_SHIFT, end_io, par);
 		if (!bio)
 			return ERR_PTR(-ENOMEM);
-		bio_set_op_attrs(bio, rw, 0);
 	}
 	if (bio_add_page(bio, page, *len, offset) < *len) {
-		bio = bl_submit_bio(bio);
+		bio = bl_submit_bio(rw, bio);
 		goto retry;
 	}
 	return bio;
-}
-
-static void bl_mark_devices_unavailable(struct nfs_pgio_header *header, bool rw)
-{
-	struct pnfs_block_layout *bl = BLK_LSEG2EXT(header->lseg);
-	size_t bytes_left = header->args.count;
-	sector_t isect, extent_length = 0;
-	struct pnfs_block_extent be;
-
-	isect = header->args.offset >> SECTOR_SHIFT;
-	bytes_left += header->args.offset - (isect << SECTOR_SHIFT);
-
-	while (bytes_left > 0) {
-		if (!ext_tree_lookup(bl, isect, &be, rw))
-				return;
-		extent_length = be.be_length - (isect - be.be_f_offset);
-		nfs4_mark_deviceid_unavailable(be.be_device);
-		isect += extent_length;
-		if (bytes_left > extent_length << SECTOR_SHIFT)
-			bytes_left -= extent_length << SECTOR_SHIFT;
-		else
-			bytes_left = 0;
-	}
 }
 
 static void bl_end_io_read(struct bio *bio)
 {
 	struct parallel_io *par = bio->bi_private;
 
-	if (bio->bi_status) {
+	if (bio->bi_error) {
 		struct nfs_pgio_header *header = par->data;
 
 		if (!header->pnfs_error)
 			header->pnfs_error = -EIO;
 		pnfs_set_lo_fail(header->lseg);
-		bl_mark_devices_unavailable(header, false);
 	}
 
 	bio_put(bio);
@@ -262,7 +231,7 @@ bl_read_pagelist(struct nfs_pgio_header *header)
 	size_t bytes_left = header->args.count;
 	unsigned int pg_offset = header->args.pgbase, pg_len;
 	struct page **pages = header->args.pages;
-	int pg_index = header->args.pgbase >> PAGE_SHIFT;
+	int pg_index = header->args.pgbase >> PAGE_CACHE_SHIFT;
 	const bool is_dio = (header->dreq != NULL);
 	struct blk_plug plug;
 	int i;
@@ -283,7 +252,7 @@ bl_read_pagelist(struct nfs_pgio_header *header)
 	for (i = pg_index; i < header->page_array.npages; i++) {
 		if (extent_length <= 0) {
 			/* We've used up the previous extent */
-			bio = bl_submit_bio(bio);
+			bio = bl_submit_bio(READ, bio);
 
 			/* Get the next one */
 			if (!ext_tree_lookup(bl, isect, &be, false)) {
@@ -294,17 +263,17 @@ bl_read_pagelist(struct nfs_pgio_header *header)
 		}
 
 		if (is_dio) {
-			if (pg_offset + bytes_left > PAGE_SIZE)
-				pg_len = PAGE_SIZE - pg_offset;
+			if (pg_offset + bytes_left > PAGE_CACHE_SIZE)
+				pg_len = PAGE_CACHE_SIZE - pg_offset;
 			else
 				pg_len = bytes_left;
 		} else {
 			BUG_ON(pg_offset != 0);
-			pg_len = PAGE_SIZE;
+			pg_len = PAGE_CACHE_SIZE;
 		}
 
 		if (is_hole(&be)) {
-			bio = bl_submit_bio(bio);
+			bio = bl_submit_bio(READ, bio);
 			/* Fill hole w/ zeroes w/o accessing device */
 			dprintk("%s Zeroing page for hole\n", __func__);
 			zero_user_segment(pages[i], pg_offset, pg_len);
@@ -337,7 +306,7 @@ bl_read_pagelist(struct nfs_pgio_header *header)
 		header->res.count = (isect << SECTOR_SHIFT) - header->args.offset;
 	}
 out:
-	bl_submit_bio(bio);
+	bl_submit_bio(READ, bio);
 	blk_finish_plug(&plug);
 	put_parallel(par);
 	return PNFS_ATTEMPTED;
@@ -348,11 +317,10 @@ static void bl_end_io_write(struct bio *bio)
 	struct parallel_io *par = bio->bi_private;
 	struct nfs_pgio_header *header = par->data;
 
-	if (bio->bi_status) {
+	if (bio->bi_error) {
 		if (!header->pnfs_error)
 			header->pnfs_error = -EIO;
 		pnfs_set_lo_fail(header->lseg);
-		bl_mark_devices_unavailable(header, true);
 	}
 	bio_put(bio);
 	put_parallel(par);
@@ -371,13 +339,12 @@ static void bl_write_cleanup(struct work_struct *work)
 
 	if (likely(!hdr->pnfs_error)) {
 		struct pnfs_block_layout *bl = BLK_LSEG2EXT(hdr->lseg);
-		u64 start = hdr->args.offset & (loff_t)PAGE_MASK;
+		u64 start = hdr->args.offset & (loff_t)PAGE_CACHE_MASK;
 		u64 end = (hdr->args.offset + hdr->args.count +
-			PAGE_SIZE - 1) & (loff_t)PAGE_MASK;
-		u64 lwb = hdr->args.offset + hdr->args.count;
+			PAGE_CACHE_SIZE - 1) & (loff_t)PAGE_CACHE_MASK;
 
 		ext_tree_mark_written(bl, start >> SECTOR_SHIFT,
-					(end - start) >> SECTOR_SHIFT, lwb);
+					(end - start) >> SECTOR_SHIFT);
 	}
 
 	pnfs_ld_write_done(hdr);
@@ -406,12 +373,12 @@ bl_write_pagelist(struct nfs_pgio_header *header, int sync)
 	loff_t offset = header->args.offset;
 	size_t count = header->args.count;
 	struct page **pages = header->args.pages;
-	int pg_index = header->args.pgbase >> PAGE_SHIFT;
+	int pg_index = header->args.pgbase >> PAGE_CACHE_SHIFT;
 	unsigned int pg_len;
 	struct blk_plug plug;
 	int i;
 
-	dprintk("%s enter, %zu@%lld\n", __func__, count, offset);
+	dprintk("%s enter, %Zu@%lld\n", __func__, count, offset);
 
 	/* At this point, header->page_aray is a (sequential) list of nfs_pages.
 	 * We want to write each, and if there is an error set pnfs_error
@@ -425,13 +392,13 @@ bl_write_pagelist(struct nfs_pgio_header *header, int sync)
 	blk_start_plug(&plug);
 
 	/* we always write out the whole page */
-	offset = offset & (loff_t)PAGE_MASK;
+	offset = offset & (loff_t)PAGE_CACHE_MASK;
 	isect = offset >> SECTOR_SHIFT;
 
 	for (i = pg_index; i < header->page_array.npages; i++) {
 		if (extent_length <= 0) {
 			/* We've used up the previous extent */
-			bio = bl_submit_bio(bio);
+			bio = bl_submit_bio(WRITE, bio);
 			/* Get the next one */
 			if (!ext_tree_lookup(bl, isect, &be, true)) {
 				header->pnfs_error = -EINVAL;
@@ -441,7 +408,7 @@ bl_write_pagelist(struct nfs_pgio_header *header, int sync)
 			extent_length = be.be_length - (isect - be.be_f_offset);
 		}
 
-		pg_len = PAGE_SIZE;
+		pg_len = PAGE_CACHE_SIZE;
 		bio = do_add_page_to_bio(bio, header->page_array.npages - i,
 					 WRITE, isect, pages[i], &map, &be,
 					 bl_end_io_write, par,
@@ -460,7 +427,7 @@ bl_write_pagelist(struct nfs_pgio_header *header, int sync)
 
 	header->res.count = header->args.count;
 out:
-	bl_submit_bio(bio);
+	bl_submit_bio(WRITE, bio);
 	blk_finish_plug(&plug);
 	put_parallel(par);
 	return PNFS_ATTEMPTED;
@@ -479,8 +446,8 @@ static void bl_free_layout_hdr(struct pnfs_layout_hdr *lo)
 	kfree(bl);
 }
 
-static struct pnfs_layout_hdr *__bl_alloc_layout_hdr(struct inode *inode,
-		gfp_t gfp_flags, bool is_scsi_layout)
+static struct pnfs_layout_hdr *bl_alloc_layout_hdr(struct inode *inode,
+						   gfp_t gfp_flags)
 {
 	struct pnfs_block_layout *bl;
 
@@ -493,20 +460,7 @@ static struct pnfs_layout_hdr *__bl_alloc_layout_hdr(struct inode *inode,
 	bl->bl_ext_ro = RB_ROOT;
 	spin_lock_init(&bl->bl_ext_lock);
 
-	bl->bl_scsi_layout = is_scsi_layout;
 	return &bl->bl_layout;
-}
-
-static struct pnfs_layout_hdr *bl_alloc_layout_hdr(struct inode *inode,
-						   gfp_t gfp_flags)
-{
-	return __bl_alloc_layout_hdr(inode, gfp_flags, false);
-}
-
-static struct pnfs_layout_hdr *sl_alloc_layout_hdr(struct inode *inode,
-						   gfp_t gfp_flags)
-{
-	return __bl_alloc_layout_hdr(inode, gfp_flags, true);
 }
 
 static void bl_free_lseg(struct pnfs_layout_segment *lseg)
@@ -582,33 +536,6 @@ static int decode_sector_number(__be32 **rp, sector_t *sp)
 	return 0;
 }
 
-static struct nfs4_deviceid_node *
-bl_find_get_deviceid(struct nfs_server *server,
-		const struct nfs4_deviceid *id, const struct cred *cred,
-		gfp_t gfp_mask)
-{
-	struct nfs4_deviceid_node *node;
-	unsigned long start, end;
-
-retry:
-	node = nfs4_find_get_deviceid(server, id, cred, gfp_mask);
-	if (!node)
-		return ERR_PTR(-ENODEV);
-
-	if (test_bit(NFS_DEVICEID_UNAVAILABLE, &node->flags) == 0)
-		return node;
-
-	end = jiffies;
-	start = end - PNFS_DEVICE_RETRY_TIMEOUT;
-	if (!time_in_range(node->timestamp_unavailable, start, end)) {
-		nfs4_delete_deviceid(node->ld, node->nfs_client, id);
-		goto retry;
-	}
-
-	nfs4_put_deviceid_node(node);
-	return ERR_PTR(-ENODEV);
-}
-
 static int
 bl_alloc_extent(struct xdr_stream *xdr, struct pnfs_layout_hdr *lo,
 		struct layout_verification *lv, struct list_head *extents,
@@ -630,18 +557,16 @@ bl_alloc_extent(struct xdr_stream *xdr, struct pnfs_layout_hdr *lo,
 	memcpy(&id, p, NFS4_DEVICEID4_SIZE);
 	p += XDR_QUADLEN(NFS4_DEVICEID4_SIZE);
 
-	be->be_device = bl_find_get_deviceid(NFS_SERVER(lo->plh_inode), &id,
+	error = -EIO;
+	be->be_device = nfs4_find_get_deviceid(NFS_SERVER(lo->plh_inode), &id,
 						lo->plh_lc_cred, gfp_mask);
-	if (IS_ERR(be->be_device)) {
-		error = PTR_ERR(be->be_device);
+	if (!be->be_device)
 		goto out_free_be;
-	}
 
 	/*
 	 * The next three values are read in as bytes, but stored in the
 	 * extent structure in 512-byte granularity.
 	 */
-	error = -EIO;
 	if (decode_sector_number(&p, &be->be_f_offset) < 0)
 		goto out_put_deviceid;
 	if (decode_sector_number(&p, &be->be_length) < 0)
@@ -751,17 +676,11 @@ out_free_scratch:
 	__free_page(scratch);
 out:
 	dprintk("%s returns %d\n", __func__, status);
-	switch (status) {
-	case -ENODEV:
-		/* Our extent block devices are unavailable */
-		set_bit(NFS_LSEG_UNAVAILABLE, &lseg->pls_flags);
-		/* Fall through */
-	case 0:
-		return lseg;
-	default:
+	if (status) {
 		kfree(lseg);
 		return ERR_PTR(status);
 	}
+	return lseg;
 }
 
 static void
@@ -824,7 +743,7 @@ bl_set_layoutdriver(struct nfs_server *server, const struct nfs_fh *fh)
 
 static bool
 is_aligned_req(struct nfs_pageio_descriptor *pgio,
-		struct nfs_page *req, unsigned int alignment, bool is_write)
+		struct nfs_page *req, unsigned int alignment)
 {
 	/*
 	 * Always accept buffered writes, higher layers take care of the
@@ -839,8 +758,7 @@ is_aligned_req(struct nfs_pageio_descriptor *pgio,
 	if (IS_ALIGNED(req->wb_bytes, alignment))
 		return true;
 
-	if (is_write &&
-	    (req_offset(req) + req->wb_bytes == i_size_read(pgio->pg_inode))) {
+	if (req_offset(req) + req->wb_bytes == i_size_read(pgio->pg_inode)) {
 		/*
 		 * If the write goes up to the inode size, just write
 		 * the full page.  Data past the inode size is
@@ -857,19 +775,12 @@ is_aligned_req(struct nfs_pageio_descriptor *pgio,
 static void
 bl_pg_init_read(struct nfs_pageio_descriptor *pgio, struct nfs_page *req)
 {
-	if (!is_aligned_req(pgio, req, SECTOR_SIZE, false)) {
+	if (!is_aligned_req(pgio, req, SECTOR_SIZE)) {
 		nfs_pageio_reset_read_mds(pgio);
 		return;
 	}
 
 	pnfs_generic_pg_init_read(pgio, req);
-
-	if (pgio->pg_lseg &&
-		test_bit(NFS_LSEG_UNAVAILABLE, &pgio->pg_lseg->pls_flags)) {
-		pnfs_error_mark_layout_for_return(pgio->pg_inode, pgio->pg_lseg);
-		pnfs_set_lo_fail(pgio->pg_lseg);
-		nfs_pageio_reset_read_mds(pgio);
-	}
 }
 
 /*
@@ -880,7 +791,7 @@ static size_t
 bl_pg_test_read(struct nfs_pageio_descriptor *pgio, struct nfs_page *prev,
 		struct nfs_page *req)
 {
-	if (!is_aligned_req(pgio, req, SECTOR_SIZE, false))
+	if (!is_aligned_req(pgio, req, SECTOR_SIZE))
 		return 0;
 	return pnfs_generic_pg_test(pgio, prev, req);
 }
@@ -895,17 +806,17 @@ static u64 pnfs_num_cont_bytes(struct inode *inode, pgoff_t idx)
 	pgoff_t end;
 
 	/* Optimize common case that writes from 0 to end of file */
-	end = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
+	end = DIV_ROUND_UP(i_size_read(inode), PAGE_CACHE_SIZE);
 	if (end != inode->i_mapping->nrpages) {
 		rcu_read_lock();
-		end = page_cache_next_miss(mapping, idx + 1, ULONG_MAX);
+		end = page_cache_next_hole(mapping, idx + 1, ULONG_MAX);
 		rcu_read_unlock();
 	}
 
 	if (!end)
-		return i_size_read(inode) - (idx << PAGE_SHIFT);
+		return i_size_read(inode) - (idx << PAGE_CACHE_SHIFT);
 	else
-		return (end - idx) << PAGE_SHIFT;
+		return (end - idx) << PAGE_CACHE_SHIFT;
 }
 
 static void
@@ -913,7 +824,7 @@ bl_pg_init_write(struct nfs_pageio_descriptor *pgio, struct nfs_page *req)
 {
 	u64 wb_size;
 
-	if (!is_aligned_req(pgio, req, PAGE_SIZE, true)) {
+	if (!is_aligned_req(pgio, req, PAGE_SIZE)) {
 		nfs_pageio_reset_write_mds(pgio);
 		return;
 	}
@@ -925,14 +836,6 @@ bl_pg_init_write(struct nfs_pageio_descriptor *pgio, struct nfs_page *req)
 		wb_size = nfs_dreq_bytes_left(pgio->pg_dreq);
 
 	pnfs_generic_pg_init_write(pgio, req, wb_size);
-
-	if (pgio->pg_lseg &&
-		test_bit(NFS_LSEG_UNAVAILABLE, &pgio->pg_lseg->pls_flags)) {
-
-		pnfs_error_mark_layout_for_return(pgio->pg_inode, pgio->pg_lseg);
-		pnfs_set_lo_fail(pgio->pg_lseg);
-		nfs_pageio_reset_write_mds(pgio);
-	}
 }
 
 /*
@@ -943,7 +846,7 @@ static size_t
 bl_pg_test_write(struct nfs_pageio_descriptor *pgio, struct nfs_page *prev,
 		 struct nfs_page *req)
 {
-	if (!is_aligned_req(pgio, req, PAGE_SIZE, true))
+	if (!is_aligned_req(pgio, req, PAGE_SIZE))
 		return 0;
 	return pnfs_generic_pg_test(pgio, prev, req);
 }
@@ -967,7 +870,6 @@ static struct pnfs_layoutdriver_type blocklayout_type = {
 	.name				= "LAYOUT_BLOCK_VOLUME",
 	.owner				= THIS_MODULE,
 	.flags				= PNFS_LAYOUTRET_ON_SETATTR |
-					  PNFS_LAYOUTRET_ON_ERROR |
 					  PNFS_READ_WHOLE_PAGE,
 	.read_pagelist			= bl_read_pagelist,
 	.write_pagelist			= bl_write_pagelist,
@@ -986,54 +888,22 @@ static struct pnfs_layoutdriver_type blocklayout_type = {
 	.sync				= pnfs_generic_sync,
 };
 
-static struct pnfs_layoutdriver_type scsilayout_type = {
-	.id				= LAYOUT_SCSI,
-	.name				= "LAYOUT_SCSI",
-	.owner				= THIS_MODULE,
-	.flags				= PNFS_LAYOUTRET_ON_SETATTR |
-					  PNFS_LAYOUTRET_ON_ERROR |
-					  PNFS_READ_WHOLE_PAGE,
-	.read_pagelist			= bl_read_pagelist,
-	.write_pagelist			= bl_write_pagelist,
-	.alloc_layout_hdr		= sl_alloc_layout_hdr,
-	.free_layout_hdr		= bl_free_layout_hdr,
-	.alloc_lseg			= bl_alloc_lseg,
-	.free_lseg			= bl_free_lseg,
-	.return_range			= bl_return_range,
-	.prepare_layoutcommit		= bl_prepare_layoutcommit,
-	.cleanup_layoutcommit		= bl_cleanup_layoutcommit,
-	.set_layoutdriver		= bl_set_layoutdriver,
-	.alloc_deviceid_node		= bl_alloc_deviceid_node,
-	.free_deviceid_node		= bl_free_deviceid_node,
-	.pg_read_ops			= &bl_pg_read_ops,
-	.pg_write_ops			= &bl_pg_write_ops,
-	.sync				= pnfs_generic_sync,
-};
-
-
 static int __init nfs4blocklayout_init(void)
 {
 	int ret;
 
 	dprintk("%s: NFSv4 Block Layout Driver Registering...\n", __func__);
 
-	ret = bl_init_pipefs();
-	if (ret)
-		goto out;
-
 	ret = pnfs_register_layoutdriver(&blocklayout_type);
 	if (ret)
-		goto out_cleanup_pipe;
-
-	ret = pnfs_register_layoutdriver(&scsilayout_type);
+		goto out;
+	ret = bl_init_pipefs();
 	if (ret)
-		goto out_unregister_block;
+		goto out_unregister;
 	return 0;
 
-out_unregister_block:
+out_unregister:
 	pnfs_unregister_layoutdriver(&blocklayout_type);
-out_cleanup_pipe:
-	bl_cleanup_pipefs();
 out:
 	return ret;
 }
@@ -1043,13 +913,11 @@ static void __exit nfs4blocklayout_exit(void)
 	dprintk("%s: NFSv4 Block Layout Driver Unregistering...\n",
 	       __func__);
 
-	pnfs_unregister_layoutdriver(&scsilayout_type);
-	pnfs_unregister_layoutdriver(&blocklayout_type);
 	bl_cleanup_pipefs();
+	pnfs_unregister_layoutdriver(&blocklayout_type);
 }
 
 MODULE_ALIAS("nfs-layouttype4-3");
-MODULE_ALIAS("nfs-layouttype4-5");
 
 module_init(nfs4blocklayout_init);
 module_exit(nfs4blocklayout_exit);

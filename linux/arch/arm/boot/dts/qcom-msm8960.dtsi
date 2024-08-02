@@ -1,5 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0
 /dts-v1/;
+
+/include/ "skeleton.dtsi"
 
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/qcom,gcc-msm8960.h>
@@ -7,8 +8,6 @@
 #include <dt-bindings/soc/qcom,gsbi.h>
 
 / {
-	#address-cells = <1>;
-	#size-cells = <1>;
 	model = "Qualcomm MSM8960";
 	compatible = "qcom,msm8960";
 	interrupt-parent = <&intc>;
@@ -44,38 +43,10 @@
 		};
 	};
 
-	memory {
-		device_type = "memory";
-		reg = <0x0 0x0>;
-	};
-
 	cpu-pmu {
 		compatible = "qcom,krait-pmu";
 		interrupts = <1 10 0x304>;
 		qcom,no-pc-write;
-	};
-
-	clocks {
-		cxo_board {
-			compatible = "fixed-clock";
-			#clock-cells = <0>;
-			clock-frequency = <19200000>;
-			clock-output-names = "cxo_board";
-		};
-
-		pxo_board {
-			compatible = "fixed-clock";
-			#clock-cells = <0>;
-			clock-frequency = <27000000>;
-			clock-output-names = "pxo_board";
-		};
-
-		sleep_clk {
-			compatible = "fixed-clock";
-			#clock-cells = <0>;
-			clock-frequency = <32768>;
-			clock-output-names = "sleep_clk";
-		};
 	};
 
 	soc: soc {
@@ -93,8 +64,7 @@
 		};
 
 		timer@200a000 {
-			compatible = "qcom,kpss-timer",
-				     "qcom,kpss-wdt-msm8960", "qcom,msm-timer";
+			compatible = "qcom,kpss-timer", "qcom,msm-timer";
 			interrupts = <1 1 0x301>,
 				     <1 2 0x301>,
 				     <1 3 0x301>;
@@ -145,9 +115,7 @@
 			reg		= <0x108000 0x1000>;
 			qcom,ipc	= <&l2cc 0x8 2>;
 
-			interrupts	= <GIC_SPI 19 IRQ_TYPE_EDGE_RISING>,
-					  <GIC_SPI 21 IRQ_TYPE_EDGE_RISING>,
-					  <GIC_SPI 22 IRQ_TYPE_EDGE_RISING>;
+			interrupts	= <0 19 0>, <0 21 0>, <0 22 0>;
 			interrupt-names	= "ack", "err", "wakeup";
 
 			regulators {
@@ -193,7 +161,7 @@
 				compatible = "qcom,msm-uartdm-v1.3", "qcom,msm-uartdm";
 				reg = <0x16440000 0x1000>,
 				      <0x16400000 0x1000>;
-				interrupts = <GIC_SPI 154 IRQ_TYPE_LEVEL_HIGH>;
+				interrupts = <0 154 0x0>;
 				clocks = <&gcc GSBI5_UART_CLK>, <&gcc GSBI5_H_CLK>;
 				clock-names = "core", "iface";
 				status = "disabled";
@@ -260,7 +228,7 @@
 		};
 
 		amba {
-			compatible = "simple-bus";
+			compatible = "arm,amba-bus";
 			#address-cells = <1>;
 			#size-cells = <1>;
 			ranges;
@@ -319,7 +287,7 @@
 				#address-cells = <1>;
 				#size-cells = <0>;
 				reg = <0x16080000 0x1000>;
-				interrupts = <GIC_SPI 147 IRQ_TYPE_LEVEL_HIGH>;
+				interrupts = <0 147 0>;
 				spi-max-frequency = <24000000>;
 				cs-gpios = <&msmgpio 8 0>;
 

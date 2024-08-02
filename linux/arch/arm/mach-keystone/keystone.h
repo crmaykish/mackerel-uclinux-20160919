@@ -1,8 +1,11 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright 2013 Texas Instruments, Inc.
  *	Cyril Chemparathy <cyril@ti.com>
  *	Santosh Shilimkar <santosh.shillimkar@ti.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
  */
 
 #ifndef __KEYSTONE_H__
@@ -12,7 +15,7 @@
 
 #ifndef __ASSEMBLER__
 
-extern const struct smp_operations keystone_smp_ops;
+extern struct smp_operations keystone_smp_ops;
 extern void secondary_startup(void);
 extern u32 keystone_cpu_smc(u32 command, u32 cpu, u32 addr);
 extern int keystone_pm_runtime_init(void);

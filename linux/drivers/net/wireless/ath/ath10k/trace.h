@@ -1,7 +1,18 @@
-/* SPDX-License-Identifier: ISC */
 /*
  * Copyright (c) 2005-2011 Atheros Communications Inc.
- * Copyright (c) 2011-2016 Qualcomm Atheros, Inc.
+ * Copyright (c) 2011-2013 Qualcomm Atheros, Inc.
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
 #if !defined(_TRACE_H_) || defined(TRACE_HEADER_MULTI_READ)
@@ -29,11 +40,7 @@ static inline u32 ath10k_frm_hdr_len(const void *buf, size_t len)
 #if !defined(CONFIG_ATH10K_TRACING)
 #undef TRACE_EVENT
 #define TRACE_EVENT(name, proto, ...) \
-static inline void trace_ ## name(proto) {} \
-static inline bool trace_##name##_enabled(void) \
-{						\
-	return false;				\
-}
+static inline void trace_ ## name(proto) {}
 #undef DECLARE_EVENT_CLASS
 #define DECLARE_EVENT_CLASS(...)
 #undef DEFINE_EVENT
@@ -145,9 +152,10 @@ TRACE_EVENT(ath10k_log_dbg_dump,
 );
 
 TRACE_EVENT(ath10k_wmi_cmd,
-	TP_PROTO(struct ath10k *ar, int id, const void *buf, size_t buf_len),
+	TP_PROTO(struct ath10k *ar, int id, const void *buf, size_t buf_len,
+		 int ret),
 
-	TP_ARGS(ar, id, buf, buf_len),
+	TP_ARGS(ar, id, buf, buf_len, ret),
 
 	TP_STRUCT__entry(
 		__string(device, dev_name(ar->dev))
@@ -155,6 +163,7 @@ TRACE_EVENT(ath10k_wmi_cmd,
 		__field(unsigned int, id)
 		__field(size_t, buf_len)
 		__dynamic_array(u8, buf, buf_len)
+		__field(int, ret)
 	),
 
 	TP_fast_assign(
@@ -162,15 +171,17 @@ TRACE_EVENT(ath10k_wmi_cmd,
 		__assign_str(driver, dev_driver_string(ar->dev));
 		__entry->id = id;
 		__entry->buf_len = buf_len;
+		__entry->ret = ret;
 		memcpy(__get_dynamic_array(buf), buf, buf_len);
 	),
 
 	TP_printk(
-		"%s %s id %d len %zu",
+		"%s %s id %d len %zu ret %d",
 		__get_str(driver),
 		__get_str(device),
 		__entry->id,
-		__entry->buf_len
+		__entry->buf_len,
+		__entry->ret
 	)
 );
 
@@ -239,7 +250,6 @@ TRACE_EVENT(ath10k_wmi_dbglog,
 	TP_STRUCT__entry(
 		__string(device, dev_name(ar->dev))
 		__string(driver, dev_driver_string(ar->dev))
-		__field(u8, hw_type);
 		__field(size_t, buf_len)
 		__dynamic_array(u8, buf, buf_len)
 	),
@@ -247,16 +257,14 @@ TRACE_EVENT(ath10k_wmi_dbglog,
 	TP_fast_assign(
 		__assign_str(device, dev_name(ar->dev));
 		__assign_str(driver, dev_driver_string(ar->dev));
-		__entry->hw_type = ar->hw_rev;
 		__entry->buf_len = buf_len;
 		memcpy(__get_dynamic_array(buf), buf, buf_len);
 	),
 
 	TP_printk(
-		"%s %s %d len %zu",
+		"%s %s len %zu",
 		__get_str(driver),
 		__get_str(device),
-		__entry->hw_type,
 		__entry->buf_len
 	)
 );
@@ -269,7 +277,6 @@ TRACE_EVENT(ath10k_htt_pktlog,
 	TP_STRUCT__entry(
 		__string(device, dev_name(ar->dev))
 		__string(driver, dev_driver_string(ar->dev))
-		__field(u8, hw_type);
 		__field(u16, buf_len)
 		__dynamic_array(u8, pktlog, buf_len)
 	),
@@ -277,16 +284,14 @@ TRACE_EVENT(ath10k_htt_pktlog,
 	TP_fast_assign(
 		__assign_str(device, dev_name(ar->dev));
 		__assign_str(driver, dev_driver_string(ar->dev));
-		__entry->hw_type = ar->hw_rev;
 		__entry->buf_len = buf_len;
 		memcpy(__get_dynamic_array(pktlog), buf, buf_len);
 	),
 
 	TP_printk(
-		"%s %s %d size %hu",
+		"%s %s size %hu",
 		__get_str(driver),
 		__get_str(device),
-		__entry->hw_type,
 		__entry->buf_len
 	 )
 );
@@ -435,7 +440,6 @@ TRACE_EVENT(ath10k_htt_rx_desc,
 	TP_STRUCT__entry(
 		__string(device, dev_name(ar->dev))
 		__string(driver, dev_driver_string(ar->dev))
-		__field(u8, hw_type);
 		__field(u16, len)
 		__dynamic_array(u8, rxdesc, len)
 	),
@@ -443,16 +447,14 @@ TRACE_EVENT(ath10k_htt_rx_desc,
 	TP_fast_assign(
 		__assign_str(device, dev_name(ar->dev));
 		__assign_str(driver, dev_driver_string(ar->dev));
-		__entry->hw_type = ar->hw_rev;
 		__entry->len = len;
 		memcpy(__get_dynamic_array(rxdesc), data, len);
 	),
 
 	TP_printk(
-		"%s %s %d rxdesc len %d",
+		"%s %s rxdesc len %d",
 		__get_str(driver),
 		__get_str(device),
-		__entry->hw_type,
 		__entry->len
 	 )
 );

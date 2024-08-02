@@ -1,8 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Alienware AlienFX control
  *
  * Copyright (C) 2014 Dell Inc <mario_limonciello@dell.com>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -11,6 +21,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/dmi.h>
+#include <linux/acpi.h>
 #include <linux/leds.h>
 
 #define LEGACY_CONTROL_GUID		"A90597CE-A997-11DA-B012-B622A1EF5492"
@@ -22,9 +33,6 @@
 #define WMAX_METHOD_BRIGHTNESS		0x3
 #define WMAX_METHOD_ZONE_CONTROL	0x4
 #define WMAX_METHOD_HDMI_CABLE		0x5
-#define WMAX_METHOD_AMPLIFIER_CABLE	0x6
-#define WMAX_METHOD_DEEP_SLEEP_CONTROL	0x0B
-#define WMAX_METHOD_DEEP_SLEEP_STATUS	0x0C
 
 MODULE_AUTHOR("Mario Limonciello <mario_limonciello@dell.com>");
 MODULE_DESCRIPTION("Alienware special feature control");
@@ -52,60 +60,23 @@ enum WMAX_CONTROL_STATES {
 struct quirk_entry {
 	u8 num_zones;
 	u8 hdmi_mux;
-	u8 amplifier;
-	u8 deepslp;
 };
 
 static struct quirk_entry *quirks;
 
-
-static struct quirk_entry quirk_inspiron5675 = {
-	.num_zones = 2,
-	.hdmi_mux = 0,
-	.amplifier = 0,
-	.deepslp = 0,
-};
-
 static struct quirk_entry quirk_unknown = {
 	.num_zones = 2,
 	.hdmi_mux = 0,
-	.amplifier = 0,
-	.deepslp = 0,
 };
 
-static struct quirk_entry quirk_x51_r1_r2 = {
+static struct quirk_entry quirk_x51_family = {
 	.num_zones = 3,
-	.hdmi_mux = 0,
-	.amplifier = 0,
-	.deepslp = 0,
-};
-
-static struct quirk_entry quirk_x51_r3 = {
-	.num_zones = 4,
-	.hdmi_mux = 0,
-	.amplifier = 1,
-	.deepslp = 0,
+	.hdmi_mux = 0.
 };
 
 static struct quirk_entry quirk_asm100 = {
 	.num_zones = 2,
 	.hdmi_mux = 1,
-	.amplifier = 0,
-	.deepslp = 0,
-};
-
-static struct quirk_entry quirk_asm200 = {
-	.num_zones = 2,
-	.hdmi_mux = 1,
-	.amplifier = 0,
-	.deepslp = 1,
-};
-
-static struct quirk_entry quirk_asm201 = {
-	.num_zones = 2,
-	.hdmi_mux = 1,
-	.amplifier = 1,
-	.deepslp = 1,
 };
 
 static int __init dmi_matched(const struct dmi_system_id *dmi)
@@ -117,12 +88,12 @@ static int __init dmi_matched(const struct dmi_system_id *dmi)
 static const struct dmi_system_id alienware_quirks[] __initconst = {
 	{
 	 .callback = dmi_matched,
-	 .ident = "Alienware X51 R3",
+	 .ident = "Alienware X51 R1",
 	 .matches = {
 		     DMI_MATCH(DMI_SYS_VENDOR, "Alienware"),
-		     DMI_MATCH(DMI_PRODUCT_NAME, "Alienware X51 R3"),
+		     DMI_MATCH(DMI_PRODUCT_NAME, "Alienware X51"),
 		     },
-	 .driver_data = &quirk_x51_r3,
+	 .driver_data = &quirk_x51_family,
 	 },
 	{
 	 .callback = dmi_matched,
@@ -131,53 +102,17 @@ static const struct dmi_system_id alienware_quirks[] __initconst = {
 		     DMI_MATCH(DMI_SYS_VENDOR, "Alienware"),
 		     DMI_MATCH(DMI_PRODUCT_NAME, "Alienware X51 R2"),
 		     },
-	 .driver_data = &quirk_x51_r1_r2,
+	 .driver_data = &quirk_x51_family,
 	 },
 	{
-	 .callback = dmi_matched,
-	 .ident = "Alienware X51 R1",
-	 .matches = {
-		     DMI_MATCH(DMI_SYS_VENDOR, "Alienware"),
-		     DMI_MATCH(DMI_PRODUCT_NAME, "Alienware X51"),
-		     },
-	 .driver_data = &quirk_x51_r1_r2,
-	 },
-	{
-	 .callback = dmi_matched,
-	 .ident = "Alienware ASM100",
-	 .matches = {
-		     DMI_MATCH(DMI_SYS_VENDOR, "Alienware"),
-		     DMI_MATCH(DMI_PRODUCT_NAME, "ASM100"),
-		     },
-	 .driver_data = &quirk_asm100,
-	 },
-	{
-	 .callback = dmi_matched,
-	 .ident = "Alienware ASM200",
-	 .matches = {
-		     DMI_MATCH(DMI_SYS_VENDOR, "Alienware"),
-		     DMI_MATCH(DMI_PRODUCT_NAME, "ASM200"),
-		     },
-	 .driver_data = &quirk_asm200,
-	 },
-	{
-	 .callback = dmi_matched,
-	 .ident = "Alienware ASM201",
-	 .matches = {
-		     DMI_MATCH(DMI_SYS_VENDOR, "Alienware"),
-		     DMI_MATCH(DMI_PRODUCT_NAME, "ASM201"),
-		     },
-	 .driver_data = &quirk_asm201,
-	 },
-	 {
-	 .callback = dmi_matched,
-	 .ident = "Dell Inc. Inspiron 5675",
-	 .matches = {
-		     DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
-		     DMI_MATCH(DMI_PRODUCT_NAME, "Inspiron 5675"),
-		     },
-	 .driver_data = &quirk_inspiron5675,
-	 },
+		.callback = dmi_matched,
+		.ident = "Alienware ASM100",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Alienware"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "ASM100"),
+		},
+		.driver_data = &quirk_asm100,
+	},
 	{}
 };
 
@@ -198,7 +133,7 @@ struct wmax_brightness_args {
 	u32 percentage;
 };
 
-struct wmax_basic_args {
+struct hdmi_args {
 	u8 arg;
 };
 
@@ -235,7 +170,7 @@ static u8 global_brightness;
 
 /*
  * Helpers used for zone control
- */
+*/
 static int parse_rgb(const char *buf, struct platform_zone *zone)
 {
 	long unsigned int rgb;
@@ -262,13 +197,12 @@ static int parse_rgb(const char *buf, struct platform_zone *zone)
 
 static struct platform_zone *match_zone(struct device_attribute *attr)
 {
-	u8 zone;
-
-	for (zone = 0; zone < quirks->num_zones; zone++) {
-		if ((struct device_attribute *)zone_data[zone].attr == attr) {
+	int i;
+	for (i = 0; i < quirks->num_zones; i++) {
+		if ((struct device_attribute *)zone_data[i].attr == attr) {
 			pr_debug("alienware-wmi: matched zone location: %d\n",
-				 zone_data[zone].location);
-			return &zone_data[zone];
+				 zone_data[i].location);
+			return &zone_data[i];
 		}
 	}
 	return NULL;
@@ -276,7 +210,7 @@ static struct platform_zone *match_zone(struct device_attribute *attr)
 
 /*
  * Individual RGB zone control
- */
+*/
 static int alienware_update_led(struct platform_zone *zone)
 {
 	int method_id;
@@ -284,16 +218,16 @@ static int alienware_update_led(struct platform_zone *zone)
 	char *guid;
 	struct acpi_buffer input;
 	struct legacy_led_args legacy_args;
-	struct wmax_led_args wmax_basic_args;
+	struct wmax_led_args wmax_args;
 	if (interface == WMAX) {
-		wmax_basic_args.led_mask = 1 << zone->location;
-		wmax_basic_args.colors = zone->colors;
-		wmax_basic_args.state = lighting_control_state;
+		wmax_args.led_mask = 1 << zone->location;
+		wmax_args.colors = zone->colors;
+		wmax_args.state = lighting_control_state;
 		guid = WMAX_CONTROL_GUID;
 		method_id = WMAX_METHOD_ZONE_CONTROL;
 
-		input.length = (acpi_size) sizeof(wmax_basic_args);
-		input.pointer = &wmax_basic_args;
+		input.length = (acpi_size) sizeof(wmax_args);
+		input.pointer = &wmax_args;
 	} else {
 		legacy_args.colors = zone->colors;
 		legacy_args.brightness = global_brightness;
@@ -311,7 +245,7 @@ static int alienware_update_led(struct platform_zone *zone)
 	}
 	pr_debug("alienware-wmi: guid %s method %d\n", guid, method_id);
 
-	status = wmi_evaluate_method(guid, 0, method_id, &input, NULL);
+	status = wmi_evaluate_method(guid, 1, method_id, &input, NULL);
 	if (ACPI_FAILURE(status))
 		pr_err("alienware-wmi: zone set failure: %u\n", status);
 	return ACPI_FAILURE(status);
@@ -349,7 +283,7 @@ static ssize_t zone_set(struct device *dev, struct device_attribute *attr,
 
 /*
  * LED Brightness (Global)
- */
+*/
 static int wmax_brightness(int brightness)
 {
 	acpi_status status;
@@ -360,7 +294,7 @@ static int wmax_brightness(int brightness)
 	};
 	input.length = (acpi_size) sizeof(args);
 	input.pointer = &args;
-	status = wmi_evaluate_method(WMAX_CONTROL_GUID, 0,
+	status = wmi_evaluate_method(WMAX_CONTROL_GUID, 1,
 				     WMAX_METHOD_BRIGHTNESS, &input, NULL);
 	if (ACPI_FAILURE(status))
 		pr_err("alienware-wmi: brightness set failure: %u\n", status);
@@ -393,7 +327,7 @@ static struct led_classdev global_led = {
 
 /*
  * Lighting control state device attribute (Global)
- */
+*/
 static ssize_t show_control_state(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
@@ -428,7 +362,7 @@ static DEVICE_ATTR(lighting_control_state, 0644, show_control_state,
 
 static int alienware_zone_init(struct platform_device *dev)
 {
-	u8 zone;
+	int i;
 	char buffer[10];
 	char *name;
 
@@ -448,36 +382,36 @@ static int alienware_zone_init(struct platform_device *dev)
 	 *      - zone_data num_zones is for the distinct zones
 	 */
 	zone_dev_attrs =
-	    kcalloc(quirks->num_zones + 1, sizeof(struct device_attribute),
+	    kzalloc(sizeof(struct device_attribute) * (quirks->num_zones + 1),
 		    GFP_KERNEL);
 	if (!zone_dev_attrs)
 		return -ENOMEM;
 
 	zone_attrs =
-	    kcalloc(quirks->num_zones + 2, sizeof(struct attribute *),
+	    kzalloc(sizeof(struct attribute *) * (quirks->num_zones + 2),
 		    GFP_KERNEL);
 	if (!zone_attrs)
 		return -ENOMEM;
 
 	zone_data =
-	    kcalloc(quirks->num_zones, sizeof(struct platform_zone),
+	    kzalloc(sizeof(struct platform_zone) * (quirks->num_zones),
 		    GFP_KERNEL);
 	if (!zone_data)
 		return -ENOMEM;
 
-	for (zone = 0; zone < quirks->num_zones; zone++) {
-		sprintf(buffer, "zone%02hhX", zone);
+	for (i = 0; i < quirks->num_zones; i++) {
+		sprintf(buffer, "zone%02X", i);
 		name = kstrdup(buffer, GFP_KERNEL);
 		if (name == NULL)
 			return 1;
-		sysfs_attr_init(&zone_dev_attrs[zone].attr);
-		zone_dev_attrs[zone].attr.name = name;
-		zone_dev_attrs[zone].attr.mode = 0644;
-		zone_dev_attrs[zone].show = zone_show;
-		zone_dev_attrs[zone].store = zone_set;
-		zone_data[zone].location = zone;
-		zone_attrs[zone] = &zone_dev_attrs[zone].attr;
-		zone_data[zone].attr = &zone_dev_attrs[zone];
+		sysfs_attr_init(&zone_dev_attrs[i].attr);
+		zone_dev_attrs[i].attr.name = name;
+		zone_dev_attrs[i].attr.mode = 0644;
+		zone_dev_attrs[i].show = zone_show;
+		zone_dev_attrs[i].store = zone_set;
+		zone_data[i].location = i;
+		zone_attrs[i] = &zone_dev_attrs[i].attr;
+		zone_data[i].attr = &zone_dev_attrs[i];
 	}
 	zone_attrs[quirks->num_zones] = &dev_attr_lighting_control_state.attr;
 	zone_attribute_group.attrs = zone_attrs;
@@ -489,20 +423,23 @@ static int alienware_zone_init(struct platform_device *dev)
 
 static void alienware_zone_exit(struct platform_device *dev)
 {
-	u8 zone;
-
 	sysfs_remove_group(&dev->dev.kobj, &zone_attribute_group);
 	led_classdev_unregister(&global_led);
 	if (zone_dev_attrs) {
-		for (zone = 0; zone < quirks->num_zones; zone++)
-			kfree(zone_dev_attrs[zone].attr.name);
+		int i;
+		for (i = 0; i < quirks->num_zones; i++)
+			kfree(zone_dev_attrs[i].attr.name);
 	}
 	kfree(zone_dev_attrs);
 	kfree(zone_data);
 	kfree(zone_attrs);
 }
 
-static acpi_status alienware_wmax_command(struct wmax_basic_args *in_args,
+/*
+	The HDMI mux sysfs node indicates the status of the HDMI input mux.
+	It can toggle between standard system GPU output and HDMI input.
+*/
+static acpi_status alienware_hdmi_command(struct hdmi_args *in_args,
 					  u32 command, int *out_data)
 {
 	acpi_status status;
@@ -512,38 +449,34 @@ static acpi_status alienware_wmax_command(struct wmax_basic_args *in_args,
 
 	input.length = (acpi_size) sizeof(*in_args);
 	input.pointer = in_args;
-	if (out_data) {
+	if (out_data != NULL) {
 		output.length = ACPI_ALLOCATE_BUFFER;
 		output.pointer = NULL;
-		status = wmi_evaluate_method(WMAX_CONTROL_GUID, 0,
+		status = wmi_evaluate_method(WMAX_CONTROL_GUID, 1,
 					     command, &input, &output);
-		if (ACPI_SUCCESS(status)) {
-			obj = (union acpi_object *)output.pointer;
-			if (obj && obj->type == ACPI_TYPE_INTEGER)
-				*out_data = (u32)obj->integer.value;
-		}
-		kfree(output.pointer);
-	} else {
-		status = wmi_evaluate_method(WMAX_CONTROL_GUID, 0,
+	} else
+		status = wmi_evaluate_method(WMAX_CONTROL_GUID, 1,
 					     command, &input, NULL);
+
+	if (ACPI_SUCCESS(status) && out_data != NULL) {
+		obj = (union acpi_object *)output.pointer;
+		if (obj && obj->type == ACPI_TYPE_INTEGER)
+			*out_data = (u32) obj->integer.value;
 	}
 	return status;
+
 }
 
-/*
- *	The HDMI mux sysfs node indicates the status of the HDMI input mux.
- *	It can toggle between standard system GPU output and HDMI input.
- */
 static ssize_t show_hdmi_cable(struct device *dev,
 			       struct device_attribute *attr, char *buf)
 {
 	acpi_status status;
 	u32 out_data;
-	struct wmax_basic_args in_args = {
+	struct hdmi_args in_args = {
 		.arg = 0,
 	};
 	status =
-	    alienware_wmax_command(&in_args, WMAX_METHOD_HDMI_CABLE,
+	    alienware_hdmi_command(&in_args, WMAX_METHOD_HDMI_CABLE,
 				   (u32 *) &out_data);
 	if (ACPI_SUCCESS(status)) {
 		if (out_data == 0)
@@ -562,11 +495,11 @@ static ssize_t show_hdmi_source(struct device *dev,
 {
 	acpi_status status;
 	u32 out_data;
-	struct wmax_basic_args in_args = {
+	struct hdmi_args in_args = {
 		.arg = 0,
 	};
 	status =
-	    alienware_wmax_command(&in_args, WMAX_METHOD_HDMI_STATUS,
+	    alienware_hdmi_command(&in_args, WMAX_METHOD_HDMI_STATUS,
 				   (u32 *) &out_data);
 
 	if (ACPI_SUCCESS(status)) {
@@ -577,7 +510,7 @@ static ssize_t show_hdmi_source(struct device *dev,
 			return scnprintf(buf, PAGE_SIZE,
 					 "input [gpu] unknown\n");
 	}
-	pr_err("alienware-wmi: unknown HDMI source status: %u\n", status);
+	pr_err("alienware-wmi: unknown HDMI source status: %d\n", out_data);
 	return scnprintf(buf, PAGE_SIZE, "input gpu [unknown]\n");
 }
 
@@ -586,7 +519,7 @@ static ssize_t toggle_hdmi_source(struct device *dev,
 				  const char *buf, size_t count)
 {
 	acpi_status status;
-	struct wmax_basic_args args;
+	struct hdmi_args args;
 	if (strcmp(buf, "gpu\n") == 0)
 		args.arg = 1;
 	else if (strcmp(buf, "input\n") == 0)
@@ -595,7 +528,7 @@ static ssize_t toggle_hdmi_source(struct device *dev,
 		args.arg = 3;
 	pr_debug("alienware-wmi: setting hdmi to %d : %s", args.arg, buf);
 
-	status = alienware_wmax_command(&args, WMAX_METHOD_HDMI_SOURCE, NULL);
+	status = alienware_hdmi_command(&args, WMAX_METHOD_HDMI_SOURCE, NULL);
 
 	if (ACPI_FAILURE(status))
 		pr_err("alienware-wmi: HDMI toggle failed: results: %u\n",
@@ -613,7 +546,7 @@ static struct attribute *hdmi_attrs[] = {
 	NULL,
 };
 
-static const struct attribute_group hdmi_attribute_group = {
+static struct attribute_group hdmi_attribute_group = {
 	.name = "hdmi",
 	.attrs = hdmi_attrs,
 };
@@ -630,144 +563,11 @@ static int create_hdmi(struct platform_device *dev)
 
 	ret = sysfs_create_group(&dev->dev.kobj, &hdmi_attribute_group);
 	if (ret)
-		remove_hdmi(dev);
-	return ret;
-}
+		goto error_create_hdmi;
+	return 0;
 
-/*
- * Alienware GFX amplifier support
- * - Currently supports reading cable status
- * - Leaving expansion room to possibly support dock/undock events later
- */
-static ssize_t show_amplifier_status(struct device *dev,
-				     struct device_attribute *attr, char *buf)
-{
-	acpi_status status;
-	u32 out_data;
-	struct wmax_basic_args in_args = {
-		.arg = 0,
-	};
-	status =
-	    alienware_wmax_command(&in_args, WMAX_METHOD_AMPLIFIER_CABLE,
-				   (u32 *) &out_data);
-	if (ACPI_SUCCESS(status)) {
-		if (out_data == 0)
-			return scnprintf(buf, PAGE_SIZE,
-					 "[unconnected] connected unknown\n");
-		else if (out_data == 1)
-			return scnprintf(buf, PAGE_SIZE,
-					 "unconnected [connected] unknown\n");
-	}
-	pr_err("alienware-wmi: unknown amplifier cable status: %d\n", status);
-	return scnprintf(buf, PAGE_SIZE, "unconnected connected [unknown]\n");
-}
-
-static DEVICE_ATTR(status, S_IRUGO, show_amplifier_status, NULL);
-
-static struct attribute *amplifier_attrs[] = {
-	&dev_attr_status.attr,
-	NULL,
-};
-
-static const struct attribute_group amplifier_attribute_group = {
-	.name = "amplifier",
-	.attrs = amplifier_attrs,
-};
-
-static void remove_amplifier(struct platform_device *dev)
-{
-	if (quirks->amplifier > 0)
-		sysfs_remove_group(&dev->dev.kobj, &amplifier_attribute_group);
-}
-
-static int create_amplifier(struct platform_device *dev)
-{
-	int ret;
-
-	ret = sysfs_create_group(&dev->dev.kobj, &amplifier_attribute_group);
-	if (ret)
-		remove_amplifier(dev);
-	return ret;
-}
-
-/*
- * Deep Sleep Control support
- * - Modifies BIOS setting for deep sleep control allowing extra wakeup events
- */
-static ssize_t show_deepsleep_status(struct device *dev,
-				     struct device_attribute *attr, char *buf)
-{
-	acpi_status status;
-	u32 out_data;
-	struct wmax_basic_args in_args = {
-		.arg = 0,
-	};
-	status = alienware_wmax_command(&in_args, WMAX_METHOD_DEEP_SLEEP_STATUS,
-					(u32 *) &out_data);
-	if (ACPI_SUCCESS(status)) {
-		if (out_data == 0)
-			return scnprintf(buf, PAGE_SIZE,
-					 "[disabled] s5 s5_s4\n");
-		else if (out_data == 1)
-			return scnprintf(buf, PAGE_SIZE,
-					 "disabled [s5] s5_s4\n");
-		else if (out_data == 2)
-			return scnprintf(buf, PAGE_SIZE,
-					 "disabled s5 [s5_s4]\n");
-	}
-	pr_err("alienware-wmi: unknown deep sleep status: %d\n", status);
-	return scnprintf(buf, PAGE_SIZE, "disabled s5 s5_s4 [unknown]\n");
-}
-
-static ssize_t toggle_deepsleep(struct device *dev,
-				struct device_attribute *attr,
-				const char *buf, size_t count)
-{
-	acpi_status status;
-	struct wmax_basic_args args;
-
-	if (strcmp(buf, "disabled\n") == 0)
-		args.arg = 0;
-	else if (strcmp(buf, "s5\n") == 0)
-		args.arg = 1;
-	else
-		args.arg = 2;
-	pr_debug("alienware-wmi: setting deep sleep to %d : %s", args.arg, buf);
-
-	status = alienware_wmax_command(&args, WMAX_METHOD_DEEP_SLEEP_CONTROL,
-					NULL);
-
-	if (ACPI_FAILURE(status))
-		pr_err("alienware-wmi: deep sleep control failed: results: %u\n",
-			status);
-	return count;
-}
-
-static DEVICE_ATTR(deepsleep, S_IRUGO | S_IWUSR, show_deepsleep_status, toggle_deepsleep);
-
-static struct attribute *deepsleep_attrs[] = {
-	&dev_attr_deepsleep.attr,
-	NULL,
-};
-
-static const struct attribute_group deepsleep_attribute_group = {
-	.name = "deepsleep",
-	.attrs = deepsleep_attrs,
-};
-
-static void remove_deepsleep(struct platform_device *dev)
-{
-	if (quirks->deepslp > 0)
-		sysfs_remove_group(&dev->dev.kobj, &deepsleep_attribute_group);
-}
-
-static int create_deepsleep(struct platform_device *dev)
-{
-	int ret;
-
-	ret = sysfs_create_group(&dev->dev.kobj, &deepsleep_attribute_group);
-	if (ret)
-		remove_deepsleep(dev);
+error_create_hdmi:
+	remove_hdmi(dev);
 	return ret;
 }
 
@@ -806,18 +606,6 @@ static int __init alienware_wmi_init(void)
 			goto fail_prep_hdmi;
 	}
 
-	if (quirks->amplifier > 0) {
-		ret = create_amplifier(platform_device);
-		if (ret)
-			goto fail_prep_amplifier;
-	}
-
-	if (quirks->deepslp > 0) {
-		ret = create_deepsleep(platform_device);
-		if (ret)
-			goto fail_prep_deepsleep;
-	}
-
 	ret = alienware_zone_init(platform_device);
 	if (ret)
 		goto fail_prep_zones;
@@ -826,8 +614,6 @@ static int __init alienware_wmi_init(void)
 
 fail_prep_zones:
 	alienware_zone_exit(platform_device);
-fail_prep_deepsleep:
-fail_prep_amplifier:
 fail_prep_hdmi:
 	platform_device_del(platform_device);
 fail_platform_device2:

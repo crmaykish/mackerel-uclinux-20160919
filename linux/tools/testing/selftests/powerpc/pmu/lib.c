@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2014, Michael Ellerman, IBM Corp.
+ * Licensed under GPLv2.
  */
 
 #define _GNU_SOURCE	/* For CPU_ZERO etc. */
@@ -14,6 +14,32 @@
 #include "utils.h"
 #include "lib.h"
 
+
+int pick_online_cpu(void)
+{
+	cpu_set_t mask;
+	int cpu;
+
+	CPU_ZERO(&mask);
+
+	if (sched_getaffinity(0, sizeof(mask), &mask)) {
+		perror("sched_getaffinity");
+		return -1;
+	}
+
+	/* We prefer a primary thread, but skip 0 */
+	for (cpu = 8; cpu < CPU_SETSIZE; cpu += 8)
+		if (CPU_ISSET(cpu, &mask))
+			return cpu;
+
+	/* Search for anything, but in reverse */
+	for (cpu = CPU_SETSIZE - 1; cpu >= 0; cpu--)
+		if (CPU_ISSET(cpu, &mask))
+			return cpu;
+
+	printf("No cpus in affinity mask?!\n");
+	return -1;
+}
 
 int bind_to_cpu(int cpu)
 {
@@ -190,12 +216,12 @@ int parse_proc_maps(void)
 
 bool require_paranoia_below(int level)
 {
-	long current;
+	unsigned long current;
 	char *end, buf[16];
 	FILE *f;
-	bool rc;
+	int rc;
 
-	rc = false;
+	rc = -1;
 
 	f = fopen(PARANOID_PATH, "r");
 	if (!f) {
@@ -208,7 +234,7 @@ bool require_paranoia_below(int level)
 		goto out_close;
 	}
 
-	current = strtol(buf, &end, 10);
+	current = strtoul(buf, &end, 10);
 
 	if (end == buf) {
 		printf("Couldn't parse " PARANOID_PATH "?\n");
@@ -216,9 +242,9 @@ bool require_paranoia_below(int level)
 	}
 
 	if (current >= level)
-		goto out_close;
+		goto out;
 
-	rc = true;
+	rc = 0;
 out_close:
 	fclose(f);
 out:

@@ -1,8 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  NRPN / SYSEX callbacks for Emu8k/Emu10k1
  *
  *  Copyright (c) 1999-2000 Takashi Iwai <tiwai@suse.de>
+ *
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ *
  */
 
 #include "emux_voice.h"
@@ -34,8 +48,7 @@ struct nrpn_conv_table {
  * convert NRPN/control values
  */
 
-static int send_converted_effect(const struct nrpn_conv_table *table,
-				 int num_tables,
+static int send_converted_effect(struct nrpn_conv_table *table, int num_tables,
 				 struct snd_emux_port *port,
 				 struct snd_midi_channel *chan,
 				 int type, int val, int mode)
@@ -166,7 +179,7 @@ static int fx_conv_Q(int val)
 }
 
 
-static const struct nrpn_conv_table awe_effects[] =
+static struct nrpn_conv_table awe_effects[] =
 {
 	{ 0, EMUX_FX_LFO1_DELAY,	fx_lfo1_delay},
 	{ 1, EMUX_FX_LFO1_FREQ,	fx_lfo1_freq},
@@ -253,7 +266,7 @@ static int gs_vib_delay(int val)
 	return -(val - 64) * gs_sense[FX_VIBDELAY] / 50;
 }
 
-static const struct nrpn_conv_table gs_effects[] =
+static struct nrpn_conv_table gs_effects[] =
 {
 	{32, EMUX_FX_CUTOFF,	gs_cutoff},
 	{33, EMUX_FX_FILTERQ,	gs_filterQ},
@@ -337,7 +350,7 @@ static int xg_release(int val)
 	return -(val - 64) * xg_sense[FX_RELEASE] / 64;
 }
 
-static const struct nrpn_conv_table xg_effects[] =
+static struct nrpn_conv_table xg_effects[] =
 {
 	{71, EMUX_FX_CUTOFF,	xg_cutoff},
 	{74, EMUX_FX_FILTERQ,	xg_filterQ},
@@ -349,9 +362,6 @@ int
 snd_emux_xg_control(struct snd_emux_port *port, struct snd_midi_channel *chan,
 		    int param)
 {
-	if (param >= ARRAY_SIZE(chan->control))
-		return -EINVAL;
-
 	return send_converted_effect(xg_effects, ARRAY_SIZE(xg_effects),
 				     port, chan, param,
 				     chan->control[param],

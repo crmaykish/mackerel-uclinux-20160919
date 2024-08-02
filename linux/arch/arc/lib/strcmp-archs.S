@@ -1,11 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2014-15 Synopsys, Inc. (www.synopsys.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/linkage.h>
 
-ENTRY_CFI(strcmp)
+ENTRY(strcmp)
 	or	r2, r0, r1
 	bmsk_s	r2, r2, 1
 	brne	r2, 0, @.Lcharloop
@@ -72,4 +75,4 @@ ENTRY_CFI(strcmp)
 .Lcmpend:
 	j_s.d	[blink]
 	sub	r0, r2, r3
-END_CFI(strcmp)
+END(strcmp)

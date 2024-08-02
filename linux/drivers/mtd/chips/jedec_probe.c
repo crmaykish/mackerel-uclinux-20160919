@@ -11,6 +11,7 @@
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <asm/io.h>
 #include <asm/byteorder.h>
 #include <linux/errno.h>
@@ -34,13 +35,18 @@
 #define AM29LV800BT	0x22DA
 #define AM29LV160DT	0x22C4
 #define AM29LV160DB	0x2249
+#define AM29BDD160GB	0x7E08
 #define AM29F017D	0x003D
 #define AM29F016D	0x00AD
 #define AM29F080	0x00D5
 #define AM29F040	0x00A4
 #define AM29LV040B	0x004F
 #define AM29F032B	0x0041
+#define AM29LV065D	0x0093
+#define AM29DL323GB 0x2253
 #define AM29F002T	0x00B0
+#define AM29LV004T	0x00B5
+#define AM29LV004B	0x00B6
 #define AM29SL800DB	0x226B
 #define AM29SL800DT	0x22EA
 
@@ -53,8 +59,6 @@
 #define AT49BV32XT	0x00C9
 
 /* Eon */
-#define EN29LV400AT	0x22B9
-#define EN29LV400AB	0x22BA
 #define EN29SL800BB	0x226B
 #define EN29SL800BT	0x22EA
 
@@ -150,6 +154,7 @@
 #define SST39LF160	0x2782
 #define SST39VF1601	0x234b
 #define SST39VF3201	0x235b
+#define SST39VF6401B	0x236d
 #define SST39WF1601	0x274b
 #define SST39WF1602	0x274a
 #define SST39LF512	0x00D4
@@ -195,6 +200,7 @@ enum uaddr {
 	MTD_UADDR_0x5555_0x2AAA,
 	MTD_UADDR_0x0AAA_0x0554,
 	MTD_UADDR_0x0AAA_0x0555,
+	MTD_UADDR_0x1554_0x0AAA,
 	MTD_UADDR_0xAAAA_0x5555,
 	MTD_UADDR_DONT_CARE,		/* Requires an arbitrary address */
 	MTD_UADDR_UNNECESSARY,		/* Does not require any address */
@@ -248,6 +254,11 @@ static const struct unlock_addr  unlock_addrs[] = {
 		.addr2 = 0x0555
 	},
 
+	[MTD_UADDR_0x1554_0x0AAA] = {
+		.addr1 = 0x1554,
+		.addr2 = 0x0AAA
+	},
+
 	[MTD_UADDR_0xAAAA_0x5555] = {
 		.addr1 = 0xaaaa,
 		.addr2 = 0x5555
@@ -296,6 +307,57 @@ struct amd_flash_info {
 static const struct amd_flash_info jedec_table[] = {
 	{
 		.mfr_id		= CFI_MFR_AMD,
+		.dev_id		= AM29LV004T,
+		.name		= "AMD AM29LV004T",
+		.uaddr		= MTD_UADDR_0x0555_0x02AA, /* x8 */
+		.dev_size	= SIZE_512KiB,
+		.cmd_set	= P_ID_AMD_STD,
+		.nr_regions	= 4,
+		.regions	= {
+			ERASEINFO(0x10000,7),
+			ERASEINFO(0x08000,1),
+			ERASEINFO(0x02000,2),
+			ERASEINFO(0x04000,1)
+		}
+	}, {
+		.mfr_id		= CFI_MFR_AMD,
+		.dev_id		= AM29LV004B,
+		.name		= "AMD AM29LV004B",
+		.uaddr		= MTD_UADDR_0x0555_0x02AA, /* x8 */
+		.dev_size	= SIZE_512KiB,
+		.cmd_set	= P_ID_AMD_STD,
+		.nr_regions	= 4,
+		.regions	= {
+			ERASEINFO(0x04000,1),
+			ERASEINFO(0x02000,2),
+			ERASEINFO(0x08000,1),
+			ERASEINFO(0x10000,7)
+		}
+	}, {
+		.mfr_id		= CFI_MFR_AMD,
+		.dev_id		= AM29LV065D,
+		.name		= "AMD AM29LV065D",
+		.uaddr		= MTD_UADDR_DONT_CARE, /* x8 */
+		.dev_size	= SIZE_8MiB,
+		.cmd_set	= P_ID_AMD_STD,
+		.nr_regions	= 1,
+		.regions	= {
+			ERASEINFO(0x10000,128)
+		}
+	},{
+		.mfr_id		= CFI_MFR_AMD,
+		.dev_id		= AM29DL323GB,
+		.name		= "AMD AM29DL323GB",
+		.uaddr		= MTD_UADDR_0x0AAA_0x0555, /* x8 */
+		.dev_size	= SIZE_4MiB,
+		.cmd_set	= P_ID_AMD_STD,
+		.nr_regions	= 2,
+		.regions	= {
+			ERASEINFO(0x2000,8),
+			ERASEINFO(0x10000,63)
+		}
+	},{
+		.mfr_id		= CFI_MFR_AMD,
 		.dev_id		= AM29F032B,
 		.name		= "AMD AM29F032B",
 		.uaddr		= MTD_UADDR_0x0555_0x02AA,
@@ -335,6 +397,19 @@ static const struct amd_flash_info jedec_table[] = {
 			ERASEINFO(0x02000,2),
 			ERASEINFO(0x08000,1),
 			ERASEINFO(0x10000,31)
+		}
+	}, {
+		.mfr_id		= CFI_MFR_AMD,
+		.dev_id		= AM29BDD160GB,
+		.name		= "AMD AM29BDD160GB",
+		.uaddr		= MTD_UADDR_0x1554_0x0AAA, /* x32 */
+		.dev_size	= SIZE_2MiB,
+		.cmd_set	= P_ID_AMD_STD,
+		.nr_regions	= 3,
+		.regions	= {
+			ERASEINFO(0x01000,8),
+			ERASEINFO(0x10000,32),
+			ERASEINFO(0x01000,8)
 		}
 	}, {
 		.mfr_id		= CFI_MFR_AMD,
@@ -642,36 +717,6 @@ static const struct amd_flash_info jedec_table[] = {
 		.regions	= {
 			ERASEINFO(0x10000,63),
 			ERASEINFO(0x02000,8)
-		}
-	}, {
-		.mfr_id		= CFI_MFR_EON,
-		.dev_id		= EN29LV400AT,
-		.name		= "Eon EN29LV400AT",
-		.devtypes	= CFI_DEVICETYPE_X16|CFI_DEVICETYPE_X8,
-		.uaddr		= MTD_UADDR_0x0AAA_0x0555,
-		.dev_size	= SIZE_512KiB,
-		.cmd_set	= P_ID_AMD_STD,
-		.nr_regions	= 4,
-		.regions	= {
-			ERASEINFO(0x10000,7),
-			ERASEINFO(0x08000,1),
-			ERASEINFO(0x02000,2),
-			ERASEINFO(0x04000,1),
-		}
-	}, {
-		.mfr_id		= CFI_MFR_EON,
-		.dev_id		= EN29LV400AB,
-		.name		= "Eon EN29LV400AB",
-		.devtypes	= CFI_DEVICETYPE_X16|CFI_DEVICETYPE_X8,
-		.uaddr		= MTD_UADDR_0x0AAA_0x0555,
-		.dev_size	= SIZE_512KiB,
-		.cmd_set	= P_ID_AMD_STD,
-		.nr_regions	= 4,
-		.regions	= {
-			ERASEINFO(0x04000,1),
-			ERASEINFO(0x02000,2),
-			ERASEINFO(0x08000,1),
-			ERASEINFO(0x10000,7),
 		}
 	}, {
 		.mfr_id		= CFI_MFR_EON,
@@ -1601,6 +1646,18 @@ static const struct amd_flash_info jedec_table[] = {
 			ERASEINFO(0x10000,64),
 		}
 	}, {
+		.mfr_id         = CFI_MFR_SST,
+		.dev_id         = SST39VF6401B,
+		.name           = "SST 39VF6401B",
+		.devtypes       = CFI_DEVICETYPE_X16,
+		.uaddr          = MTD_UADDR_0xAAAA_0x5555,
+		.dev_size       = SIZE_8MiB,
+		.cmd_set        = P_ID_AMD_STD,
+		.nr_regions     = 1,
+		.regions        = {
+			ERASEINFO(0x10000,128)
+		}
+	}, {
 		.mfr_id		= CFI_MFR_ST,
 		.dev_id		= M29F800AB,
 		.name		= "ST M29F800AB",
@@ -1921,8 +1978,6 @@ static inline u32 jedec_read_mfr(struct map_info *map, uint32_t base,
 	do {
 		uint32_t ofs = cfi_build_cmd_addr(0 + (bank << 8), map, cfi);
 		mask = (1 << (cfi->device_type * 8)) - 1;
-		if (ofs >= map->size)
-			return 0;
 		result = map_read(map, base + ofs);
 		bank++;
 	} while ((result.x[0] & mask) == CFI_MFR_CONTINUATION);

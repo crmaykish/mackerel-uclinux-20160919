@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_GENERIC_PAGE_H
 #define __ASM_GENERIC_PAGE_H
 /*
@@ -7,7 +6,7 @@
  */
 
 #ifdef CONFIG_MMU
-#error need to provide a real asm/page.h
+#error need to prove a real asm/page.h
 #endif
 
 
@@ -24,6 +23,9 @@
 #include <asm/setup.h>
 
 #ifndef __ASSEMBLY__
+
+#define get_user_page(vaddr)		__get_free_page(GFP_KERNEL)
+#define free_user_page(page, addr)	free_page(addr)
 
 #define clear_page(page)	memset((page), 0, PAGE_SIZE)
 #define copy_page(to,from)	memcpy((to), (from), PAGE_SIZE)

@@ -1,13 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * SuperH Pin Function Controller GPIO driver.
  *
  * Copyright (C) 2008 Magnus Damm
  * Copyright (C) 2009 - 2012 Paul Mundt
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
  */
 
 #include <linux/device.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/pinctrl/consumer.h>
@@ -35,10 +38,14 @@ struct sh_pfc_chip {
 	struct sh_pfc_gpio_pin		*pins;
 };
 
+static struct sh_pfc_chip *gpio_to_pfc_chip(struct gpio_chip *gc)
+{
+	return container_of(gc, struct sh_pfc_chip, gpio_chip);
+}
+
 static struct sh_pfc *gpio_to_pfc(struct gpio_chip *gc)
 {
-	struct sh_pfc_chip *chip = gpiochip_get_data(gc);
-	return chip->pfc;
+	return gpio_to_pfc_chip(gc)->pfc;
 }
 
 static void gpio_get_data_reg(struct sh_pfc_chip *chip, unsigned int offset,
@@ -104,7 +111,7 @@ static int gpio_setup_data_regs(struct sh_pfc_chip *chip)
 	for (i = 0; pfc->info->data_regs[i].reg_width; ++i)
 		;
 
-	chip->regs = devm_kcalloc(pfc->dev, i, sizeof(*chip->regs),
+	chip->regs = devm_kzalloc(pfc->dev, i * sizeof(*chip->regs),
 				  GFP_KERNEL);
 	if (chip->regs == NULL)
 		return -ENOMEM;
@@ -136,12 +143,12 @@ static int gpio_pin_request(struct gpio_chip *gc, unsigned offset)
 	if (idx < 0 || pfc->info->pins[idx].enum_id == 0)
 		return -EINVAL;
 
-	return pinctrl_gpio_request(offset);
+	return pinctrl_request_gpio(offset);
 }
 
 static void gpio_pin_free(struct gpio_chip *gc, unsigned offset)
 {
-	return pinctrl_gpio_free(offset);
+	return pinctrl_free_gpio(offset);
 }
 
 static void gpio_pin_set_value(struct sh_pfc_chip *chip, unsigned offset,
@@ -171,14 +178,14 @@ static int gpio_pin_direction_input(struct gpio_chip *gc, unsigned offset)
 static int gpio_pin_direction_output(struct gpio_chip *gc, unsigned offset,
 				    int value)
 {
-	gpio_pin_set_value(gpiochip_get_data(gc), offset, value);
+	gpio_pin_set_value(gpio_to_pfc_chip(gc), offset, value);
 
 	return pinctrl_gpio_direction_output(offset);
 }
 
 static int gpio_pin_get(struct gpio_chip *gc, unsigned offset)
 {
-	struct sh_pfc_chip *chip = gpiochip_get_data(gc);
+	struct sh_pfc_chip *chip = gpio_to_pfc_chip(gc);
 	struct sh_pfc_gpio_data_reg *reg;
 	unsigned int bit;
 	unsigned int pos;
@@ -192,7 +199,7 @@ static int gpio_pin_get(struct gpio_chip *gc, unsigned offset)
 
 static void gpio_pin_set(struct gpio_chip *gc, unsigned offset, int value)
 {
-	gpio_pin_set_value(gpiochip_get_data(gc), offset, value);
+	gpio_pin_set_value(gpio_to_pfc_chip(gc), offset, value);
 }
 
 static int gpio_pin_to_irq(struct gpio_chip *gc, unsigned offset)
@@ -209,7 +216,7 @@ static int gpio_pin_to_irq(struct gpio_chip *gc, unsigned offset)
 		}
 	}
 
-	return 0;
+	return -ENOSYS;
 
 found:
 	return pfc->irqs[i];
@@ -221,9 +228,8 @@ static int gpio_pin_setup(struct sh_pfc_chip *chip)
 	struct gpio_chip *gc = &chip->gpio_chip;
 	int ret;
 
-	chip->pins = devm_kcalloc(pfc->dev,
-				  pfc->info->nr_pins, sizeof(*chip->pins),
-				  GFP_KERNEL);
+	chip->pins = devm_kzalloc(pfc->dev, pfc->info->nr_pins *
+				  sizeof(*chip->pins), GFP_KERNEL);
 	if (chip->pins == NULL)
 		return -ENOMEM;
 
@@ -240,7 +246,7 @@ static int gpio_pin_setup(struct sh_pfc_chip *chip)
 	gc->to_irq = gpio_pin_to_irq;
 
 	gc->label = pfc->info->name;
-	gc->parent = pfc->dev;
+	gc->dev = pfc->dev;
 	gc->owner = THIS_MODULE;
 	gc->base = 0;
 	gc->ngpio = pfc->nr_gpio_pins;
@@ -252,16 +258,21 @@ static int gpio_pin_setup(struct sh_pfc_chip *chip)
  * Function GPIOs
  */
 
-#ifdef CONFIG_PINCTRL_SH_FUNC_GPIO
+#ifdef CONFIG_SUPERH
 static int gpio_function_request(struct gpio_chip *gc, unsigned offset)
 {
+	static bool __print_once;
 	struct sh_pfc *pfc = gpio_to_pfc(gc);
 	unsigned int mark = pfc->info->func_gpios[offset].enum_id;
 	unsigned long flags;
 	int ret;
 
-	dev_notice_once(pfc->dev,
-			"Use of GPIO API for function requests is deprecated, convert to pinctrl\n");
+	if (!__print_once) {
+		dev_notice(pfc->dev,
+			   "Use of GPIO API for function requests is deprecated."
+			   " Convert to pinctrl\n");
+		__print_once = true;
+	}
 
 	if (mark == 0)
 		return -EINVAL;
@@ -287,7 +298,7 @@ static int gpio_function_setup(struct sh_pfc_chip *chip)
 
 	return 0;
 }
-#endif /* CONFIG_PINCTRL_SH_FUNC_GPIO */
+#endif
 
 /* -----------------------------------------------------------------------------
  * Register/unregister
@@ -311,7 +322,7 @@ sh_pfc_add_gpiochip(struct sh_pfc *pfc, int(*setup)(struct sh_pfc_chip *),
 	if (ret < 0)
 		return ERR_PTR(ret);
 
-	ret = devm_gpiochip_add_data(pfc->dev, &chip->gpio_chip, chip);
+	ret = gpiochip_add(&chip->gpio_chip);
 	if (unlikely(ret < 0))
 		return ERR_PTR(ret);
 
@@ -364,7 +375,7 @@ int sh_pfc_register_gpiochip(struct sh_pfc *pfc)
 	if (IS_ENABLED(CONFIG_OF) && pfc->dev->of_node)
 		return 0;
 
-#ifdef CONFIG_PINCTRL_SH_FUNC_GPIO
+#ifdef CONFIG_SUPERH
 	/*
 	 * Register the GPIO to pin mappings. As pins with GPIO ports
 	 * must come first in the ranges, skip the pins without GPIO
@@ -392,7 +403,18 @@ int sh_pfc_register_gpiochip(struct sh_pfc *pfc)
 	chip = sh_pfc_add_gpiochip(pfc, gpio_function_setup, NULL);
 	if (IS_ERR(chip))
 		return PTR_ERR(chip);
-#endif /* CONFIG_PINCTRL_SH_FUNC_GPIO */
 
+	pfc->func = chip;
+#endif /* CONFIG_SUPERH */
+
+	return 0;
+}
+
+int sh_pfc_unregister_gpiochip(struct sh_pfc *pfc)
+{
+	gpiochip_remove(&pfc->gpio->gpio_chip);
+#ifdef CONFIG_SUPERH
+	gpiochip_remove(&pfc->func->gpio_chip);
+#endif
 	return 0;
 }

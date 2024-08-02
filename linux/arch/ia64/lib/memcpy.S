@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
  * Optimized version of the standard memcpy() function
@@ -15,7 +14,6 @@
  *	David Mosberger-Tang <davidm@hpl.hp.com>
  */
 #include <asm/asmmacro.h>
-#include <asm/export.h>
 
 GLOBAL_ENTRY(memcpy)
 
@@ -301,4 +299,3 @@ GLOBAL_ENTRY(memcpy)
 	COPY(56, 0)
 
 END(memcpy)
-EXPORT_SYMBOL(memcpy)

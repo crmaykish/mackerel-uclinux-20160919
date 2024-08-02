@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef LINUX_SSB_H_
 #define LINUX_SSB_H_
 
@@ -499,9 +498,11 @@ struct ssb_bus {
 
 	/* Internal-only stuff follows. Do not touch. */
 	struct list_head list;
+#ifdef CONFIG_SSB_DEBUG
 	/* Is the bus already powered up? */
 	bool powered_up;
 	int power_warn_count;
+#endif /* DEBUG */
 };
 
 enum ssb_quirks {
@@ -523,9 +524,13 @@ struct ssb_init_invariants {
 typedef int (*ssb_invariants_func_t)(struct ssb_bus *bus,
 				     struct ssb_init_invariants *iv);
 
-/* Register SoC bus. */
-extern int ssb_bus_host_soc_register(struct ssb_bus *bus,
-				     unsigned long baseaddr);
+/* Register a SSB system bus. get_invariants() is called after the
+ * basic system devices are initialized.
+ * The invariants are usually fetched from some NVRAM.
+ * Put the invariants into the struct pointed to by iv. */
+extern int ssb_bus_ssbbus_register(struct ssb_bus *bus,
+				   unsigned long baseaddr,
+				   ssb_invariants_func_t get_invariants);
 #ifdef CONFIG_SSB_PCIHOST
 extern int ssb_bus_pcibus_register(struct ssb_bus *bus,
 				   struct pci_dev *host_pci);

@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * (C) 2001  Dave Jones, Arjan van de ven.
  * (C) 2002 - 2003  Dominik Brodowski <linux@brodo.de>
  *
+ *  Licensed under the terms of the GNU GPL License version 2.
  *  Based upon reverse engineered information, and on Intel documentation
  *  for chipsets ICH2-M and ICH3-M.
  *
@@ -17,8 +17,6 @@
 /*********************************************************************
  *                        SPEEDSTEP - DEFINITIONS                    *
  *********************************************************************/
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -70,13 +68,13 @@ static int speedstep_find_register(void)
 	/* get PMBASE */
 	pci_read_config_dword(speedstep_chipset_dev, 0x40, &pmbase);
 	if (!(pmbase & 0x01)) {
-		pr_err("could not find speedstep register\n");
+		printk(KERN_ERR "speedstep-ich: could not find speedstep register\n");
 		return -ENODEV;
 	}
 
 	pmbase &= 0xFFFFFFFE;
 	if (!pmbase) {
-		pr_err("could not find speedstep register\n");
+		printk(KERN_ERR "speedstep-ich: could not find speedstep register\n");
 		return -ENODEV;
 	}
 
@@ -138,7 +136,7 @@ static void speedstep_set_state(unsigned int state)
 		pr_debug("change to %u MHz succeeded\n",
 			speedstep_get_frequency(speedstep_processor) / 1000);
 	else
-		pr_err("change failed - I/O error\n");
+		printk(KERN_ERR "cpufreq: change failed - I/O error\n");
 
 	return;
 }
@@ -207,7 +205,7 @@ static unsigned int speedstep_detect_chipset(void)
 		 * 8100 which use a pretty old revision of the 82815
 		 * host bridge. Abort on these systems.
 		 */
-		struct pci_dev *hostbridge;
+		static struct pci_dev *hostbridge;
 
 		hostbridge  = pci_get_subsys(PCI_VENDOR_ID_INTEL,
 			      PCI_DEVICE_ID_INTEL_82815_MC,
@@ -243,7 +241,8 @@ static unsigned int speedstep_get(unsigned int cpu)
 	unsigned int speed;
 
 	/* You're supposed to ensure CPU is online. */
-	BUG_ON(smp_call_function_single(cpu, get_freq_data, &speed, 1));
+	if (smp_call_function_single(cpu, get_freq_data, &speed, 1) != 0)
+		BUG();
 
 	pr_debug("detected %u kHz as current frequency\n", speed);
 	return speed;
@@ -303,9 +302,7 @@ static int speedstep_cpu_init(struct cpufreq_policy *policy)
 	if (gf.ret)
 		return gf.ret;
 
-	policy->freq_table = speedstep_freqs;
-
-	return 0;
+	return cpufreq_table_validate_and_show(policy, speedstep_freqs);
 }
 
 

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /* cpudata.h: Per-cpu parameters.
  *
  * Copyright (C) 2003, 2005, 2006 David S. Miller (davem@davemloft.net)
@@ -25,10 +24,9 @@ typedef struct {
 	unsigned int	icache_line_size;
 	unsigned int	ecache_size;
 	unsigned int	ecache_line_size;
-	unsigned short	sock_id;	/* physical package */
+	unsigned short	sock_id;
 	unsigned short	core_id;
-	unsigned short  max_cache_id;	/* groupings of highest shared cache */
-	signed short	proc_id;	/* strand (aka HW thread) id */
+	int		proc_id;
 } cpuinfo_sparc;
 
 DECLARE_PER_CPU(cpuinfo_sparc, __cpu_data);

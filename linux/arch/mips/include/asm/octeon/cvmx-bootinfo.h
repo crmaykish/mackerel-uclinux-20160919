@@ -32,8 +32,6 @@
 #ifndef __CVMX_BOOTINFO_H__
 #define __CVMX_BOOTINFO_H__
 
-#include "cvmx-coremask.h"
-
 /*
  * Current major and minor versions of the CVMX bootinfo block that is
  * passed from the bootloader to the application.  This is versioned
@@ -41,7 +39,7 @@
  * versions.
  */
 #define CVMX_BOOTINFO_MAJ_VER 1
-#define CVMX_BOOTINFO_MIN_VER 4
+#define CVMX_BOOTINFO_MIN_VER 3
 
 #if (CVMX_BOOTINFO_MAJ_VER == 1)
 #define CVMX_BOOTINFO_OCTEON_SERIAL_LEN 20
@@ -126,13 +124,6 @@ struct cvmx_bootinfo {
 	 */
 	uint64_t fdt_addr;
 #endif
-#if (CVMX_BOOTINFO_MIN_VER >= 4)
-	/*
-	 * Coremask used for processors with more than 32 cores
-	 * or with OCI.  This replaces core_mask.
-	 */
-	struct cvmx_coremask ext_core_mask;
-#endif
 #else				/* __BIG_ENDIAN */
 	/*
 	 * Little-Endian: When the CPU mode is switched to
@@ -185,9 +176,6 @@ struct cvmx_bootinfo {
 #endif
 #if (CVMX_BOOTINFO_MIN_VER >= 3)
 	uint64_t fdt_addr;
-#endif
-#if (CVMX_BOOTINFO_MIN_VER >= 4)
-	struct cvmx_coremask ext_core_mask;
 #endif
 #endif
 };
@@ -296,6 +284,9 @@ enum cvmx_board_types_enum {
 	CVMX_BOARD_TYPE_CUST_PRIVATE_MIN = 20001,
 	CVMX_BOARD_TYPE_UBNT_E100 = 20002,
 	CVMX_BOARD_TYPE_CUST_DSR1000N = 20006,
+	CVMX_BOARD_TYPE_SNAPGEAR_SG590 = 20020,
+	CVMX_BOARD_TYPE_SNAPGEAR_SG8200 = 20021,
+	CVMX_BOARD_TYPE_SNAPGEAR_SG770 = 20022,
 	CVMX_BOARD_TYPE_KONTRON_S1901 = 21901,
 	CVMX_BOARD_TYPE_CUST_PRIVATE_MAX = 30000,
 
@@ -315,7 +306,7 @@ enum cvmx_chip_types_enum {
 
 /* Functions to return string based on type */
 #define ENUM_BRD_TYPE_CASE(x) \
-	case x: return (&#x[16]);	/* Skip CVMX_BOARD_TYPE_ */
+	case x: return(#x + 16);	/* Skip CVMX_BOARD_TYPE_ */
 static inline const char *cvmx_board_type_to_string(enum
 						    cvmx_board_types_enum type)
 {
@@ -397,14 +388,17 @@ static inline const char *cvmx_board_type_to_string(enum
 		ENUM_BRD_TYPE_CASE(CVMX_BOARD_TYPE_CUST_PRIVATE_MIN)
 		ENUM_BRD_TYPE_CASE(CVMX_BOARD_TYPE_UBNT_E100)
 		ENUM_BRD_TYPE_CASE(CVMX_BOARD_TYPE_CUST_DSR1000N)
+		ENUM_BRD_TYPE_CASE(CVMX_BOARD_TYPE_SNAPGEAR_SG590)
+		ENUM_BRD_TYPE_CASE(CVMX_BOARD_TYPE_SNAPGEAR_SG8200)
+		ENUM_BRD_TYPE_CASE(CVMX_BOARD_TYPE_SNAPGEAR_SG770)
 		ENUM_BRD_TYPE_CASE(CVMX_BOARD_TYPE_KONTRON_S1901)
 		ENUM_BRD_TYPE_CASE(CVMX_BOARD_TYPE_CUST_PRIVATE_MAX)
 	}
-	return NULL;
+	return "Unsupported Board";
 }
 
 #define ENUM_CHIP_TYPE_CASE(x) \
-	case x: return (&#x[15]);	/* Skip CVMX_CHIP_TYPE */
+	case x: return(#x + 15);	/* Skip CVMX_CHIP_TYPE */
 static inline const char *cvmx_chip_type_to_string(enum
 						   cvmx_chip_types_enum type)
 {

@@ -1,44 +1,32 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Line 6 Linux USB driver
  *
  * Copyright (C) 2004-2010 Markus Grabner (grabner@icg.tugraz.at)
+ *
+ *	This program is free software; you can redistribute it and/or
+ *	modify it under the terms of the GNU General Public License as
+ *	published by the Free Software Foundation, version 2.
+ *
  */
 
 #ifndef DRIVER_H
 #define DRIVER_H
 
+#include <linux/spinlock.h>
 #include <linux/usb.h>
-#include <linux/mutex.h>
-#include <linux/kfifo.h>
 #include <sound/core.h>
 
 #include "midi.h"
 
-/* USB 1.1 speed configuration */
-#define USB_LOW_INTERVALS_PER_SECOND 1000
-#define USB_LOW_ISO_BUFFERS 2
-
-/* USB 2.0+ speed configuration */
-#define USB_HIGH_INTERVALS_PER_SECOND 8000
-#define USB_HIGH_ISO_BUFFERS 16
+#define USB_INTERVALS_PER_SECOND 1000
 
 /* Fallback USB interval and max packet size values */
 #define LINE6_FALLBACK_INTERVAL 10
 #define LINE6_FALLBACK_MAXPACKETSIZE 16
 
-#define LINE6_TIMEOUT 1000
-#define LINE6_BUFSIZE_LISTEN 64
-#define LINE6_MIDI_MESSAGE_MAXLEN 256
-
-#define LINE6_RAW_MESSAGES_MAXCOUNT_ORDER 7
-/* 4k packets are common, BUFSIZE * MAXCOUNT should be bigger... */
-#define LINE6_RAW_MESSAGES_MAXCOUNT (1 << LINE6_RAW_MESSAGES_MAXCOUNT_ORDER)
-
-
-#if LINE6_BUFSIZE_LISTEN > 65535
-#error "Use dynamic fifo instead"
-#endif
+#define LINE6_TIMEOUT 1
+#define LINE6_BUFSIZE_LISTEN 32
+#define LINE6_MESSAGE_MAXLEN 256
 
 /*
 	Line 6 MIDI control commands
@@ -64,6 +52,13 @@
 
 #define LINE6_CHANNEL_MASK 0x0f
 
+#define CHECK_STARTUP_PROGRESS(x, n)	\
+do {					\
+	if ((x) >= (n))			\
+		return;			\
+	x = (n);			\
+} while (0)
+
 extern const unsigned char line6_midi_id[3];
 
 static const int SYSEX_DATA_OFS = sizeof(line6_midi_id) + 3;
@@ -87,11 +82,10 @@ struct line6_properties {
 
 	int altsetting;
 
-	unsigned int ctrl_if;
-	unsigned int ep_ctrl_r;
-	unsigned int ep_ctrl_w;
-	unsigned int ep_audio_r;
-	unsigned int ep_audio_w;
+	unsigned ep_ctrl_r;
+	unsigned ep_ctrl_w;
+	unsigned ep_audio_r;
+	unsigned ep_audio_w;
 };
 
 /* Capability bits */
@@ -100,14 +94,8 @@ enum {
 	LINE6_CAP_CONTROL =	1 << 0,
 	/* device supports PCM input/output via USB */
 	LINE6_CAP_PCM =		1 << 1,
-	/* device supports hardware monitoring */
+	/* device support hardware monitoring */
 	LINE6_CAP_HWMON =	1 << 2,
-	/* device requires output data when input is read */
-	LINE6_CAP_IN_NEEDS_OUT = 1 << 3,
-	/* device uses raw MIDI via USB (data endpoints) */
-	LINE6_CAP_CONTROL_MIDI = 1 << 4,
-	/* device provides low-level information */
-	LINE6_CAP_CONTROL_INFO = 1 << 5,
 };
 
 /*
@@ -121,15 +109,10 @@ struct usb_line6 {
 	/* Properties */
 	const struct line6_properties *properties;
 
-	/* Interval for data USB packets */
+	/* Interval (ms) */
 	int interval;
-	/* ...for isochronous transfers framing */
-	int intervals_per_second;
 
-	/* Number of isochronous URBs used for frame transfers */
-	int iso_buffers;
-
-	/* Maximum size of data USB packet */
+	/* Maximum size of USB packet */
 	int max_packet_size;
 
 	/* Device representing the USB interface */
@@ -146,36 +129,20 @@ struct usb_line6 {
 	/* Line 6 MIDI device data structure */
 	struct snd_line6_midi *line6midi;
 
-	/* URB for listening to POD data endpoint */
+	/* URB for listening to PODxt Pro control endpoint */
 	struct urb *urb_listen;
 
-	/* Buffer for incoming data from POD data endpoint */
+	/* Buffer for listening to PODxt Pro control endpoint */
 	unsigned char *buffer_listen;
 
-	/* Buffer for message to be processed, generated from MIDI layer */
+	/* Buffer for message to be processed */
 	unsigned char *buffer_message;
 
-	/* Length of message to be processed, generated from MIDI layer  */
+	/* Length of message to be processed */
 	int message_length;
 
-	/* Circular buffer for non-MIDI control messages */
-	struct {
-		struct mutex read_lock;
-		wait_queue_head_t wait_queue;
-		unsigned int active:1;
-		STRUCT_KFIFO_REC_2(LINE6_BUFSIZE_LISTEN * LINE6_RAW_MESSAGES_MAXCOUNT)
-			fifo;
-	} messages;
-
-	/* Work for delayed PCM startup */
-	struct delayed_work startup_work;
-
-	/* If MIDI is supported, buffer_message contains the pre-processed data;
-	 * otherwise the data is only in urb_listen (buffer_incoming).
-	 */
 	void (*process_message)(struct usb_line6 *);
 	void (*disconnect)(struct usb_line6 *line6);
-	void (*startup)(struct usb_line6 *line6);
 };
 
 extern char *line6_alloc_sysex_buffer(struct usb_line6 *line6, int code1,
@@ -190,6 +157,9 @@ extern int line6_send_sysex_message(struct usb_line6 *line6,
 				    const char *buffer, int size);
 extern ssize_t line6_set_raw(struct device *dev, struct device_attribute *attr,
 			     const char *buf, size_t count);
+extern void line6_start_timer(struct timer_list *timer, unsigned long msecs,
+			      void (*function)(unsigned long),
+			      unsigned long data);
 extern int line6_version_request_async(struct usb_line6 *line6);
 extern int line6_write_data(struct usb_line6 *line6, unsigned address,
 			    void *data, unsigned datalen);

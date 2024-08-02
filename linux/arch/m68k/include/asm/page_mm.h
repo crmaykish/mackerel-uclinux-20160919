@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _M68K_PAGE_MM_H
 #define _M68K_PAGE_MM_H
 
@@ -6,6 +5,9 @@
 
 #include <linux/compiler.h>
 #include <asm/module.h>
+
+#define get_user_page(vaddr)		__get_free_page(GFP_KERNEL)
+#define free_user_page(page, addr)	free_page(addr)
 
 /*
  * We don't need to check for alignment etc.

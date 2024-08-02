@@ -1,6 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2013, Michael Ellerman, IBM Corporation.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt)	"powernv-rng: " fmt
@@ -12,14 +16,11 @@
 #include <linux/slab.h>
 #include <linux/smp.h>
 #include <asm/archrandom.h>
-#include <asm/cputable.h>
 #include <asm/io.h>
 #include <asm/prom.h>
 #include <asm/machdep.h>
 #include <asm/smp.h>
-#include "powernv.h"
 
-#define DARN_ERR 0xFFFFFFFFFFFFFFFFul
 
 struct powernv_rng {
 	void __iomem *regs;
@@ -28,6 +29,7 @@ struct powernv_rng {
 };
 
 static DEFINE_PER_CPU(struct powernv_rng *, powernv_rng);
+
 
 int powernv_hwrng_present(void)
 {
@@ -43,11 +45,7 @@ static unsigned long rng_whiten(struct powernv_rng *rng, unsigned long val)
 	unsigned long parity;
 
 	/* Calculate the parity of the value */
-	asm (".machine push;   \
-	      .machine power7; \
-	      popcntd %0,%1;   \
-	      .machine pop;"
-	     : "=r" (parity) : "r" (val));
+	asm ("popcntd %0,%1" : "=r" (parity) : "r" (val));
 
 	/* xor our value with the previous mask */
 	val ^= rng->mask;
@@ -63,44 +61,10 @@ int powernv_get_random_real_mode(unsigned long *v)
 	struct powernv_rng *rng;
 
 	rng = raw_cpu_read(powernv_rng);
-	if (!rng)
-		return 0;
 
-	*v = rng_whiten(rng, __raw_rm_readq(rng->regs_real));
+	*v = rng_whiten(rng, in_rm64(rng->regs_real));
 
 	return 1;
-}
-
-int powernv_get_random_darn(unsigned long *v)
-{
-	unsigned long val;
-
-	/* Using DARN with L=1 - 64-bit conditioned random number */
-	asm volatile(PPC_DARN(%0, 1) : "=r"(val));
-
-	if (val == DARN_ERR)
-		return 0;
-
-	*v = val;
-
-	return 1;
-}
-
-static int initialise_darn(void)
-{
-	unsigned long val;
-	int i;
-
-	if (!cpu_has_feature(CPU_FTR_ARCH_300))
-		return -ENODEV;
-
-	for (i = 0; i < 10; i++) {
-		if (powernv_get_random_darn(&val)) {
-			ppc_md.get_random_seed = powernv_get_random_darn;
-			return 0;
-		}
-	}
-	return -EIO;
 }
 
 int powernv_get_random_long(unsigned long *v)
@@ -124,7 +88,7 @@ static __init void rng_init_per_cpu(struct powernv_rng *rng,
 
 	chip_id = of_get_ibm_chip_id(dn);
 	if (chip_id == -1)
-		pr_warn("No ibm,chip-id found for %pOF.\n", dn);
+		pr_warn("No ibm,chip-id found for %s.\n", dn->full_name);
 
 	for_each_possible_cpu(cpu) {
 		if (per_cpu(powernv_rng, cpu) == NULL ||
@@ -162,59 +126,30 @@ static __init int rng_create(struct device_node *dn)
 
 	rng_init_per_cpu(rng, dn);
 
+	pr_info_once("Registering arch random hook.\n");
+
 	ppc_md.get_random_seed = powernv_get_random_long;
 
 	return 0;
 }
 
-static int __init pnv_get_random_long_early(unsigned long *v)
+static __init int rng_init(void)
 {
 	struct device_node *dn;
+	int rc;
 
-	if (!slab_is_available())
-		return 0;
+	for_each_compatible_node(dn, NULL, "ibm,power-rng") {
+		rc = rng_create(dn);
+		if (rc) {
+			pr_err("Failed creating rng for %s (%d).\n",
+				dn->full_name, rc);
+			continue;
+		}
 
-	if (cmpxchg(&ppc_md.get_random_seed, pnv_get_random_long_early,
-		    NULL) != pnv_get_random_long_early)
-		return 0;
-
-	for_each_compatible_node(dn, NULL, "ibm,power-rng")
-		rng_create(dn);
-
-	if (!ppc_md.get_random_seed)
-		return 0;
-	return ppc_md.get_random_seed(v);
-}
-
-void __init pnv_rng_init(void)
-{
-	struct device_node *dn;
-
-	/* Prefer darn over the rest. */
-	if (!initialise_darn())
-		return;
-
-	dn = of_find_compatible_node(NULL, NULL, "ibm,power-rng");
-	if (dn)
-		ppc_md.get_random_seed = pnv_get_random_long_early;
-
-	of_node_put(dn);
-}
-
-static int __init pnv_rng_late_init(void)
-{
-	struct device_node *dn;
-	unsigned long v;
-
-	/* In case it wasn't called during init for some other reason. */
-	if (ppc_md.get_random_seed == pnv_get_random_long_early)
-		pnv_get_random_long_early(&v);
-
-	if (ppc_md.get_random_seed == powernv_get_random_long) {
-		for_each_compatible_node(dn, NULL, "ibm,power-rng")
-			of_platform_device_create(dn, NULL, NULL);
+		/* Create devices for hwrng driver */
+		of_platform_device_create(dn, NULL, NULL);
 	}
 
 	return 0;
 }
-machine_subsys_initcall(powernv, pnv_rng_late_init);
+machine_subsys_initcall(powernv, rng_init);

@@ -61,16 +61,13 @@ static int snd_pcm_plugin_alloc(struct snd_pcm_plugin *plugin, snd_pcm_uframes_t
 	}
 	if ((width = snd_pcm_format_physical_width(format->format)) < 0)
 		return width;
-	size = array3_size(frames, format->channels, width);
-	/* check for too large period size once again */
-	if (size > 1024 * 1024)
-		return -ENOMEM;
+	size = frames * format->channels * width;
 	if (snd_BUG_ON(size % 8))
 		return -ENXIO;
 	size /= 8;
 	if (plugin->buf_frames < frames) {
-		kvfree(plugin->buf);
-		plugin->buf = kvzalloc(size, GFP_KERNEL);
+		vfree(plugin->buf);
+		plugin->buf = vmalloc(size);
 		plugin->buf_frames = frames;
 	}
 	if (!plugin->buf) {
@@ -114,7 +111,7 @@ int snd_pcm_plug_alloc(struct snd_pcm_substream *plug, snd_pcm_uframes_t frames)
 		while (plugin->next) {
 			if (plugin->dst_frames)
 				frames = plugin->dst_frames(plugin, frames);
-			if ((snd_pcm_sframes_t)frames <= 0)
+			if (snd_BUG_ON(frames <= 0))
 				return -ENXIO;
 			plugin = plugin->next;
 			err = snd_pcm_plugin_alloc(plugin, frames);
@@ -126,7 +123,7 @@ int snd_pcm_plug_alloc(struct snd_pcm_substream *plug, snd_pcm_uframes_t frames)
 		while (plugin->prev) {
 			if (plugin->src_frames)
 				frames = plugin->src_frames(plugin, frames);
-			if ((snd_pcm_sframes_t)frames <= 0)
+			if (snd_BUG_ON(frames <= 0))
 				return -ENXIO;
 			plugin = plugin->prev;
 			err = snd_pcm_plugin_alloc(plugin, frames);
@@ -194,14 +191,12 @@ int snd_pcm_plugin_free(struct snd_pcm_plugin *plugin)
 	if (plugin->private_free)
 		plugin->private_free(plugin);
 	kfree(plugin->buf_channels);
-	kvfree(plugin->buf);
+	vfree(plugin->buf);
 	kfree(plugin);
 	return 0;
 }
 
-static snd_pcm_sframes_t plug_client_size(struct snd_pcm_substream *plug,
-					  snd_pcm_uframes_t drv_frames,
-					  bool check_size)
+snd_pcm_sframes_t snd_pcm_plug_client_size(struct snd_pcm_substream *plug, snd_pcm_uframes_t drv_frames)
 {
 	struct snd_pcm_plugin *plugin, *plugin_prev, *plugin_next;
 	int stream;
@@ -217,18 +212,12 @@ static snd_pcm_sframes_t plug_client_size(struct snd_pcm_substream *plug,
 			plugin_prev = plugin->prev;
 			if (plugin->src_frames)
 				drv_frames = plugin->src_frames(plugin, drv_frames);
-			if (check_size && plugin->buf_frames &&
-			    drv_frames > plugin->buf_frames)
-				drv_frames = plugin->buf_frames;
 			plugin = plugin_prev;
 		}
 	} else if (stream == SNDRV_PCM_STREAM_CAPTURE) {
 		plugin = snd_pcm_plug_first(plug);
 		while (plugin && drv_frames > 0) {
 			plugin_next = plugin->next;
-			if (check_size && plugin->buf_frames &&
-			    drv_frames > plugin->buf_frames)
-				drv_frames = plugin->buf_frames;
 			if (plugin->dst_frames)
 				drv_frames = plugin->dst_frames(plugin, drv_frames);
 			plugin = plugin_next;
@@ -238,9 +227,7 @@ static snd_pcm_sframes_t plug_client_size(struct snd_pcm_substream *plug,
 	return drv_frames;
 }
 
-static snd_pcm_sframes_t plug_slave_size(struct snd_pcm_substream *plug,
-					 snd_pcm_uframes_t clt_frames,
-					 bool check_size)
+snd_pcm_sframes_t snd_pcm_plug_slave_size(struct snd_pcm_substream *plug, snd_pcm_uframes_t clt_frames)
 {
 	struct snd_pcm_plugin *plugin, *plugin_prev, *plugin_next;
 	snd_pcm_sframes_t frames;
@@ -256,9 +243,6 @@ static snd_pcm_sframes_t plug_slave_size(struct snd_pcm_substream *plug,
 		plugin = snd_pcm_plug_first(plug);
 		while (plugin && frames > 0) {
 			plugin_next = plugin->next;
-			if (check_size && plugin->buf_frames &&
-			    frames > plugin->buf_frames)
-				frames = plugin->buf_frames;
 			if (plugin->dst_frames) {
 				frames = plugin->dst_frames(plugin, frames);
 				if (frames < 0)
@@ -275,9 +259,6 @@ static snd_pcm_sframes_t plug_slave_size(struct snd_pcm_substream *plug,
 				if (frames < 0)
 					return frames;
 			}
-			if (check_size && plugin->buf_frames &&
-			    frames > plugin->buf_frames)
-				frames = plugin->buf_frames;
 			plugin = plugin_prev;
 		}
 	} else
@@ -285,20 +266,7 @@ static snd_pcm_sframes_t plug_slave_size(struct snd_pcm_substream *plug,
 	return frames;
 }
 
-snd_pcm_sframes_t snd_pcm_plug_client_size(struct snd_pcm_substream *plug,
-					   snd_pcm_uframes_t drv_frames)
-{
-	return plug_client_size(plug, drv_frames, false);
-}
-
-snd_pcm_sframes_t snd_pcm_plug_slave_size(struct snd_pcm_substream *plug,
-					  snd_pcm_uframes_t clt_frames)
-{
-	return plug_slave_size(plug, clt_frames, false);
-}
-
-static int snd_pcm_plug_formats(const struct snd_mask *mask,
-				snd_pcm_format_t format)
+static int snd_pcm_plug_formats(struct snd_mask *mask, snd_pcm_format_t format)
 {
 	struct snd_mask formats = *mask;
 	u64 linfmts = (SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S8 |
@@ -312,10 +280,10 @@ static int snd_pcm_plug_formats(const struct snd_mask *mask,
 		       SNDRV_PCM_FMTBIT_U32_BE | SNDRV_PCM_FMTBIT_S32_BE);
 	snd_mask_set(&formats, (__force int)SNDRV_PCM_FORMAT_MU_LAW);
 	
-	if (formats.bits[0] & lower_32_bits(linfmts))
-		formats.bits[0] |= lower_32_bits(linfmts);
-	if (formats.bits[1] & upper_32_bits(linfmts))
-		formats.bits[1] |= upper_32_bits(linfmts);
+	if (formats.bits[0] & (u32)linfmts)
+		formats.bits[0] |= (u32)linfmts;
+	if (formats.bits[1] & (u32)(linfmts >> 32))
+		formats.bits[1] |= (u32)(linfmts >> 32);
 	return snd_mask_test(&formats, (__force int)format);
 }
 
@@ -341,7 +309,7 @@ static snd_pcm_format_t preferred_formats[] = {
 };
 
 snd_pcm_format_t snd_pcm_plug_slave_format(snd_pcm_format_t format,
-					   const struct snd_mask *format_mask)
+					   struct snd_mask *format_mask)
 {
 	int i;
 
@@ -384,7 +352,6 @@ snd_pcm_format_t snd_pcm_plug_slave_format(snd_pcm_format_t format,
 				if (snd_mask_test(format_mask, (__force int)format1))
 					return format1;
 			}
-			/* fall through */
 		default:
 			return (__force snd_pcm_format_t)-EINVAL;
 		}
@@ -624,26 +591,18 @@ snd_pcm_sframes_t snd_pcm_plug_write_transfer(struct snd_pcm_substream *plug, st
 	snd_pcm_sframes_t frames = size;
 
 	plugin = snd_pcm_plug_first(plug);
-	while (plugin) {
-		if (frames <= 0)
-			return frames;
+	while (plugin && frames > 0) {
 		if ((next = plugin->next) != NULL) {
 			snd_pcm_sframes_t frames1 = frames;
-			if (plugin->dst_frames) {
+			if (plugin->dst_frames)
 				frames1 = plugin->dst_frames(plugin, frames);
-				if (frames1 <= 0)
-					return frames1;
-			}
 			if ((err = next->client_channels(next, frames1, &dst_channels)) < 0) {
 				return err;
 			}
 			if (err != frames1) {
 				frames = err;
-				if (plugin->src_frames) {
+				if (plugin->src_frames)
 					frames = plugin->src_frames(plugin, frames1);
-					if (frames <= 0)
-						return frames;
-				}
 			}
 		} else
 			dst_channels = NULL;
@@ -653,7 +612,7 @@ snd_pcm_sframes_t snd_pcm_plug_write_transfer(struct snd_pcm_substream *plug, st
 		src_channels = dst_channels;
 		plugin = next;
 	}
-	return plug_client_size(plug, frames, true);
+	return snd_pcm_plug_client_size(plug, frames);
 }
 
 snd_pcm_sframes_t snd_pcm_plug_read_transfer(struct snd_pcm_substream *plug, struct snd_pcm_plugin_channel *dst_channels_final, snd_pcm_uframes_t size)
@@ -663,7 +622,7 @@ snd_pcm_sframes_t snd_pcm_plug_read_transfer(struct snd_pcm_substream *plug, str
 	snd_pcm_sframes_t frames = size;
 	int err;
 
-	frames = plug_slave_size(plug, frames, true);
+	frames = snd_pcm_plug_slave_size(plug, frames);
 	if (frames < 0)
 		return frames;
 

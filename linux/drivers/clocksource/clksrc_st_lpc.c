@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Clocksource using the Low Power Timer found in the Low Power Controller (LPC)
  *
@@ -6,6 +5,11 @@
  *
  * Author(s): Francesco Virlinzi <francesco.virlinzi@st.com>
  *	      Ajit Pal Singh <ajitpal.singh@st.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -88,7 +92,7 @@ static int __init st_clksrc_setup_clk(struct device_node *np)
 	return 0;
 }
 
-static int __init st_clksrc_of_register(struct device_node *np)
+static void __init st_clksrc_of_register(struct device_node *np)
 {
 	int ret;
 	uint32_t mode;
@@ -96,36 +100,32 @@ static int __init st_clksrc_of_register(struct device_node *np)
 	ret = of_property_read_u32(np, "st,lpc-mode", &mode);
 	if (ret) {
 		pr_err("clksrc-st-lpc: An LPC mode must be provided\n");
-		return ret;
+		return;
 	}
 
 	/* LPC can either run as a Clocksource or in RTC or WDT mode */
 	if (mode != ST_LPC_MODE_CLKSRC)
-		return 0;
+		return;
 
 	ddata.base = of_iomap(np, 0);
 	if (!ddata.base) {
 		pr_err("clksrc-st-lpc: Unable to map iomem\n");
-		return -ENXIO;
+		return;
 	}
 
-	ret = st_clksrc_setup_clk(np);
-	if (ret) {
+	if (st_clksrc_setup_clk(np)) {
 		iounmap(ddata.base);
-		return ret;
+		return;
 	}
 
-	ret = st_clksrc_init();
-	if (ret) {
+	if (st_clksrc_init()) {
 		clk_disable_unprepare(ddata.clk);
 		clk_put(ddata.clk);
 		iounmap(ddata.base);
-		return ret;
+		return;
 	}
 
 	pr_info("clksrc-st-lpc: clocksource initialised - running @ %luHz\n",
 		clk_get_rate(ddata.clk));
-
-	return ret;
 }
-TIMER_OF_DECLARE(ddata, "st,stih407-lpc", st_clksrc_of_register);
+CLOCKSOURCE_OF_DECLARE(ddata, "st,stih407-lpc", st_clksrc_of_register);

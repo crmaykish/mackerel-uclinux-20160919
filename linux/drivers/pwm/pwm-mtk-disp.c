@@ -1,8 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * MediaTek display pulse-width-modulation controller driver.
  * Copyright (c) 2015 MediaTek Inc.
  * Author: YH Huang <yh.huang@mediatek.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -10,40 +18,30 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pwm.h>
 #include <linux/slab.h>
 
 #define DISP_PWM_EN		0x00
+#define PWM_ENABLE_MASK		BIT(0)
 
+#define DISP_PWM_COMMIT		0x08
+#define PWM_COMMIT_MASK		BIT(0)
+
+#define DISP_PWM_CON_0		0x10
 #define PWM_CLKDIV_SHIFT	16
 #define PWM_CLKDIV_MAX		0x3ff
 #define PWM_CLKDIV_MASK		(PWM_CLKDIV_MAX << PWM_CLKDIV_SHIFT)
 
+#define DISP_PWM_CON_1		0x14
 #define PWM_PERIOD_BIT_WIDTH	12
 #define PWM_PERIOD_MASK		((1 << PWM_PERIOD_BIT_WIDTH) - 1)
 
 #define PWM_HIGH_WIDTH_SHIFT	16
 #define PWM_HIGH_WIDTH_MASK	(0x1fff << PWM_HIGH_WIDTH_SHIFT)
 
-struct mtk_pwm_data {
-	u32 enable_mask;
-	unsigned int con0;
-	u32 con0_sel;
-	unsigned int con1;
-
-	bool has_commit;
-	unsigned int commit;
-	unsigned int commit_mask;
-
-	unsigned int bls_debug;
-	u32 bls_debug_mask;
-};
-
 struct mtk_disp_pwm {
 	struct pwm_chip chip;
-	const struct mtk_pwm_data *data;
 	struct clk *clk_main;
 	struct clk *clk_mm;
 	void __iomem *base;
@@ -74,19 +72,6 @@ static int mtk_disp_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	u64 div, rate;
 	int err;
 
-	err = clk_prepare_enable(mdp->clk_main);
-	if (err < 0) {
-		dev_err(chip->dev, "Can't enable mdp->clk_main: %pe\n", ERR_PTR(err));
-		return err;
-	}
-
-	err = clk_prepare_enable(mdp->clk_mm);
-	if (err < 0) {
-		dev_err(chip->dev, "Can't enable mdp->clk_mm: %pe\n", ERR_PTR(err));
-		clk_disable_unprepare(mdp->clk_main);
-		return err;
-	}
-
 	/*
 	 * Find period, high_width and clk_div to suit duty_ns and period_ns.
 	 * Calculate proper div value to keep period value in the bound.
@@ -100,11 +85,8 @@ static int mtk_disp_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	rate = clk_get_rate(mdp->clk_main);
 	clk_div = div_u64(rate * period_ns, NSEC_PER_SEC) >>
 			  PWM_PERIOD_BIT_WIDTH;
-	if (clk_div > PWM_CLKDIV_MAX) {
-		clk_disable_unprepare(mdp->clk_mm);
-		clk_disable_unprepare(mdp->clk_main);
+	if (clk_div > PWM_CLKDIV_MAX)
 		return -EINVAL;
-	}
 
 	div = NSEC_PER_SEC * (clk_div + 1);
 	period = div64_u64(rate * period_ns, div);
@@ -114,37 +96,25 @@ static int mtk_disp_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	high_width = div64_u64(rate * duty_ns, div);
 	value = period | (high_width << PWM_HIGH_WIDTH_SHIFT);
 
-	if (mdp->data->bls_debug && !mdp->data->has_commit) {
-		/*
-		 * For MT2701, disable double buffer before writing register
-		 * and select manual mode and use PWM_PERIOD/PWM_HIGH_WIDTH.
-		 */
-		mtk_disp_pwm_update_bits(mdp, mdp->data->bls_debug,
-					 mdp->data->bls_debug_mask,
-					 mdp->data->bls_debug_mask);
-		mtk_disp_pwm_update_bits(mdp, mdp->data->con0,
-					 mdp->data->con0_sel,
-					 mdp->data->con0_sel);
+	err = clk_enable(mdp->clk_main);
+	if (err < 0)
+		return err;
+
+	err = clk_enable(mdp->clk_mm);
+	if (err < 0) {
+		clk_disable(mdp->clk_main);
+		return err;
 	}
 
-	mtk_disp_pwm_update_bits(mdp, mdp->data->con0,
-				 PWM_CLKDIV_MASK,
+	mtk_disp_pwm_update_bits(mdp, DISP_PWM_CON_0, PWM_CLKDIV_MASK,
 				 clk_div << PWM_CLKDIV_SHIFT);
-	mtk_disp_pwm_update_bits(mdp, mdp->data->con1,
-				 PWM_PERIOD_MASK | PWM_HIGH_WIDTH_MASK,
-				 value);
+	mtk_disp_pwm_update_bits(mdp, DISP_PWM_CON_1,
+				 PWM_PERIOD_MASK | PWM_HIGH_WIDTH_MASK, value);
+	mtk_disp_pwm_update_bits(mdp, DISP_PWM_COMMIT, PWM_COMMIT_MASK, 1);
+	mtk_disp_pwm_update_bits(mdp, DISP_PWM_COMMIT, PWM_COMMIT_MASK, 0);
 
-	if (mdp->data->has_commit) {
-		mtk_disp_pwm_update_bits(mdp, mdp->data->commit,
-					 mdp->data->commit_mask,
-					 mdp->data->commit_mask);
-		mtk_disp_pwm_update_bits(mdp, mdp->data->commit,
-					 mdp->data->commit_mask,
-					 0x0);
-	}
-
-	clk_disable_unprepare(mdp->clk_mm);
-	clk_disable_unprepare(mdp->clk_main);
+	clk_disable(mdp->clk_mm);
+	clk_disable(mdp->clk_main);
 
 	return 0;
 }
@@ -154,21 +124,17 @@ static int mtk_disp_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 	struct mtk_disp_pwm *mdp = to_mtk_disp_pwm(chip);
 	int err;
 
-	err = clk_prepare_enable(mdp->clk_main);
+	err = clk_enable(mdp->clk_main);
+	if (err < 0)
+		return err;
+
+	err = clk_enable(mdp->clk_mm);
 	if (err < 0) {
-		dev_err(chip->dev, "Can't enable mdp->clk_main: %pe\n", ERR_PTR(err));
+		clk_disable(mdp->clk_main);
 		return err;
 	}
 
-	err = clk_prepare_enable(mdp->clk_mm);
-	if (err < 0) {
-		dev_err(chip->dev, "Can't enable mdp->clk_mm: %pe\n", ERR_PTR(err));
-		clk_disable_unprepare(mdp->clk_main);
-		return err;
-	}
-
-	mtk_disp_pwm_update_bits(mdp, DISP_PWM_EN, mdp->data->enable_mask,
-				 mdp->data->enable_mask);
+	mtk_disp_pwm_update_bits(mdp, DISP_PWM_EN, PWM_ENABLE_MASK, 1);
 
 	return 0;
 }
@@ -177,11 +143,10 @@ static void mtk_disp_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 {
 	struct mtk_disp_pwm *mdp = to_mtk_disp_pwm(chip);
 
-	mtk_disp_pwm_update_bits(mdp, DISP_PWM_EN, mdp->data->enable_mask,
-				 0x0);
+	mtk_disp_pwm_update_bits(mdp, DISP_PWM_EN, PWM_ENABLE_MASK, 0);
 
-	clk_disable_unprepare(mdp->clk_mm);
-	clk_disable_unprepare(mdp->clk_main);
+	clk_disable(mdp->clk_mm);
+	clk_disable(mdp->clk_main);
 }
 
 static const struct pwm_ops mtk_disp_pwm_ops = {
@@ -201,8 +166,6 @@ static int mtk_disp_pwm_probe(struct platform_device *pdev)
 	if (!mdp)
 		return -ENOMEM;
 
-	mdp->data = of_device_get_match_data(&pdev->dev);
-
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	mdp->base = devm_ioremap_resource(&pdev->dev, r);
 	if (IS_ERR(mdp->base))
@@ -216,6 +179,14 @@ static int mtk_disp_pwm_probe(struct platform_device *pdev)
 	if (IS_ERR(mdp->clk_mm))
 		return PTR_ERR(mdp->clk_mm);
 
+	ret = clk_prepare(mdp->clk_main);
+	if (ret < 0)
+		return ret;
+
+	ret = clk_prepare(mdp->clk_mm);
+	if (ret < 0)
+		goto disable_clk_main;
+
 	mdp->chip.dev = &pdev->dev;
 	mdp->chip.ops = &mtk_disp_pwm_ops;
 	mdp->chip.base = -1;
@@ -223,59 +194,36 @@ static int mtk_disp_pwm_probe(struct platform_device *pdev)
 
 	ret = pwmchip_add(&mdp->chip);
 	if (ret < 0) {
-		dev_err(&pdev->dev, "pwmchip_add() failed: %pe\n", ERR_PTR(ret));
-		return ret;
+		dev_err(&pdev->dev, "pwmchip_add() failed: %d\n", ret);
+		goto disable_clk_mm;
 	}
 
 	platform_set_drvdata(pdev, mdp);
 
 	return 0;
+
+disable_clk_mm:
+	clk_unprepare(mdp->clk_mm);
+disable_clk_main:
+	clk_unprepare(mdp->clk_main);
+	return ret;
 }
 
 static int mtk_disp_pwm_remove(struct platform_device *pdev)
 {
 	struct mtk_disp_pwm *mdp = platform_get_drvdata(pdev);
+	int ret;
 
-	pwmchip_remove(&mdp->chip);
+	ret = pwmchip_remove(&mdp->chip);
+	clk_unprepare(mdp->clk_mm);
+	clk_unprepare(mdp->clk_main);
 
-	return 0;
+	return ret;
 }
 
-static const struct mtk_pwm_data mt2701_pwm_data = {
-	.enable_mask = BIT(16),
-	.con0 = 0xa8,
-	.con0_sel = 0x2,
-	.con1 = 0xac,
-	.has_commit = false,
-	.bls_debug = 0xb0,
-	.bls_debug_mask = 0x3,
-};
-
-static const struct mtk_pwm_data mt8173_pwm_data = {
-	.enable_mask = BIT(0),
-	.con0 = 0x10,
-	.con0_sel = 0x0,
-	.con1 = 0x14,
-	.has_commit = true,
-	.commit = 0x8,
-	.commit_mask = 0x1,
-};
-
-static const struct mtk_pwm_data mt8183_pwm_data = {
-	.enable_mask = BIT(0),
-	.con0 = 0x18,
-	.con0_sel = 0x0,
-	.con1 = 0x1c,
-	.has_commit = false,
-	.bls_debug = 0x80,
-	.bls_debug_mask = 0x3,
-};
-
 static const struct of_device_id mtk_disp_pwm_of_match[] = {
-	{ .compatible = "mediatek,mt2701-disp-pwm", .data = &mt2701_pwm_data},
-	{ .compatible = "mediatek,mt6595-disp-pwm", .data = &mt8173_pwm_data},
-	{ .compatible = "mediatek,mt8173-disp-pwm", .data = &mt8173_pwm_data},
-	{ .compatible = "mediatek,mt8183-disp-pwm", .data = &mt8183_pwm_data},
+	{ .compatible = "mediatek,mt8173-disp-pwm" },
+	{ .compatible = "mediatek,mt6595-disp-pwm" },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, mtk_disp_pwm_of_match);

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2013  Davidlohr Bueso <davidlohr@hp.com>
  *
@@ -9,25 +8,18 @@
  * requeues without waking up any tasks -- thus mimicking a regular futex_wait.
  */
 
-/* For the CLR_() macros */
-#include <string.h>
-#include <pthread.h>
-
-#include <signal.h>
+#include "../perf.h"
+#include "../util/util.h"
 #include "../util/stat.h"
-#include <subcmd/parse-options.h>
-#include <linux/compiler.h>
-#include <linux/kernel.h>
-#include <linux/time64.h>
-#include <errno.h>
-#include <internal/cpumap.h>
-#include <perf/cpumap.h>
+#include "../util/parse-options.h"
+#include "../util/header.h"
 #include "bench.h"
 #include "futex.h"
 
 #include <err.h>
 #include <stdlib.h>
 #include <sys/time.h>
+#include <pthread.h>
 
 static u_int32_t futex1 = 0, futex2 = 0;
 
@@ -42,7 +34,7 @@ static bool done = false, silent = false, fshared = false;
 static pthread_mutex_t thread_lock;
 static pthread_cond_t thread_parent, thread_worker;
 static struct stats requeuetime_stats, requeued_stats;
-static unsigned int threads_starting, nthreads = 0;
+static unsigned int ncpus, threads_starting, nthreads = 0;
 static int futex_flag = 0;
 
 static const struct option options[] = {
@@ -67,7 +59,7 @@ static void print_summary(void)
 	printf("Requeued %d of %d threads in %.4f ms (+-%.2f%%)\n",
 	       requeued_avg,
 	       nthreads,
-	       requeuetime_avg / USEC_PER_MSEC,
+	       requeuetime_avg/1e3,
 	       rel_stddev_stats(requeuetime_stddev, requeuetime_avg));
 }
 
@@ -85,19 +77,19 @@ static void *workerfn(void *arg __maybe_unused)
 }
 
 static void block_threads(pthread_t *w,
-			  pthread_attr_t thread_attr, struct perf_cpu_map *cpu)
+			  pthread_attr_t thread_attr)
 {
-	cpu_set_t cpuset;
+	cpu_set_t cpu;
 	unsigned int i;
 
 	threads_starting = nthreads;
 
 	/* create and block all threads */
 	for (i = 0; i < nthreads; i++) {
-		CPU_ZERO(&cpuset);
-		CPU_SET(cpu->map[i % cpu->nr], &cpuset);
+		CPU_ZERO(&cpu);
+		CPU_SET(i % ncpus, &cpu);
 
-		if (pthread_attr_setaffinity_np(&thread_attr, sizeof(cpu_set_t), &cpuset))
+		if (pthread_attr_setaffinity_np(&thread_attr, sizeof(cpu_set_t), &cpu))
 			err(EXIT_FAILURE, "pthread_attr_setaffinity_np");
 
 		if (pthread_create(&w[i], &thread_attr, workerfn, NULL))
@@ -112,28 +104,26 @@ static void toggle_done(int sig __maybe_unused,
 	done = true;
 }
 
-int bench_futex_requeue(int argc, const char **argv)
+int bench_futex_requeue(int argc, const char **argv,
+			const char *prefix __maybe_unused)
 {
 	int ret = 0;
 	unsigned int i, j;
 	struct sigaction act;
 	pthread_attr_t thread_attr;
-	struct perf_cpu_map *cpu;
 
 	argc = parse_options(argc, argv, options, bench_futex_requeue_usage, 0);
 	if (argc)
 		goto err;
 
-	cpu = perf_cpu_map__new(NULL);
-	if (!cpu)
-		err(EXIT_FAILURE, "cpu_map__new");
+	ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 
 	sigfillset(&act.sa_mask);
 	act.sa_sigaction = toggle_done;
 	sigaction(SIGINT, &act, NULL);
 
 	if (!nthreads)
-		nthreads = cpu->nr;
+		nthreads = ncpus;
 
 	worker = calloc(nthreads, sizeof(*worker));
 	if (!worker)
@@ -161,7 +151,7 @@ int bench_futex_requeue(int argc, const char **argv)
 		struct timeval start, end, runtime;
 
 		/* create, launch & block all threads */
-		block_threads(worker, thread_attr, cpu);
+		block_threads(worker, thread_attr);
 
 		/* make sure all threads are already blocked */
 		pthread_mutex_lock(&thread_lock);
@@ -191,7 +181,7 @@ int bench_futex_requeue(int argc, const char **argv)
 
 		if (!silent) {
 			printf("[Run %d]: Requeued %d of %d threads in %.4f ms\n",
-			       j + 1, nrequeued, nthreads, runtime.tv_usec / (double)USEC_PER_MSEC);
+			       j + 1, nrequeued, nthreads, runtime.tv_usec/1e3);
 		}
 
 		/* everybody should be blocked on futex2, wake'em up */
@@ -215,7 +205,6 @@ int bench_futex_requeue(int argc, const char **argv)
 	print_summary();
 
 	free(worker);
-	perf_cpu_map__put(cpu);
 	return ret;
 err:
 	usage_with_options(bench_futex_requeue_usage, options);

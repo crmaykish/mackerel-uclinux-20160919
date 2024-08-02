@@ -1,8 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AD5421 Digital to analog converters  driver
  *
  * Copyright 2011 Analog Devices Inc.
+ *
+ * Licensed under the GPL-2.
  */
 
 #include <linux/device.h>
@@ -241,7 +242,7 @@ static irqreturn_t ad5421_fault_handler(int irq, void *data)
 					0,
 					IIO_EV_TYPE_THRESH,
 					IIO_EV_DIR_RISING),
-			iio_get_time_ns(indio_dev));
+			iio_get_time_ns());
 		}
 
 		if (events & AD5421_FAULT_UNDER_CURRENT) {
@@ -250,7 +251,7 @@ static irqreturn_t ad5421_fault_handler(int irq, void *data)
 					0,
 					IIO_EV_TYPE_THRESH,
 					IIO_EV_DIR_FALLING),
-				iio_get_time_ns(indio_dev));
+				iio_get_time_ns());
 		}
 
 		if (events & AD5421_FAULT_TEMP_OVER_140) {
@@ -259,7 +260,7 @@ static irqreturn_t ad5421_fault_handler(int irq, void *data)
 					0,
 					IIO_EV_TYPE_MAG,
 					IIO_EV_DIR_RISING),
-				iio_get_time_ns(indio_dev));
+				iio_get_time_ns());
 		}
 
 		old_fault = fault;
@@ -464,6 +465,7 @@ static const struct iio_info ad5421_info = {
 	.read_event_config =	ad5421_read_event_config,
 	.write_event_config =	ad5421_write_event_config,
 	.read_event_value =	ad5421_read_event_value,
+	.driver_module =	THIS_MODULE,
 };
 
 static int ad5421_probe(struct spi_device *spi)

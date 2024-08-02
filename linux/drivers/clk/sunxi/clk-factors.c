@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2013 Emilio López <emilio@elopez.com.ar>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * Adjustable factor-based clock implementation
  */
@@ -9,6 +12,7 @@
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/io.h>
+#include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -44,7 +48,7 @@ static unsigned long clk_factors_recalc_rate(struct clk_hw *hw,
 	u32 reg;
 	unsigned long rate;
 	struct clk_factors *factors = to_clk_factors(hw);
-	const struct clk_factors_config *config = factors->config;
+	struct clk_factors_config *config = factors->config;
 
 	/* Fetch the register value */
 	reg = readl(factors->reg);
@@ -59,28 +63,18 @@ static unsigned long clk_factors_recalc_rate(struct clk_hw *hw,
 	if (config->pwidth != SUNXI_FACTORS_NOT_APPLICABLE)
 		p = FACTOR_GET(config->pshift, config->pwidth, reg);
 
-	if (factors->recalc) {
-		struct factors_request factors_req = {
-			.parent_rate = parent_rate,
-			.n = n,
-			.k = k,
-			.m = m,
-			.p = p,
-		};
-
-		/* get mux details from mux clk structure */
-		if (factors->mux)
-			factors_req.parent_index =
-				(reg >> factors->mux->shift) &
-				factors->mux->mask;
-
-		factors->recalc(&factors_req);
-
-		return factors_req.rate;
-	}
-
 	/* Calculate the rate */
 	rate = (parent_rate * (n + config->n_start) * (k + 1) >> p) / (m + 1);
+
+	return rate;
+}
+
+static long clk_factors_round_rate(struct clk_hw *hw, unsigned long rate,
+				   unsigned long *parent_rate)
+{
+	struct clk_factors *factors = to_clk_factors(hw);
+	factors->get_factors((u32 *)&rate, (u32)*parent_rate,
+			     NULL, NULL, NULL, NULL);
 
 	return rate;
 }
@@ -88,7 +82,6 @@ static unsigned long clk_factors_recalc_rate(struct clk_hw *hw,
 static int clk_factors_determine_rate(struct clk_hw *hw,
 				      struct clk_rate_request *req)
 {
-	struct clk_factors *factors = to_clk_factors(hw);
 	struct clk_hw *parent, *best_parent = NULL;
 	int i, num_parents;
 	unsigned long parent_rate, best = 0, child_rate, best_child_rate = 0;
@@ -96,10 +89,6 @@ static int clk_factors_determine_rate(struct clk_hw *hw,
 	/* find the parent that can help provide the fastest rate <= rate */
 	num_parents = clk_hw_get_num_parents(hw);
 	for (i = 0; i < num_parents; i++) {
-		struct factors_request factors_req = {
-			.rate = req->rate,
-			.parent_index = i,
-		};
 		parent = clk_hw_get_parent_by_index(hw, i);
 		if (!parent)
 			continue;
@@ -108,9 +97,8 @@ static int clk_factors_determine_rate(struct clk_hw *hw,
 		else
 			parent_rate = clk_hw_get_rate(parent);
 
-		factors_req.parent_rate = parent_rate;
-		factors->get_factors(&factors_req);
-		child_rate = factors_req.rate;
+		child_rate = clk_factors_round_rate(hw, req->rate,
+						    &parent_rate);
 
 		if (child_rate <= req->rate && child_rate > best_child_rate) {
 			best_parent = parent;
@@ -132,16 +120,13 @@ static int clk_factors_determine_rate(struct clk_hw *hw,
 static int clk_factors_set_rate(struct clk_hw *hw, unsigned long rate,
 				unsigned long parent_rate)
 {
-	struct factors_request req = {
-		.rate = rate,
-		.parent_rate = parent_rate,
-	};
+	u8 n = 0, k = 0, m = 0, p = 0;
 	u32 reg;
 	struct clk_factors *factors = to_clk_factors(hw);
-	const struct clk_factors_config *config = factors->config;
+	struct clk_factors_config *config = factors->config;
 	unsigned long flags = 0;
 
-	factors->get_factors(&req);
+	factors->get_factors((u32 *)&rate, (u32)parent_rate, &n, &k, &m, &p);
 
 	if (factors->lock)
 		spin_lock_irqsave(factors->lock, flags);
@@ -150,10 +135,10 @@ static int clk_factors_set_rate(struct clk_hw *hw, unsigned long rate,
 	reg = readl(factors->reg);
 
 	/* Set up the new factors - macros do not do anything if width is 0 */
-	reg = FACTOR_SET(config->nshift, config->nwidth, reg, req.n);
-	reg = FACTOR_SET(config->kshift, config->kwidth, reg, req.k);
-	reg = FACTOR_SET(config->mshift, config->mwidth, reg, req.m);
-	reg = FACTOR_SET(config->pshift, config->pwidth, reg, req.p);
+	reg = FACTOR_SET(config->nshift, config->nwidth, reg, n);
+	reg = FACTOR_SET(config->kshift, config->kwidth, reg, k);
+	reg = FACTOR_SET(config->mshift, config->mwidth, reg, m);
+	reg = FACTOR_SET(config->pshift, config->pwidth, reg, p);
 
 	/* Apply them now */
 	writel(reg, factors->reg);
@@ -170,13 +155,14 @@ static int clk_factors_set_rate(struct clk_hw *hw, unsigned long rate,
 static const struct clk_ops clk_factors_ops = {
 	.determine_rate = clk_factors_determine_rate,
 	.recalc_rate = clk_factors_recalc_rate,
+	.round_rate = clk_factors_round_rate,
 	.set_rate = clk_factors_set_rate,
 };
 
-static struct clk *__sunxi_factors_register(struct device_node *node,
-					    const struct factors_data *data,
-					    spinlock_t *lock, void __iomem *reg,
-					    unsigned long flags)
+struct clk *sunxi_factors_register(struct device_node *node,
+				   const struct factors_data *data,
+				   spinlock_t *lock,
+				   void __iomem *reg)
 {
 	struct clk *clk;
 	struct clk_factors *factors;
@@ -186,7 +172,7 @@ static struct clk *__sunxi_factors_register(struct device_node *node,
 	struct clk_hw *mux_hw = NULL;
 	const char *clk_name = node->name;
 	const char *parents[FACTORS_MAX_PARENTS];
-	int ret, i = 0;
+	int i = 0;
 
 	/* if we have a mux, we will have >1 parents */
 	i = of_clk_parent_fill(node, parents, FACTORS_MAX_PARENTS);
@@ -202,22 +188,21 @@ static struct clk *__sunxi_factors_register(struct device_node *node,
 
 	factors = kzalloc(sizeof(struct clk_factors), GFP_KERNEL);
 	if (!factors)
-		goto err_factors;
+		return NULL;
 
 	/* set up factors properties */
 	factors->reg = reg;
 	factors->config = data->table;
 	factors->get_factors = data->getter;
-	factors->recalc = data->recalc;
 	factors->lock = lock;
 
 	/* Add a gate if this factor clock can be gated */
 	if (data->enable) {
 		gate = kzalloc(sizeof(struct clk_gate), GFP_KERNEL);
-		if (!gate)
-			goto err_gate;
-
-		factors->gate = gate;
+		if (!gate) {
+			kfree(factors);
+			return NULL;
+		}
 
 		/* set up gate properties */
 		gate->reg = reg;
@@ -229,10 +214,11 @@ static struct clk *__sunxi_factors_register(struct device_node *node,
 	/* Add a mux if this factor clock can be muxed */
 	if (data->mux) {
 		mux = kzalloc(sizeof(struct clk_mux), GFP_KERNEL);
-		if (!mux)
-			goto err_mux;
-
-		factors->mux = mux;
+		if (!mux) {
+			kfree(factors);
+			kfree(gate);
+			return NULL;
+		}
 
 		/* set up gate properties */
 		mux->reg = reg;
@@ -246,59 +232,12 @@ static struct clk *__sunxi_factors_register(struct device_node *node,
 			parents, i,
 			mux_hw, &clk_mux_ops,
 			&factors->hw, &clk_factors_ops,
-			gate_hw, &clk_gate_ops, CLK_IS_CRITICAL);
-	if (IS_ERR(clk))
-		goto err_register;
+			gate_hw, &clk_gate_ops, 0);
 
-	ret = of_clk_add_provider(node, of_clk_src_simple_get, clk);
-	if (ret)
-		goto err_provider;
+	if (!IS_ERR(clk)) {
+		of_clk_add_provider(node, of_clk_src_simple_get, clk);
+		clk_register_clkdev(clk, clk_name, NULL);
+	}
 
 	return clk;
-
-err_provider:
-	/* TODO: The composite clock stuff will leak a bit here. */
-	clk_unregister(clk);
-err_register:
-	kfree(mux);
-err_mux:
-	kfree(gate);
-err_gate:
-	kfree(factors);
-err_factors:
-	return NULL;
-}
-
-struct clk *sunxi_factors_register(struct device_node *node,
-				   const struct factors_data *data,
-				   spinlock_t *lock,
-				   void __iomem *reg)
-{
-	return __sunxi_factors_register(node, data, lock, reg, 0);
-}
-
-struct clk *sunxi_factors_register_critical(struct device_node *node,
-					    const struct factors_data *data,
-					    spinlock_t *lock,
-					    void __iomem *reg)
-{
-	return __sunxi_factors_register(node, data, lock, reg, CLK_IS_CRITICAL);
-}
-
-void sunxi_factors_unregister(struct device_node *node, struct clk *clk)
-{
-	struct clk_hw *hw = __clk_get_hw(clk);
-	struct clk_factors *factors;
-
-	if (!hw)
-		return;
-
-	factors = to_clk_factors(hw);
-
-	of_clk_del_provider(node);
-	/* TODO: The composite clock stuff will leak a bit here. */
-	clk_unregister(clk);
-	kfree(factors->mux);
-	kfree(factors->gate);
-	kfree(factors);
 }

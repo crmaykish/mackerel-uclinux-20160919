@@ -1,12 +1,26 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * OMAP mailbox driver
  *
  * Copyright (C) 2006-2009 Nokia Corporation. All rights reserved.
- * Copyright (C) 2013-2019 Texas Instruments Incorporated - http://www.ti.com
+ * Copyright (C) 2013-2014 Texas Instruments Inc.
  *
  * Contact: Hiroshi DOYU <Hiroshi.DOYU@nokia.com>
  *          Suman Anna <s-anna@ti.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+ * 02110-1301 USA
+ *
  */
 
 #include <linux/interrupt.h>
@@ -19,6 +33,7 @@
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/platform_data/mailbox-omap.h>
 #include <linux/omap-mailbox.h>
 #include <linux/mailbox_controller.h>
 #include <linux/mailbox_client.h>
@@ -47,9 +62,12 @@
 #define MAILBOX_IRQ_NEWMSG(m)		(1 << (2 * (m)))
 #define MAILBOX_IRQ_NOTFULL(m)		(1 << (2 * (m) + 1))
 
-/* Interrupt register configuration types */
-#define MBOX_INTR_CFG_TYPE1		0
-#define MBOX_INTR_CFG_TYPE2		1
+#define MBOX_REG_SIZE			0x120
+
+#define OMAP4_MBOX_REG_SIZE		0x130
+
+#define MBOX_NR_REGS			(MBOX_REG_SIZE / sizeof(u32))
+#define OMAP4_MBOX_NR_REGS		(OMAP4_MBOX_REG_SIZE / sizeof(u32))
 
 struct omap_mbox_fifo {
 	unsigned long msg;
@@ -69,18 +87,12 @@ struct omap_mbox_queue {
 	bool full;
 };
 
-struct omap_mbox_match_data {
-	u32 intr_type;
-};
-
 struct omap_mbox_device {
 	struct device *dev;
 	struct mutex cfg_lock;
 	void __iomem *mbox_base;
-	u32 *irq_ctx;
 	u32 num_users;
 	u32 num_fifos;
-	u32 intr_type;
 	struct omap_mbox **mboxes;
 	struct mbox_controller controller;
 	struct list_head elem;
@@ -107,6 +119,7 @@ struct omap_mbox {
 	struct omap_mbox_device *parent;
 	struct omap_mbox_fifo	tx_fifo;
 	struct omap_mbox_fifo	rx_fifo;
+	u32			ctx[OMAP4_MBOX_NR_REGS];
 	u32			intr_type;
 	struct mbox_chan	*chan;
 	bool			send_no_irq;
@@ -141,31 +154,27 @@ void mbox_write_reg(struct omap_mbox_device *mdev, u32 val, size_t ofs)
 }
 
 /* Mailbox FIFO handle functions */
-static u32 mbox_fifo_read(struct omap_mbox *mbox)
+static mbox_msg_t mbox_fifo_read(struct omap_mbox *mbox)
 {
 	struct omap_mbox_fifo *fifo = &mbox->rx_fifo;
-
-	return mbox_read_reg(mbox->parent, fifo->msg);
+	return (mbox_msg_t) mbox_read_reg(mbox->parent, fifo->msg);
 }
 
-static void mbox_fifo_write(struct omap_mbox *mbox, u32 msg)
+static void mbox_fifo_write(struct omap_mbox *mbox, mbox_msg_t msg)
 {
 	struct omap_mbox_fifo *fifo = &mbox->tx_fifo;
-
 	mbox_write_reg(mbox->parent, msg, fifo->msg);
 }
 
 static int mbox_fifo_empty(struct omap_mbox *mbox)
 {
 	struct omap_mbox_fifo *fifo = &mbox->rx_fifo;
-
 	return (mbox_read_reg(mbox->parent, fifo->msg_stat) == 0);
 }
 
 static int mbox_fifo_full(struct omap_mbox *mbox)
 {
 	struct omap_mbox_fifo *fifo = &mbox->tx_fifo;
-
 	return mbox_read_reg(mbox->parent, fifo->fifo_stat);
 }
 
@@ -196,6 +205,49 @@ static int is_mbox_irq(struct omap_mbox *mbox, omap_mbox_irq_t irq)
 
 	return (int)(enable & status & bit);
 }
+
+void omap_mbox_save_ctx(struct mbox_chan *chan)
+{
+	int i;
+	int nr_regs;
+	struct omap_mbox *mbox = mbox_chan_to_omap_mbox(chan);
+
+	if (WARN_ON(!mbox))
+		return;
+
+	if (mbox->intr_type)
+		nr_regs = OMAP4_MBOX_NR_REGS;
+	else
+		nr_regs = MBOX_NR_REGS;
+	for (i = 0; i < nr_regs; i++) {
+		mbox->ctx[i] = mbox_read_reg(mbox->parent, i * sizeof(u32));
+
+		dev_dbg(mbox->dev, "%s: [%02x] %08x\n", __func__,
+			i, mbox->ctx[i]);
+	}
+}
+EXPORT_SYMBOL(omap_mbox_save_ctx);
+
+void omap_mbox_restore_ctx(struct mbox_chan *chan)
+{
+	int i;
+	int nr_regs;
+	struct omap_mbox *mbox = mbox_chan_to_omap_mbox(chan);
+
+	if (WARN_ON(!mbox))
+		return;
+
+	if (mbox->intr_type)
+		nr_regs = OMAP4_MBOX_NR_REGS;
+	else
+		nr_regs = MBOX_NR_REGS;
+	for (i = 0; i < nr_regs; i++) {
+		mbox_write_reg(mbox->parent, mbox->ctx[i], i * sizeof(u32));
+		dev_dbg(mbox->dev, "%s: [%02x] %08x\n", __func__,
+			i, mbox->ctx[i]);
+	}
+}
+EXPORT_SYMBOL(omap_mbox_restore_ctx);
 
 static void _omap_mbox_enable_irq(struct omap_mbox *mbox, omap_mbox_irq_t irq)
 {
@@ -256,16 +308,14 @@ static void mbox_rx_work(struct work_struct *work)
 {
 	struct omap_mbox_queue *mq =
 			container_of(work, struct omap_mbox_queue, work);
-	mbox_msg_t data;
-	u32 msg;
+	mbox_msg_t msg;
 	int len;
 
 	while (kfifo_len(&mq->fifo) >= sizeof(msg)) {
 		len = kfifo_out(&mq->fifo, (unsigned char *)&msg, sizeof(msg));
 		WARN_ON(len != sizeof(msg));
-		data = msg;
 
-		mbox_chan_received_data(mq->mbox->chan, (void *)data);
+		mbox_chan_received_data(mq->mbox->chan, (void *)msg);
 		spin_lock_irq(&mq->lock);
 		if (mq->full) {
 			mq->full = false;
@@ -288,7 +338,7 @@ static void __mbox_tx_interrupt(struct omap_mbox *mbox)
 static void __mbox_rx_interrupt(struct omap_mbox *mbox)
 {
 	struct omap_mbox_queue *mq = mbox->rxq;
-	u32 msg;
+	mbox_msg_t msg;
 	int len;
 
 	while (!mbox_fifo_empty(mbox)) {
@@ -331,7 +381,7 @@ static struct omap_mbox_queue *mbox_queue_alloc(struct omap_mbox *mbox,
 	if (!work)
 		return NULL;
 
-	mq = kzalloc(sizeof(*mq), GFP_KERNEL);
+	mq = kzalloc(sizeof(struct omap_mbox_queue), GFP_KERNEL);
 	if (!mq)
 		return NULL;
 
@@ -475,7 +525,6 @@ static int omap_mbox_register(struct omap_mbox_device *mdev)
 	mboxes = mdev->mboxes;
 	for (i = 0; mboxes[i]; i++) {
 		struct omap_mbox *mbox = mboxes[i];
-
 		mbox->dev = device_create(&omap_mbox_class, mdev->dev,
 					0, mbox, "%s", mbox->name);
 		if (IS_ERR(mbox->dev)) {
@@ -488,7 +537,7 @@ static int omap_mbox_register(struct omap_mbox_device *mdev)
 	list_add(&mdev->elem, &omap_mbox_devices);
 	mutex_unlock(&omap_mbox_devices_lock);
 
-	ret = devm_mbox_controller_register(mdev->dev, &mdev->controller);
+	ret = mbox_controller_register(&mdev->controller);
 
 err_out:
 	if (ret) {
@@ -509,6 +558,8 @@ static int omap_mbox_unregister(struct omap_mbox_device *mdev)
 	mutex_lock(&omap_mbox_devices_lock);
 	list_del(&mdev->elem);
 	mutex_unlock(&omap_mbox_devices_lock);
+
+	mbox_controller_unregister(&mdev->controller);
 
 	mboxes = mdev->mboxes;
 	for (i = 0; mboxes[i]; i++)
@@ -542,13 +593,13 @@ static void omap_mbox_chan_shutdown(struct mbox_chan *chan)
 	mutex_unlock(&mdev->cfg_lock);
 }
 
-static int omap_mbox_chan_send_noirq(struct omap_mbox *mbox, u32 msg)
+static int omap_mbox_chan_send_noirq(struct omap_mbox *mbox, void *data)
 {
 	int ret = -EBUSY;
 
 	if (!mbox_fifo_full(mbox)) {
 		_omap_mbox_enable_irq(mbox, IRQ_RX);
-		mbox_fifo_write(mbox, msg);
+		mbox_fifo_write(mbox, (mbox_msg_t)data);
 		ret = 0;
 		_omap_mbox_disable_irq(mbox, IRQ_RX);
 
@@ -560,12 +611,12 @@ static int omap_mbox_chan_send_noirq(struct omap_mbox *mbox, u32 msg)
 	return ret;
 }
 
-static int omap_mbox_chan_send(struct omap_mbox *mbox, u32 msg)
+static int omap_mbox_chan_send(struct omap_mbox *mbox, void *data)
 {
 	int ret = -EBUSY;
 
 	if (!mbox_fifo_full(mbox)) {
-		mbox_fifo_write(mbox, msg);
+		mbox_fifo_write(mbox, (mbox_msg_t)data);
 		ret = 0;
 	}
 
@@ -578,15 +629,14 @@ static int omap_mbox_chan_send_data(struct mbox_chan *chan, void *data)
 {
 	struct omap_mbox *mbox = mbox_chan_to_omap_mbox(chan);
 	int ret;
-	u32 msg = omap_mbox_message(data);
 
 	if (!mbox)
 		return -EINVAL;
 
 	if (mbox->send_no_irq)
-		ret = omap_mbox_chan_send_noirq(mbox, msg);
+		ret = omap_mbox_chan_send_noirq(mbox, data);
 	else
-		ret = omap_mbox_chan_send(mbox, msg);
+		ret = omap_mbox_chan_send(mbox, data);
 
 	return ret;
 }
@@ -597,71 +647,18 @@ static const struct mbox_chan_ops omap_mbox_chan_ops = {
 	.shutdown       = omap_mbox_chan_shutdown,
 };
 
-#ifdef CONFIG_PM_SLEEP
-static int omap_mbox_suspend(struct device *dev)
-{
-	struct omap_mbox_device *mdev = dev_get_drvdata(dev);
-	u32 usr, fifo, reg;
-
-	if (pm_runtime_status_suspended(dev))
-		return 0;
-
-	for (fifo = 0; fifo < mdev->num_fifos; fifo++) {
-		if (mbox_read_reg(mdev, MAILBOX_MSGSTATUS(fifo))) {
-			dev_err(mdev->dev, "fifo %d has unexpected unread messages\n",
-				fifo);
-			return -EBUSY;
-		}
-	}
-
-	for (usr = 0; usr < mdev->num_users; usr++) {
-		reg = MAILBOX_IRQENABLE(mdev->intr_type, usr);
-		mdev->irq_ctx[usr] = mbox_read_reg(mdev, reg);
-	}
-
-	return 0;
-}
-
-static int omap_mbox_resume(struct device *dev)
-{
-	struct omap_mbox_device *mdev = dev_get_drvdata(dev);
-	u32 usr, reg;
-
-	if (pm_runtime_status_suspended(dev))
-		return 0;
-
-	for (usr = 0; usr < mdev->num_users; usr++) {
-		reg = MAILBOX_IRQENABLE(mdev->intr_type, usr);
-		mbox_write_reg(mdev, mdev->irq_ctx[usr], reg);
-	}
-
-	return 0;
-}
-#endif
-
-static const struct dev_pm_ops omap_mbox_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(omap_mbox_suspend, omap_mbox_resume)
-};
-
-static const struct omap_mbox_match_data omap2_data = { MBOX_INTR_CFG_TYPE1 };
-static const struct omap_mbox_match_data omap4_data = { MBOX_INTR_CFG_TYPE2 };
-
 static const struct of_device_id omap_mailbox_of_match[] = {
 	{
 		.compatible	= "ti,omap2-mailbox",
-		.data		= &omap2_data,
+		.data		= (void *)MBOX_INTR_CFG_TYPE1,
 	},
 	{
 		.compatible	= "ti,omap3-mailbox",
-		.data		= &omap2_data,
+		.data		= (void *)MBOX_INTR_CFG_TYPE1,
 	},
 	{
 		.compatible	= "ti,omap4-mailbox",
-		.data		= &omap4_data,
-	},
-	{
-		.compatible	= "ti,am654-mailbox",
-		.data		= &omap4_data,
+		.data		= (void *)MBOX_INTR_CFG_TYPE2,
 	},
 	{
 		/* end */
@@ -699,41 +696,53 @@ static int omap_mbox_probe(struct platform_device *pdev)
 	int ret;
 	struct mbox_chan *chnls;
 	struct omap_mbox **list, *mbox, *mboxblk;
+	struct omap_mbox_pdata *pdata = pdev->dev.platform_data;
+	struct omap_mbox_dev_info *info = NULL;
 	struct omap_mbox_fifo_info *finfo, *finfoblk;
 	struct omap_mbox_device *mdev;
 	struct omap_mbox_fifo *fifo;
 	struct device_node *node = pdev->dev.of_node;
 	struct device_node *child;
-	const struct omap_mbox_match_data *match_data;
+	const struct of_device_id *match;
 	u32 intr_type, info_count;
 	u32 num_users, num_fifos;
 	u32 tmp[3];
 	u32 l;
 	int i;
 
-	if (!node) {
-		pr_err("%s: only DT-based devices are supported\n", __func__);
+	if (!node && (!pdata || !pdata->info_cnt || !pdata->info)) {
+		pr_err("%s: platform not supported\n", __func__);
 		return -ENODEV;
 	}
 
-	match_data = of_device_get_match_data(&pdev->dev);
-	if (!match_data)
-		return -ENODEV;
-	intr_type = match_data->intr_type;
+	if (node) {
+		match = of_match_device(omap_mailbox_of_match, &pdev->dev);
+		if (!match)
+			return -ENODEV;
+		intr_type = (u32)match->data;
 
-	if (of_property_read_u32(node, "ti,mbox-num-users", &num_users))
-		return -ENODEV;
+		if (of_property_read_u32(node, "ti,mbox-num-users",
+					 &num_users))
+			return -ENODEV;
 
-	if (of_property_read_u32(node, "ti,mbox-num-fifos", &num_fifos))
-		return -ENODEV;
+		if (of_property_read_u32(node, "ti,mbox-num-fifos",
+					 &num_fifos))
+			return -ENODEV;
 
-	info_count = of_get_available_child_count(node);
-	if (!info_count) {
-		dev_err(&pdev->dev, "no available mbox devices found\n");
-		return -ENODEV;
+		info_count = of_get_available_child_count(node);
+		if (!info_count) {
+			dev_err(&pdev->dev, "no available mbox devices found\n");
+			return -ENODEV;
+		}
+	} else { /* non-DT device creation */
+		info_count = pdata->info_cnt;
+		info = pdata->info;
+		intr_type = pdata->intr_type;
+		num_users = pdata->num_users;
+		num_fifos = pdata->num_fifos;
 	}
 
-	finfoblk = devm_kcalloc(&pdev->dev, info_count, sizeof(*finfoblk),
+	finfoblk = devm_kzalloc(&pdev->dev, info_count * sizeof(*finfoblk),
 				GFP_KERNEL);
 	if (!finfoblk)
 		return -ENOMEM;
@@ -741,28 +750,38 @@ static int omap_mbox_probe(struct platform_device *pdev)
 	finfo = finfoblk;
 	child = NULL;
 	for (i = 0; i < info_count; i++, finfo++) {
-		child = of_get_next_available_child(node, child);
-		ret = of_property_read_u32_array(child, "ti,mbox-tx", tmp,
-						 ARRAY_SIZE(tmp));
-		if (ret)
-			return ret;
-		finfo->tx_id = tmp[0];
-		finfo->tx_irq = tmp[1];
-		finfo->tx_usr = tmp[2];
+		if (node) {
+			child = of_get_next_available_child(node, child);
+			ret = of_property_read_u32_array(child, "ti,mbox-tx",
+							 tmp, ARRAY_SIZE(tmp));
+			if (ret)
+				return ret;
+			finfo->tx_id = tmp[0];
+			finfo->tx_irq = tmp[1];
+			finfo->tx_usr = tmp[2];
 
-		ret = of_property_read_u32_array(child, "ti,mbox-rx", tmp,
-						 ARRAY_SIZE(tmp));
-		if (ret)
-			return ret;
-		finfo->rx_id = tmp[0];
-		finfo->rx_irq = tmp[1];
-		finfo->rx_usr = tmp[2];
+			ret = of_property_read_u32_array(child, "ti,mbox-rx",
+							 tmp, ARRAY_SIZE(tmp));
+			if (ret)
+				return ret;
+			finfo->rx_id = tmp[0];
+			finfo->rx_irq = tmp[1];
+			finfo->rx_usr = tmp[2];
 
-		finfo->name = child->name;
+			finfo->name = child->name;
 
-		if (of_find_property(child, "ti,mbox-send-noirq", NULL))
-			finfo->send_no_irq = true;
-
+			if (of_find_property(child, "ti,mbox-send-noirq", NULL))
+				finfo->send_no_irq = true;
+		} else {
+			finfo->tx_id = info->tx_id;
+			finfo->rx_id = info->rx_id;
+			finfo->tx_usr = info->usr_id;
+			finfo->tx_irq = info->irq_id;
+			finfo->rx_usr = info->usr_id;
+			finfo->rx_irq = info->irq_id;
+			finfo->name = info->name;
+			info++;
+		}
 		if (finfo->tx_id >= num_fifos || finfo->rx_id >= num_fifos ||
 		    finfo->tx_usr >= num_users || finfo->rx_usr >= num_users)
 			return -EINVAL;
@@ -777,23 +796,18 @@ static int omap_mbox_probe(struct platform_device *pdev)
 	if (IS_ERR(mdev->mbox_base))
 		return PTR_ERR(mdev->mbox_base);
 
-	mdev->irq_ctx = devm_kcalloc(&pdev->dev, num_users, sizeof(u32),
-				     GFP_KERNEL);
-	if (!mdev->irq_ctx)
-		return -ENOMEM;
-
 	/* allocate one extra for marking end of list */
-	list = devm_kcalloc(&pdev->dev, info_count + 1, sizeof(*list),
+	list = devm_kzalloc(&pdev->dev, (info_count + 1) * sizeof(*list),
 			    GFP_KERNEL);
 	if (!list)
 		return -ENOMEM;
 
-	chnls = devm_kcalloc(&pdev->dev, info_count + 1, sizeof(*chnls),
+	chnls = devm_kzalloc(&pdev->dev, (info_count + 1) * sizeof(*chnls),
 			     GFP_KERNEL);
 	if (!chnls)
 		return -ENOMEM;
 
-	mboxblk = devm_kcalloc(&pdev->dev, info_count, sizeof(*mbox),
+	mboxblk = devm_kzalloc(&pdev->dev, info_count * sizeof(*mbox),
 			       GFP_KERNEL);
 	if (!mboxblk)
 		return -ENOMEM;
@@ -834,13 +848,9 @@ static int omap_mbox_probe(struct platform_device *pdev)
 	mdev->dev = &pdev->dev;
 	mdev->num_users = num_users;
 	mdev->num_fifos = num_fifos;
-	mdev->intr_type = intr_type;
 	mdev->mboxes = list;
 
-	/*
-	 * OMAP/K3 Mailbox IP does not have a Tx-Done IRQ, but rather a Tx-Ready
-	 * IRQ and is needed to run the Tx state machine
-	 */
+	/* OMAP does not have a Tx-Done IRQ, but rather a Tx-Ready IRQ */
 	mdev->controller.txdone_irq = true;
 	mdev->controller.dev = mdev->dev;
 	mdev->controller.ops = &omap_mbox_chan_ops;
@@ -895,7 +905,6 @@ static struct platform_driver omap_mbox_driver = {
 	.remove	= omap_mbox_remove,
 	.driver	= {
 		.name = "omap-mailbox",
-		.pm = &omap_mbox_pm_ops,
 		.of_match_table = of_match_ptr(omap_mailbox_of_match),
 	},
 };
@@ -909,14 +918,11 @@ static int __init omap_mbox_init(void)
 		return err;
 
 	/* kfifo size sanity check: alignment and minimal size */
-	mbox_kfifo_size = ALIGN(mbox_kfifo_size, sizeof(u32));
-	mbox_kfifo_size = max_t(unsigned int, mbox_kfifo_size, sizeof(u32));
+	mbox_kfifo_size = ALIGN(mbox_kfifo_size, sizeof(mbox_msg_t));
+	mbox_kfifo_size = max_t(unsigned int, mbox_kfifo_size,
+							sizeof(mbox_msg_t));
 
-	err = platform_driver_register(&omap_mbox_driver);
-	if (err)
-		class_unregister(&omap_mbox_class);
-
-	return err;
+	return platform_driver_register(&omap_mbox_driver);
 }
 subsys_initcall(omap_mbox_init);
 

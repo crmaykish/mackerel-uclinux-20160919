@@ -31,6 +31,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/slab.h>
 
 #include <asm/octeon/octeon.h>
 
@@ -56,6 +57,7 @@ EXPORT_SYMBOL_GPL(__cvmx_cmd_queue_state_ptr);
  */
 static cvmx_cmd_queue_result_t __cvmx_cmd_queue_init_state_ptr(void)
 {
+#if defined(CONFIG_CAVIUM_OCTEON_USE_BOOTMEM)
 	char *alloc_name = "cvmx_cmd_queues";
 #if defined(CONFIG_CAVIUM_RESERVE32) && CONFIG_CAVIUM_RESERVE32
 	extern uint64_t octeon_reserve32_memory;
@@ -94,6 +96,18 @@ static cvmx_cmd_queue_result_t __cvmx_cmd_queue_init_state_ptr(void)
 			return CVMX_CMD_QUEUE_NO_MEMORY;
 		}
 	}
+#else
+	if (likely(__cvmx_cmd_queue_state_ptr))
+		return CVMX_CMD_QUEUE_SUCCESS;
+
+	__cvmx_cmd_queue_state_ptr = kmalloc(sizeof(*__cvmx_cmd_queue_state_ptr), GFP_ATOMIC);
+	if (__cvmx_cmd_queue_state_ptr) {
+		memset(__cvmx_cmd_queue_state_ptr, 0, sizeof(*__cvmx_cmd_queue_state_ptr));
+	} else {
+		cvmx_dprintf("ERROR: cvmx_cmd_queue_initialize: Failed to allocate %ld bytes\n", sizeof(*__cvmx_cmd_queue_state_ptr));
+		return CVMX_CMD_QUEUE_NO_MEMORY;
+	}
+#endif /* CONFIG_CAVIUM_OCTEON_USE_BOOTMEM */
 	return CVMX_CMD_QUEUE_SUCCESS;
 }
 
@@ -266,7 +280,7 @@ int cvmx_cmd_queue_length(cvmx_cmd_queue_id_t queue_id)
 		} else {
 			union cvmx_pko_mem_debug8 debug8;
 			debug8.u64 = cvmx_read_csr(CVMX_PKO_MEM_DEBUG8);
-			return debug8.cn50xx.doorbell;
+			return debug8.cn58xx.doorbell;
 		}
 	case CVMX_CMD_QUEUE_ZIP:
 	case CVMX_CMD_QUEUE_DFA:

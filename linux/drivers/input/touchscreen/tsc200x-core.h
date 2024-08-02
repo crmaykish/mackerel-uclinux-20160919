@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _TSC200X_CORE_H
 #define _TSC200X_CORE_H
 
@@ -71,7 +70,7 @@
 extern const struct regmap_config tsc200x_regmap_config;
 extern const struct dev_pm_ops tsc200x_pm_ops;
 
-int tsc200x_probe(struct device *dev, int irq, const struct input_id *tsc_id,
+int tsc200x_probe(struct device *dev, int irq, __u16 bustype,
 		  struct regmap *regmap,
 		  int (*tsc200x_cmd)(struct device *dev, u8 cmd));
 int tsc200x_remove(struct device *dev);

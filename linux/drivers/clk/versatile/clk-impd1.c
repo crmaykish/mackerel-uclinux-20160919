@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Clock driver for the ARM Integrator/IM-PD1 board
  * Copyright (C) 2012-2013 Linus Walleij
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #include <linux/clk-provider.h>
 #include <linux/clkdev.h>
@@ -9,7 +12,6 @@
 #include <linux/io.h>
 #include <linux/platform_data/clk-integrator.h>
 
-#include "icst.h"
 #include "clk-icst.h"
 
 #define IMPD1_OSC1	0x00
@@ -96,7 +98,8 @@ void integrator_impd1_clk_init(void __iomem *base, unsigned int id)
 
 	/* Register the fixed rate PCLK */
 	imc->pclkname = kasprintf(GFP_KERNEL, "lm%x-pclk", id);
-	pclk = clk_register_fixed_rate(NULL, imc->pclkname, NULL, 0, 0);
+	pclk = clk_register_fixed_rate(NULL, imc->pclkname, NULL,
+				      CLK_IS_ROOT, 0);
 	imc->pclk = pclk;
 
 	imc->vco1name = kasprintf(GFP_KERNEL, "lm%x-vco1", id);

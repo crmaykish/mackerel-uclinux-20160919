@@ -1,12 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0
 /**
  * dwc3-keystone.c - Keystone Specific Glue layer
  *
  * Copyright (C) 2010-2013 Texas Instruments Incorporated - http://www.ti.com
  *
  * Author: WingMan Kwok <w-kwok2@ti.com>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2  of
+ * the License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
+#include <linux/clk.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
@@ -14,7 +23,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
 #include <linux/of_platform.h>
-#include <linux/pm_runtime.h>
 
 /* USBSS register offsets */
 #define USBSS_REVISION		0x0000
@@ -31,8 +39,11 @@
 #define USBSS_IRQ_COREIRQ_EN	BIT(0)
 #define USBSS_IRQ_COREIRQ_CLR	BIT(0)
 
+static u64 kdwc3_dma_mask;
+
 struct dwc3_keystone {
 	struct device			*dev;
+	struct clk			*clk;
 	void __iomem			*usbss;
 };
 
@@ -81,6 +92,7 @@ static int kdwc3_probe(struct platform_device *pdev)
 	struct device		*dev = &pdev->dev;
 	struct device_node	*node = pdev->dev.of_node;
 	struct dwc3_keystone	*kdwc;
+	struct resource		*res;
 	int			error, irq;
 
 	kdwc = devm_kzalloc(dev, sizeof(*kdwc), GFP_KERNEL);
@@ -91,25 +103,26 @@ static int kdwc3_probe(struct platform_device *pdev)
 
 	kdwc->dev = dev;
 
-	kdwc->usbss = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	kdwc->usbss = devm_ioremap_resource(dev, res);
 	if (IS_ERR(kdwc->usbss))
 		return PTR_ERR(kdwc->usbss);
 
-	pm_runtime_enable(kdwc->dev);
+	kdwc3_dma_mask = dma_get_mask(dev);
+	dev->dma_mask = &kdwc3_dma_mask;
 
-	error = pm_runtime_get_sync(kdwc->dev);
+	kdwc->clk = devm_clk_get(kdwc->dev, "usb");
+
+	error = clk_prepare_enable(kdwc->clk);
 	if (error < 0) {
-		dev_err(kdwc->dev, "pm_runtime_get_sync failed, error %d\n",
+		dev_err(kdwc->dev, "unable to enable usb clock, error %d\n",
 			error);
-		goto err_irq;
+		return error;
 	}
-
-	/* IRQ processing not required currently for AM65 */
-	if (of_device_is_compatible(node, "ti,am654-dwc3"))
-		goto skip_irq;
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
+		dev_err(&pdev->dev, "missing irq\n");
 		error = irq;
 		goto err_irq;
 	}
@@ -124,7 +137,6 @@ static int kdwc3_probe(struct platform_device *pdev)
 
 	kdwc3_enable_irqs(kdwc);
 
-skip_irq:
 	error = of_platform_populate(node, NULL, NULL, dev);
 	if (error) {
 		dev_err(&pdev->dev, "failed to create dwc3 core\n");
@@ -136,8 +148,7 @@ skip_irq:
 err_core:
 	kdwc3_disable_irqs(kdwc);
 err_irq:
-	pm_runtime_put_sync(kdwc->dev);
-	pm_runtime_disable(kdwc->dev);
+	clk_disable_unprepare(kdwc->clk);
 
 	return error;
 }
@@ -154,15 +165,10 @@ static int kdwc3_remove_core(struct device *dev, void *c)
 static int kdwc3_remove(struct platform_device *pdev)
 {
 	struct dwc3_keystone *kdwc = platform_get_drvdata(pdev);
-	struct device_node *node = pdev->dev.of_node;
 
-	if (!of_device_is_compatible(node, "ti,am654-dwc3"))
-		kdwc3_disable_irqs(kdwc);
-
+	kdwc3_disable_irqs(kdwc);
 	device_for_each_child(&pdev->dev, NULL, kdwc3_remove_core);
-	pm_runtime_put_sync(kdwc->dev);
-	pm_runtime_disable(kdwc->dev);
-
+	clk_disable_unprepare(kdwc->clk);
 	platform_set_drvdata(pdev, NULL);
 
 	return 0;
@@ -170,7 +176,6 @@ static int kdwc3_remove(struct platform_device *pdev)
 
 static const struct of_device_id kdwc3_of_match[] = {
 	{ .compatible = "ti,keystone-dwc3", },
-	{ .compatible = "ti,am654-dwc3" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, kdwc3_of_match);

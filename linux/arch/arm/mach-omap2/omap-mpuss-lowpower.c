@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OMAP MPUSS low power code
  *
@@ -31,6 +30,11 @@
  *
  * Note: CPU0 is the master core and it is the last CPU to go down
  * and first to wake-up when MPUSS low power states are excercised
+ *
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -44,7 +48,6 @@
 #include <asm/smp_scu.h>
 #include <asm/pgalloc.h>
 #include <asm/suspend.h>
-#include <asm/virt.h>
 #include <asm/hardware/cache-l2x0.h>
 
 #include "soc.h"
@@ -59,10 +62,7 @@
 #include "prm44xx.h"
 #include "prm-regbits-44xx.h"
 
-static void __iomem *sar_base;
-static u32 old_cpu1_ns_pa_addr;
-
-#if defined(CONFIG_PM) && defined(CONFIG_SMP)
+#ifdef CONFIG_SMP
 
 struct omap4_cpu_pm_info {
 	struct powerdomain *pwrdm;
@@ -90,6 +90,7 @@ struct cpu_pm_ops {
 
 static DEFINE_PER_CPU(struct omap4_cpu_pm_info, omap4_pm_info);
 static struct powerdomain *mpuss_pd;
+static void __iomem *sar_base;
 static u32 cpu_context_offset;
 
 static int default_finish_suspend(unsigned long cpu_state)
@@ -242,9 +243,10 @@ int omap4_enter_lowpower(unsigned int cpu, unsigned int power_state)
 		save_state = 1;
 		break;
 	case PWRDM_POWER_RET:
-		if (IS_PM44XX_ERRATUM(PM_OMAP4_CPU_OSWR_DISABLE))
+		if (IS_PM44XX_ERRATUM(PM_OMAP4_CPU_OSWR_DISABLE)) {
 			save_state = 0;
-		break;
+			break;
+		}
 	default:
 		/*
 		 * CPUx CSWR is invalid hardware state. Also CPUx OSWR
@@ -270,7 +272,7 @@ int omap4_enter_lowpower(unsigned int cpu, unsigned int power_state)
 	cpu_clear_prev_logic_pwrst(cpu);
 	pwrdm_set_next_pwrst(pm_info->pwrdm, power_state);
 	pwrdm_set_logic_retst(pm_info->pwrdm, cpu_logic_state);
-	set_cpu_wakeup_addr(cpu, __pa_symbol(omap_pm_ops.resume));
+	set_cpu_wakeup_addr(cpu, virt_to_phys(omap_pm_ops.resume));
 	omap_pm_ops.scu_prepare(cpu, power_state);
 	l2x0_pwrst_prepare(cpu, save_state);
 
@@ -322,7 +324,7 @@ int omap4_hotplug_cpu(unsigned int cpu, unsigned int power_state)
 
 	pwrdm_clear_all_prev_pwrst(pm_info->pwrdm);
 	pwrdm_set_next_pwrst(pm_info->pwrdm, power_state);
-	set_cpu_wakeup_addr(cpu, __pa_symbol(omap_pm_ops.hotplug_restart));
+	set_cpu_wakeup_addr(cpu, virt_to_phys(omap_pm_ops.hotplug_restart));
 	omap_pm_ops.scu_prepare(cpu, power_state);
 
 	/*
@@ -364,16 +366,15 @@ int __init omap4_mpuss_init(void)
 		return -ENODEV;
 	}
 
+	if (cpu_is_omap44xx())
+		sar_base = omap4_get_sar_ram_base();
+
 	/* Initilaise per CPU PM information */
 	pm_info = &per_cpu(omap4_pm_info, 0x0);
 	if (sar_base) {
 		pm_info->scu_sar_addr = sar_base + SCU_OFFSET0;
-		if (cpu_is_omap44xx())
-			pm_info->wkup_sar_addr = sar_base +
-				CPU0_WAKEUP_NS_PA_ADDR_OFFSET;
-		else
-			pm_info->wkup_sar_addr = sar_base +
-				OMAP5_CPU0_WAKEUP_NS_PA_ADDR_OFFSET;
+		pm_info->wkup_sar_addr = sar_base +
+					CPU0_WAKEUP_NS_PA_ADDR_OFFSET;
 		pm_info->l2x0_sar_addr = sar_base + L2X0_SAVE_OFFSET0;
 	}
 	pm_info->pwrdm = pwrdm_lookup("cpu0_pwrdm");
@@ -392,12 +393,8 @@ int __init omap4_mpuss_init(void)
 	pm_info = &per_cpu(omap4_pm_info, 0x1);
 	if (sar_base) {
 		pm_info->scu_sar_addr = sar_base + SCU_OFFSET1;
-		if (cpu_is_omap44xx())
-			pm_info->wkup_sar_addr = sar_base +
-				CPU1_WAKEUP_NS_PA_ADDR_OFFSET;
-		else
-			pm_info->wkup_sar_addr = sar_base +
-				OMAP5_CPU1_WAKEUP_NS_PA_ADDR_OFFSET;
+		pm_info->wkup_sar_addr = sar_base +
+					CPU1_WAKEUP_NS_PA_ADDR_OFFSET;
 		pm_info->l2x0_sar_addr = sar_base + L2X0_SAVE_OFFSET1;
 	}
 
@@ -447,48 +444,3 @@ int __init omap4_mpuss_init(void)
 }
 
 #endif
-
-u32 omap4_get_cpu1_ns_pa_addr(void)
-{
-	return old_cpu1_ns_pa_addr;
-}
-
-/*
- * For kexec, we must set CPU1_WAKEUP_NS_PA_ADDR to point to
- * current kernel's secondary_startup() early before
- * clockdomains_init(). Otherwise clockdomain_init() can
- * wake CPU1 and cause a hang.
- */
-void __init omap4_mpuss_early_init(void)
-{
-	unsigned long startup_pa;
-	void __iomem *ns_pa_addr;
-
-	if (!(soc_is_omap44xx() || soc_is_omap54xx()))
-		return;
-
-	sar_base = omap4_get_sar_ram_base();
-
-	/* Save old NS_PA_ADDR for validity checks later on */
-	if (soc_is_omap44xx())
-		ns_pa_addr = sar_base + CPU1_WAKEUP_NS_PA_ADDR_OFFSET;
-	else
-		ns_pa_addr = sar_base + OMAP5_CPU1_WAKEUP_NS_PA_ADDR_OFFSET;
-	old_cpu1_ns_pa_addr = readl_relaxed(ns_pa_addr);
-
-	if (soc_is_omap443x())
-		startup_pa = __pa_symbol(omap4_secondary_startup);
-	else if (soc_is_omap446x())
-		startup_pa = __pa_symbol(omap4460_secondary_startup);
-	else if ((__boot_cpu_mode & MODE_MASK) == HYP_MODE)
-		startup_pa = __pa_symbol(omap5_secondary_hyp_startup);
-	else
-		startup_pa = __pa_symbol(omap5_secondary_startup);
-
-	if (soc_is_omap44xx())
-		writel_relaxed(startup_pa, sar_base +
-			       CPU1_WAKEUP_NS_PA_ADDR_OFFSET);
-	else
-		writel_relaxed(startup_pa, sar_base +
-			       OMAP5_CPU1_WAKEUP_NS_PA_ADDR_OFFSET);
-}

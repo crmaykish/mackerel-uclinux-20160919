@@ -1,9 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  PS3 system bus driver.
  *
  *  Copyright (C) 2006 Sony Computer Entertainment Inc.
  *  Copyright 2006 Sony Corp.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; version 2 of the License.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/kernel.h>
@@ -25,12 +37,12 @@ static struct device ps3_system_bus = {
 };
 
 /* FIXME: need device usage counters! */
-static struct {
+struct {
 	struct mutex mutex;
 	int sb_11; /* usb 0 */
 	int sb_12; /* usb 0 */
 	int gpu;
-} usage_hack;
+} static usage_hack;
 
 static int ps3_is_device(struct ps3_system_bus_device *dev, u64 bus_id,
 			 u64 dev_id)
@@ -459,13 +471,11 @@ static ssize_t modalias_show(struct device *_dev, struct device_attribute *a,
 
 	return (len >= PAGE_SIZE) ? (PAGE_SIZE - 1) : len;
 }
-static DEVICE_ATTR_RO(modalias);
 
-static struct attribute *ps3_system_bus_dev_attrs[] = {
-	&dev_attr_modalias.attr,
-	NULL,
+static struct device_attribute ps3_system_bus_dev_attrs[] = {
+	__ATTR_RO(modalias),
+	__ATTR_NULL,
 };
-ATTRIBUTE_GROUPS(ps3_system_bus_dev);
 
 struct bus_type ps3_system_bus_type = {
 	.name = "ps3_system_bus",
@@ -474,7 +484,7 @@ struct bus_type ps3_system_bus_type = {
 	.probe = ps3_system_bus_probe,
 	.remove = ps3_system_bus_remove,
 	.shutdown = ps3_system_bus_shutdown,
-	.dev_groups = ps3_system_bus_dev_groups,
+	.dev_attrs = ps3_system_bus_dev_attrs,
 };
 
 static int __init ps3_system_bus_init(void)
@@ -506,7 +516,7 @@ core_initcall(ps3_system_bus_init);
  */
 static void * ps3_alloc_coherent(struct device *_dev, size_t size,
 				 dma_addr_t *dma_handle, gfp_t flag,
-				 unsigned long attrs)
+				 struct dma_attrs *attrs)
 {
 	int result;
 	struct ps3_system_bus_device *dev = ps3_dev_to_system_bus_dev(_dev);
@@ -543,7 +553,7 @@ clean_none:
 }
 
 static void ps3_free_coherent(struct device *_dev, size_t size, void *vaddr,
-			      dma_addr_t dma_handle, unsigned long attrs)
+			      dma_addr_t dma_handle, struct dma_attrs *attrs)
 {
 	struct ps3_system_bus_device *dev = ps3_dev_to_system_bus_dev(_dev);
 
@@ -559,7 +569,7 @@ static void ps3_free_coherent(struct device *_dev, size_t size, void *vaddr,
 
 static dma_addr_t ps3_sb_map_page(struct device *_dev, struct page *page,
 	unsigned long offset, size_t size, enum dma_data_direction direction,
-	unsigned long attrs)
+	struct dma_attrs *attrs)
 {
 	struct ps3_system_bus_device *dev = ps3_dev_to_system_bus_dev(_dev);
 	int result;
@@ -582,7 +592,7 @@ static dma_addr_t ps3_sb_map_page(struct device *_dev, struct page *page,
 static dma_addr_t ps3_ioc0_map_page(struct device *_dev, struct page *page,
 				    unsigned long offset, size_t size,
 				    enum dma_data_direction direction,
-				    unsigned long attrs)
+				    struct dma_attrs *attrs)
 {
 	struct ps3_system_bus_device *dev = ps3_dev_to_system_bus_dev(_dev);
 	int result;
@@ -616,7 +626,7 @@ static dma_addr_t ps3_ioc0_map_page(struct device *_dev, struct page *page,
 }
 
 static void ps3_unmap_page(struct device *_dev, dma_addr_t dma_addr,
-	size_t size, enum dma_data_direction direction, unsigned long attrs)
+	size_t size, enum dma_data_direction direction, struct dma_attrs *attrs)
 {
 	struct ps3_system_bus_device *dev = ps3_dev_to_system_bus_dev(_dev);
 	int result;
@@ -630,7 +640,7 @@ static void ps3_unmap_page(struct device *_dev, dma_addr_t dma_addr,
 }
 
 static int ps3_sb_map_sg(struct device *_dev, struct scatterlist *sgl,
-	int nents, enum dma_data_direction direction, unsigned long attrs)
+	int nents, enum dma_data_direction direction, struct dma_attrs *attrs)
 {
 #if defined(CONFIG_PS3_DYNAMIC_DMA)
 	BUG_ON("do");
@@ -660,14 +670,14 @@ static int ps3_sb_map_sg(struct device *_dev, struct scatterlist *sgl,
 static int ps3_ioc0_map_sg(struct device *_dev, struct scatterlist *sg,
 			   int nents,
 			   enum dma_data_direction direction,
-			   unsigned long attrs)
+			   struct dma_attrs *attrs)
 {
 	BUG();
 	return 0;
 }
 
 static void ps3_sb_unmap_sg(struct device *_dev, struct scatterlist *sg,
-	int nents, enum dma_data_direction direction, unsigned long attrs)
+	int nents, enum dma_data_direction direction, struct dma_attrs *attrs)
 {
 #if defined(CONFIG_PS3_DYNAMIC_DMA)
 	BUG_ON("do");
@@ -676,7 +686,7 @@ static void ps3_sb_unmap_sg(struct device *_dev, struct scatterlist *sg,
 
 static void ps3_ioc0_unmap_sg(struct device *_dev, struct scatterlist *sg,
 			    int nents, enum dma_data_direction direction,
-			    unsigned long attrs)
+			    struct dma_attrs *attrs)
 {
 	BUG();
 }
@@ -686,28 +696,31 @@ static int ps3_dma_supported(struct device *_dev, u64 mask)
 	return mask >= DMA_BIT_MASK(32);
 }
 
-static const struct dma_map_ops ps3_sb_dma_ops = {
+static u64 ps3_dma_get_required_mask(struct device *_dev)
+{
+	return DMA_BIT_MASK(32);
+}
+
+static struct dma_map_ops ps3_sb_dma_ops = {
 	.alloc = ps3_alloc_coherent,
 	.free = ps3_free_coherent,
 	.map_sg = ps3_sb_map_sg,
 	.unmap_sg = ps3_sb_unmap_sg,
 	.dma_supported = ps3_dma_supported,
+	.get_required_mask = ps3_dma_get_required_mask,
 	.map_page = ps3_sb_map_page,
 	.unmap_page = ps3_unmap_page,
-	.mmap = dma_common_mmap,
-	.get_sgtable = dma_common_get_sgtable,
 };
 
-static const struct dma_map_ops ps3_ioc0_dma_ops = {
+static struct dma_map_ops ps3_ioc0_dma_ops = {
 	.alloc = ps3_alloc_coherent,
 	.free = ps3_free_coherent,
 	.map_sg = ps3_ioc0_map_sg,
 	.unmap_sg = ps3_ioc0_unmap_sg,
 	.dma_supported = ps3_dma_supported,
+	.get_required_mask = ps3_dma_get_required_mask,
 	.map_page = ps3_ioc0_map_page,
 	.unmap_page = ps3_unmap_page,
-	.mmap = dma_common_mmap,
-	.get_sgtable = dma_common_get_sgtable,
 };
 
 /**
@@ -743,11 +756,11 @@ int ps3_system_bus_device_register(struct ps3_system_bus_device *dev)
 
 	switch (dev->dev_type) {
 	case PS3_DEVICE_TYPE_IOC0:
-		dev->core.dma_ops = &ps3_ioc0_dma_ops;
+		dev->core.archdata.dma_ops = &ps3_ioc0_dma_ops;
 		dev_set_name(&dev->core, "ioc0_%02x", ++dev_ioc0_count);
 		break;
 	case PS3_DEVICE_TYPE_SB:
-		dev->core.dma_ops = &ps3_sb_dma_ops;
+		dev->core.archdata.dma_ops = &ps3_sb_dma_ops;
 		dev_set_name(&dev->core, "sb_%02x", ++dev_sb_count);
 
 		break;

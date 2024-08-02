@@ -1,9 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /**
  * attrib.c - NTFS attribute operations.  Part of the Linux-NTFS project.
  *
  * Copyright (c) 2001-2012 Anton Altaparmakov and Tuxera Inc.
  * Copyright (c) 2002 Richard Russon
+ *
+ * This program/include file is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as published
+ * by the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program/include file is distributed in the hope that it will be
+ * useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program (in the main directory of the Linux-NTFS
+ * distribution in the file COPYING); if not, write to the Free Software
+ * Foundation,Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/buffer_head.h>
@@ -138,7 +152,7 @@ int ntfs_map_runlist_nolock(ntfs_inode *ni, VCN vcn, ntfs_attr_search_ctx *ctx)
 			if (old_ctx.base_ntfs_ino && old_ctx.ntfs_ino !=
 					old_ctx.base_ntfs_ino) {
 				put_this_page = old_ctx.ntfs_ino->page;
-				get_page(put_this_page);
+				page_cache_get(put_this_page);
 			}
 			/*
 			 * Reinitialize the search context so we can lookup the
@@ -261,7 +275,7 @@ retry_map:
 		 * the pieces anyway.
 		 */
 		if (put_this_page)
-			put_page(put_this_page);
+			page_cache_release(put_this_page);
 	}
 	return err;
 }
@@ -592,39 +606,15 @@ static int ntfs_attr_find(const ATTR_TYPE type, const ntfschar *name,
 		a = (ATTR_RECORD*)((u8*)ctx->attr +
 				le32_to_cpu(ctx->attr->length));
 	for (;;	a = (ATTR_RECORD*)((u8*)a + le32_to_cpu(a->length))) {
-		u8 *mrec_end = (u8 *)ctx->mrec +
-		               le32_to_cpu(ctx->mrec->bytes_allocated);
-		u8 *name_end;
-
-		/* check whether ATTR_RECORD wrap */
-		if ((u8 *)a < (u8 *)ctx->mrec)
+		if ((u8*)a < (u8*)ctx->mrec || (u8*)a > (u8*)ctx->mrec +
+				le32_to_cpu(ctx->mrec->bytes_allocated))
 			break;
-
-		/* check whether Attribute Record Header is within bounds */
-		if ((u8 *)a > mrec_end ||
-		    (u8 *)a + sizeof(ATTR_RECORD) > mrec_end)
-			break;
-
-		/* check whether ATTR_RECORD's name is within bounds */
-		name_end = (u8 *)a + le16_to_cpu(a->name_offset) +
-			   a->name_length * sizeof(ntfschar);
-		if (name_end > mrec_end)
-			break;
-
 		ctx->attr = a;
 		if (unlikely(le32_to_cpu(a->type) > le32_to_cpu(type) ||
 				a->type == AT_END))
 			return -ENOENT;
 		if (unlikely(!a->length))
 			break;
-
-		/* check whether ATTR_RECORD's length wrap */
-		if ((u8 *)a + le32_to_cpu(a->length) < (u8 *)a)
-			break;
-		/* check whether ATTR_RECORD's length is within bounds */
-		if ((u8 *)a + le32_to_cpu(a->length) > mrec_end)
-			break;
-
 		if (a->type != type)
 			continue;
 		/*
@@ -1670,7 +1660,7 @@ int ntfs_attr_make_non_resident(ntfs_inode *ni, const u32 data_size)
 		memcpy(kaddr, (u8*)a +
 				le16_to_cpu(a->data.resident.value_offset),
 				attr_size);
-		memset(kaddr + attr_size, 0, PAGE_SIZE - attr_size);
+		memset(kaddr + attr_size, 0, PAGE_CACHE_SIZE - attr_size);
 		kunmap_atomic(kaddr);
 		flush_dcache_page(page);
 		SetPageUptodate(page);
@@ -1758,7 +1748,7 @@ int ntfs_attr_make_non_resident(ntfs_inode *ni, const u32 data_size)
 	if (page) {
 		set_page_dirty(page);
 		unlock_page(page);
-		put_page(page);
+		page_cache_release(page);
 	}
 	ntfs_debug("Done.");
 	return 0;
@@ -1845,7 +1835,7 @@ rl_err_out:
 		ntfs_free(rl);
 page_err_out:
 		unlock_page(page);
-		put_page(page);
+		page_cache_release(page);
 	}
 	if (err == -EINVAL)
 		err = -EIO;
@@ -2523,17 +2513,17 @@ int ntfs_attr_set(ntfs_inode *ni, const s64 ofs, const s64 cnt, const u8 val)
 	BUG_ON(NInoEncrypted(ni));
 	mapping = VFS_I(ni)->i_mapping;
 	/* Work out the starting index and page offset. */
-	idx = ofs >> PAGE_SHIFT;
-	start_ofs = ofs & ~PAGE_MASK;
+	idx = ofs >> PAGE_CACHE_SHIFT;
+	start_ofs = ofs & ~PAGE_CACHE_MASK;
 	/* Work out the ending index and page offset. */
 	end = ofs + cnt;
-	end_ofs = end & ~PAGE_MASK;
+	end_ofs = end & ~PAGE_CACHE_MASK;
 	/* If the end is outside the inode size return -ESPIPE. */
 	if (unlikely(end > i_size_read(VFS_I(ni)))) {
 		ntfs_error(vol->sb, "Request exceeds end of attribute.");
 		return -ESPIPE;
 	}
-	end >>= PAGE_SHIFT;
+	end >>= PAGE_CACHE_SHIFT;
 	/* If there is a first partial page, need to do it the slow way. */
 	if (start_ofs) {
 		page = read_mapping_page(mapping, idx, NULL);
@@ -2546,7 +2536,7 @@ int ntfs_attr_set(ntfs_inode *ni, const s64 ofs, const s64 cnt, const u8 val)
 		 * If the last page is the same as the first page, need to
 		 * limit the write to the end offset.
 		 */
-		size = PAGE_SIZE;
+		size = PAGE_CACHE_SIZE;
 		if (idx == end)
 			size = end_ofs;
 		kaddr = kmap_atomic(page);
@@ -2554,7 +2544,7 @@ int ntfs_attr_set(ntfs_inode *ni, const s64 ofs, const s64 cnt, const u8 val)
 		flush_dcache_page(page);
 		kunmap_atomic(kaddr);
 		set_page_dirty(page);
-		put_page(page);
+		page_cache_release(page);
 		balance_dirty_pages_ratelimited(mapping);
 		cond_resched();
 		if (idx == end)
@@ -2571,7 +2561,7 @@ int ntfs_attr_set(ntfs_inode *ni, const s64 ofs, const s64 cnt, const u8 val)
 			return -ENOMEM;
 		}
 		kaddr = kmap_atomic(page);
-		memset(kaddr, val, PAGE_SIZE);
+		memset(kaddr, val, PAGE_CACHE_SIZE);
 		flush_dcache_page(page);
 		kunmap_atomic(kaddr);
 		/*
@@ -2595,7 +2585,7 @@ int ntfs_attr_set(ntfs_inode *ni, const s64 ofs, const s64 cnt, const u8 val)
 		set_page_dirty(page);
 		/* Finally unlock and release the page. */
 		unlock_page(page);
-		put_page(page);
+		page_cache_release(page);
 		balance_dirty_pages_ratelimited(mapping);
 		cond_resched();
 	}
@@ -2612,7 +2602,7 @@ int ntfs_attr_set(ntfs_inode *ni, const s64 ofs, const s64 cnt, const u8 val)
 		flush_dcache_page(page);
 		kunmap_atomic(kaddr);
 		set_page_dirty(page);
-		put_page(page);
+		page_cache_release(page);
 		balance_dirty_pages_ratelimited(mapping);
 		cond_resched();
 	}

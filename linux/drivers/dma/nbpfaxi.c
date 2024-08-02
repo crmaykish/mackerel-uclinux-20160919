@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2013-2014 Renesas Electronics Europe Ltd.
  * Author: Guennadi Liakhovetski <g.liakhovetski@gmx.de>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/bitmap.h>
@@ -222,11 +225,8 @@ struct nbpf_channel {
 struct nbpf_device {
 	struct dma_device dma_dev;
 	void __iomem *base;
-	u32 max_burst_mem_read;
-	u32 max_burst_mem_write;
 	struct clk *clk;
 	const struct nbpf_config *config;
-	unsigned int eirq;
 	struct nbpf_channel chan[];
 };
 
@@ -424,33 +424,10 @@ static void nbpf_chan_configure(struct nbpf_channel *chan)
 	nbpf_chan_write(chan, NBPF_CHAN_CFG, NBPF_CHAN_CFG_DMS | chan->dmarq_cfg);
 }
 
-static u32 nbpf_xfer_ds(struct nbpf_device *nbpf, size_t size,
-			enum dma_transfer_direction direction)
+static u32 nbpf_xfer_ds(struct nbpf_device *nbpf, size_t size)
 {
-	int max_burst = nbpf->config->buffer_size * 8;
-
-	if (nbpf->max_burst_mem_read || nbpf->max_burst_mem_write) {
-		switch (direction) {
-		case DMA_MEM_TO_MEM:
-			max_burst = min_not_zero(nbpf->max_burst_mem_read,
-						 nbpf->max_burst_mem_write);
-			break;
-		case DMA_MEM_TO_DEV:
-			if (nbpf->max_burst_mem_read)
-				max_burst = nbpf->max_burst_mem_read;
-			break;
-		case DMA_DEV_TO_MEM:
-			if (nbpf->max_burst_mem_write)
-				max_burst = nbpf->max_burst_mem_write;
-			break;
-		case DMA_DEV_TO_DEV:
-		default:
-			break;
-		}
-	}
-
 	/* Maximum supported bursts depend on the buffer size */
-	return min_t(int, __ffs(size), ilog2(max_burst));
+	return min_t(int, __ffs(size), ilog2(nbpf->config->buffer_size * 8));
 }
 
 static size_t nbpf_xfer_size(struct nbpf_device *nbpf,
@@ -476,12 +453,11 @@ static size_t nbpf_xfer_size(struct nbpf_device *nbpf,
 
 	default:
 		pr_warn("%s(): invalid bus width %u\n", __func__, width);
-		/* fall through */
 	case DMA_SLAVE_BUSWIDTH_1_BYTE:
 		size = burst;
 	}
 
-	return nbpf_xfer_ds(nbpf, size, DMA_TRANS_NONE);
+	return nbpf_xfer_ds(nbpf, size);
 }
 
 /*
@@ -530,7 +506,7 @@ static int nbpf_prep_one(struct nbpf_link_desc *ldesc,
 	 * transfers we enable the SBE bit and terminate the transfer in our
 	 * .device_pause handler.
 	 */
-	mem_xfer = nbpf_xfer_ds(chan->nbpf, size, direction);
+	mem_xfer = nbpf_xfer_ds(chan->nbpf, size);
 
 	switch (direction) {
 	case DMA_DEV_TO_MEM:
@@ -1003,6 +979,21 @@ static struct dma_async_tx_descriptor *nbpf_prep_memcpy(
 			    DMA_MEM_TO_MEM, flags);
 }
 
+static struct dma_async_tx_descriptor *nbpf_prep_memcpy_sg(
+	struct dma_chan *dchan,
+	struct scatterlist *dst_sg, unsigned int dst_nents,
+	struct scatterlist *src_sg, unsigned int src_nents,
+	unsigned long flags)
+{
+	struct nbpf_channel *chan = nbpf_to_chan(dchan);
+
+	if (dst_nents != src_nents)
+		return NULL;
+
+	return nbpf_prep_sg(chan, src_sg, dst_sg, src_nents,
+			    DMA_MEM_TO_MEM, flags);
+}
+
 static struct dma_async_tx_descriptor *nbpf_prep_slave_sg(
 	struct dma_chan *dchan, struct scatterlist *sgl, unsigned int sg_len,
 	enum dma_transfer_direction direction, unsigned long flags, void *context)
@@ -1092,8 +1083,8 @@ static struct dma_chan *nbpf_of_xlate(struct of_phandle_args *dma_spec,
 	if (!dchan)
 		return NULL;
 
-	dev_dbg(dchan->device->dev, "Entry %s(%pOFn)\n", __func__,
-		dma_spec->np);
+	dev_dbg(dchan->device->dev, "Entry %s(%s)\n", __func__,
+		dma_spec->np->name);
 
 	chan = nbpf_to_chan(dchan);
 
@@ -1110,7 +1101,8 @@ static void nbpf_chan_tasklet(unsigned long data)
 {
 	struct nbpf_channel *chan = (struct nbpf_channel *)data;
 	struct nbpf_desc *desc, *tmp;
-	struct dmaengine_desc_callback cb;
+	dma_async_tx_callback callback;
+	void *param;
 
 	while (!list_empty(&chan->done)) {
 		bool found = false, must_put, recycling = false;
@@ -1158,12 +1150,14 @@ static void nbpf_chan_tasklet(unsigned long data)
 			must_put = false;
 		}
 
-		dmaengine_desc_get_callback(&desc->async_tx, &cb);
+		callback = desc->async_tx.callback;
+		param = desc->async_tx.callback_param;
 
 		/* ack and callback completed descriptor */
 		spin_unlock_irq(&chan->lock);
 
-		dmaengine_desc_callback_invoke(&cb, NULL);
+		if (callback)
+			callback(param);
 
 		if (must_put)
 			nbpf_desc_put(desc);
@@ -1284,6 +1278,7 @@ MODULE_DEVICE_TABLE(of, nbpf_match);
 static int nbpf_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	const struct of_device_id *of_id = of_match_device(nbpf_match, dev);
 	struct device_node *np = dev->of_node;
 	struct nbpf_device *nbpf;
 	struct dma_device *dma_dev;
@@ -1297,17 +1292,18 @@ static int nbpf_probe(struct platform_device *pdev)
 	BUILD_BUG_ON(sizeof(struct nbpf_desc_page) > PAGE_SIZE);
 
 	/* DT only */
-	if (!np)
+	if (!np || !of_id || !of_id->data)
 		return -ENODEV;
 
-	cfg = of_device_get_match_data(dev);
+	cfg = of_id->data;
 	num_channels = cfg->num_channels;
 
-	nbpf = devm_kzalloc(dev, struct_size(nbpf, chan, num_channels),
-			    GFP_KERNEL);
-	if (!nbpf)
+	nbpf = devm_kzalloc(dev, sizeof(*nbpf) + num_channels *
+			    sizeof(nbpf->chan[0]), GFP_KERNEL);
+	if (!nbpf) {
+		dev_err(dev, "Memory allocation failed\n");
 		return -ENOMEM;
-
+	}
 	dma_dev = &nbpf->dma_dev;
 	dma_dev->dev = dev;
 
@@ -1319,11 +1315,6 @@ static int nbpf_probe(struct platform_device *pdev)
 	nbpf->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(nbpf->clk))
 		return PTR_ERR(nbpf->clk);
-
-	of_property_read_u32(np, "max-burst-mem-read",
-			     &nbpf->max_burst_mem_read);
-	of_property_read_u32(np, "max-burst-mem-write",
-			     &nbpf->max_burst_mem_write);
 
 	nbpf->config = cfg;
 
@@ -1385,7 +1376,6 @@ static int nbpf_probe(struct platform_device *pdev)
 			       IRQF_SHARED, "dma error", nbpf);
 	if (ret < 0)
 		return ret;
-	nbpf->eirq = eirq;
 
 	INIT_LIST_HEAD(&dma_dev->channels);
 
@@ -1399,11 +1389,13 @@ static int nbpf_probe(struct platform_device *pdev)
 	dma_cap_set(DMA_MEMCPY, dma_dev->cap_mask);
 	dma_cap_set(DMA_SLAVE, dma_dev->cap_mask);
 	dma_cap_set(DMA_PRIVATE, dma_dev->cap_mask);
+	dma_cap_set(DMA_SG, dma_dev->cap_mask);
 
 	/* Common and MEMCPY operations */
 	dma_dev->device_alloc_chan_resources
 		= nbpf_alloc_chan_resources;
 	dma_dev->device_free_chan_resources = nbpf_free_chan_resources;
+	dma_dev->device_prep_dma_sg = nbpf_prep_memcpy_sg;
 	dma_dev->device_prep_dma_memcpy = nbpf_prep_memcpy;
 	dma_dev->device_tx_status = nbpf_tx_status;
 	dma_dev->device_issue_pending = nbpf_issue_pending;
@@ -1455,17 +1447,6 @@ e_clk_off:
 static int nbpf_remove(struct platform_device *pdev)
 {
 	struct nbpf_device *nbpf = platform_get_drvdata(pdev);
-	int i;
-
-	devm_free_irq(&pdev->dev, nbpf->eirq, nbpf);
-
-	for (i = 0; i < nbpf->config->num_channels; i++) {
-		struct nbpf_channel *chan = nbpf->chan + i;
-
-		devm_free_irq(&pdev->dev, chan->irq, chan);
-
-		tasklet_kill(&chan->tasklet);
-	}
 
 	of_dma_controller_free(pdev->dev.of_node);
 	dma_async_device_unregister(&nbpf->dma_dev);
@@ -1491,14 +1472,14 @@ MODULE_DEVICE_TABLE(platform, nbpf_ids);
 #ifdef CONFIG_PM
 static int nbpf_runtime_suspend(struct device *dev)
 {
-	struct nbpf_device *nbpf = dev_get_drvdata(dev);
+	struct nbpf_device *nbpf = platform_get_drvdata(to_platform_device(dev));
 	clk_disable_unprepare(nbpf->clk);
 	return 0;
 }
 
 static int nbpf_runtime_resume(struct device *dev)
 {
-	struct nbpf_device *nbpf = dev_get_drvdata(dev);
+	struct nbpf_device *nbpf = platform_get_drvdata(to_platform_device(dev));
 	return clk_prepare_enable(nbpf->clk);
 }
 #endif

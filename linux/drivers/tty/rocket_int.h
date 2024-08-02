@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * rocket_int.h --- internal header file for rocket.c
  *
@@ -1145,6 +1144,7 @@ struct r_port {
 	int read_status_mask;
 	int cps;
 
+	struct completion close_wait;	/* Not yet matching the core */
 	spinlock_t slock;
 	struct mutex write_mtx;
 };

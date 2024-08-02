@@ -7,11 +7,8 @@ other DSPs. It has up to six transmitters and four receivers.
 
 Required properties:
 
-  - compatible		: Compatible list, should contain one of the following
-			  compatibles:
-			  "fsl,imx35-esai",
-			  "fsl,vf610-esai",
-			  "fsl,imx6ull-esai",
+  - compatible		: Compatible list, must contain "fsl,imx35-esai" or
+			  "fsl,vf610-esai"
 
   - reg			: Offset and length of the register set for the device.
 
@@ -30,11 +27,6 @@ Required properties:
 			  derive HCK, SCK and FS.
 	"fsys"		  The system clock derived from ahb clock used to
 			  derive HCK, SCK and FS.
-	"spba"		  The spba clock is required when ESAI is placed as a
-			  bus slave of the Shared Peripheral Bus and when two
-			  or more bus masters (CPU, DMA or DSP) try to access
-			  it. This property is optional depending on the SoC
-			  design.
 
   - fsl,fifo-depth	: The number of elements in the transmit and receive
 			  FIFOs. This number is the maximum allowed value for
@@ -45,15 +37,13 @@ Required properties:
 			  means all the settings for Receiving would be
 			  duplicated from Transmition related registers.
 
-Optional properties:
-
   - big-endian		: If this property is absent, the native endian mode
 			  will be in use as default, or the big endian mode
 			  will be in use for all the device registers.
 
 Example:
 
-esai: esai@2024000 {
+esai: esai@02024000 {
 	compatible = "fsl,imx35-esai";
 	reg = <0x02024000 0x4000>;
 	interrupts = <0 51 0x04>;
@@ -64,4 +54,5 @@ esai: esai@2024000 {
 	fsl,fifo-depth = <128>;
 	fsl,esai-synchronous;
 	big-endian;
+	status = "disabled";
 };

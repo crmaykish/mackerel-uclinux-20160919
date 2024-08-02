@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * bma180.c - IIO driver for Bosch BMA180 triaxial acceleration sensor
  *
  * Copyright 2013 Oleksandr Kravchenko <x0199363@ti.com>
  *
  * Support for BMA250 (c) Peter Meerwald <pmeerw@pmeerw.net>
+ *
+ * This file is subject to the terms and conditions of version 2 of
+ * the GNU General Public License.  See the file COPYING in the main
+ * directory of this archive for more details.
  *
  * SPI is not supported by driver
  * BMA180: 7-bit I2C slave address 0x40 or 0x41
@@ -15,7 +18,6 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
-#include <linux/of_device.h>
 #include <linux/of.h>
 #include <linux/bitops.h>
 #include <linux/slab.h>
@@ -30,7 +32,7 @@
 #define BMA180_DRV_NAME "bma180"
 #define BMA180_IRQ_NAME "bma180_event"
 
-enum chip_ids {
+enum {
 	BMA180,
 	BMA250,
 };
@@ -39,15 +41,15 @@ struct bma180_data;
 
 struct bma180_part_info {
 	const struct iio_chan_spec *channels;
-	unsigned int num_channels;
+	unsigned num_channels;
 	const int *scale_table;
-	unsigned int num_scales;
+	unsigned num_scales;
 	const int *bw_table;
-	unsigned int num_bw;
+	unsigned num_bw;
 
 	u8 int_reset_reg, int_reset_mask;
 	u8 sleep_reg, sleep_mask;
-	u8 bw_reg, bw_mask, bw_offset;
+	u8 bw_reg, bw_mask;
 	u8 scale_reg, scale_mask;
 	u8 power_reg, power_mask, lowpower_val;
 	u8 int_enable_reg, int_enable_mask;
@@ -103,7 +105,6 @@ struct bma180_part_info {
 
 #define BMA250_RANGE_MASK	GENMASK(3, 0) /* Range of accel values */
 #define BMA250_BW_MASK		GENMASK(4, 0) /* Accel bandwidth */
-#define BMA250_BW_OFFSET	8
 #define BMA250_SUSPEND_MASK	BIT(7) /* chip will sleep */
 #define BMA250_LOWPOWER_MASK	BIT(6)
 #define BMA250_DATA_INTEN_MASK	BIT(4)
@@ -114,17 +115,12 @@ struct bma180_data {
 	struct i2c_client *client;
 	struct iio_trigger *trig;
 	const struct bma180_part_info *part_info;
-	struct iio_mount_matrix orientation;
 	struct mutex mutex;
 	bool sleep_state;
 	int scale;
 	int bw;
 	bool pmode;
-	/* Ensure timestamp is naturally aligned */
-	struct {
-		s16 chan[4];
-		s64 timestamp __aligned(8);
-	} scan;
+	u8 buff[16]; /* 3x 16-bit + 8-bit + padding + timestamp */
 };
 
 enum bma180_chan {
@@ -242,8 +238,7 @@ static int bma180_set_bw(struct bma180_data *data, int val)
 	for (i = 0; i < data->part_info->num_bw; ++i) {
 		if (data->part_info->bw_table[i] == val) {
 			ret = bma180_set_bits(data, data->part_info->bw_reg,
-				data->part_info->bw_mask,
-				i + data->part_info->bw_offset);
+				data->part_info->bw_mask, i);
 			if (ret) {
 				dev_err(&data->client->dev,
 					"failed to set bandwidth\n");
@@ -413,7 +408,7 @@ err:
 	dev_err(&data->client->dev, "failed to disable the chip\n");
 }
 
-static ssize_t bma180_show_avail(char *buf, const int *vals, unsigned int n,
+static ssize_t bma180_show_avail(char *buf, const int *vals, unsigned n,
 				 bool micros)
 {
 	size_t len = 0;
@@ -474,14 +469,13 @@ static int bma180_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
-		ret = iio_device_claim_direct_mode(indio_dev);
-		if (ret)
-			return ret;
-
 		mutex_lock(&data->mutex);
+		if (iio_buffer_enabled(indio_dev)) {
+			mutex_unlock(&data->mutex);
+			return -EBUSY;
+		}
 		ret = bma180_get_data_reg(data, chan->scan_index);
 		mutex_unlock(&data->mutex);
-		iio_device_release_direct_mode(indio_dev);
 		if (ret < 0)
 			return ret;
 		*val = sign_extend32(ret >> chan->scan_type.shift,
@@ -540,6 +534,7 @@ static const struct iio_info bma180_info = {
 	.attrs			= &bma180_attrs_group,
 	.read_raw		= bma180_read_raw,
 	.write_raw		= bma180_write_raw,
+	.driver_module		= THIS_MODULE,
 };
 
 static const char * const bma180_power_modes[] = { "low_noise", "low_power" };
@@ -565,15 +560,6 @@ static int bma180_set_power_mode(struct iio_dev *indio_dev,
 	return ret;
 }
 
-static const struct iio_mount_matrix *
-bma180_accel_get_mount_matrix(const struct iio_dev *indio_dev,
-				const struct iio_chan_spec *chan)
-{
-	struct bma180_data *data = iio_priv(indio_dev);
-
-	return &data->orientation;
-}
-
 static const struct iio_enum bma180_power_mode_enum = {
 	.items = bma180_power_modes,
 	.num_items = ARRAY_SIZE(bma180_power_modes),
@@ -584,8 +570,7 @@ static const struct iio_enum bma180_power_mode_enum = {
 static const struct iio_chan_spec_ext_info bma180_ext_info[] = {
 	IIO_ENUM("power_mode", true, &bma180_power_mode_enum),
 	IIO_ENUM_AVAILABLE("power_mode", &bma180_power_mode_enum),
-	IIO_MOUNT_MATRIX(IIO_SHARED_BY_DIR, bma180_accel_get_mount_matrix),
-	{ }
+	{ },
 };
 
 #define BMA180_ACC_CHANNEL(_axis, _bits) {				\
@@ -635,53 +620,32 @@ static const struct iio_chan_spec bma250_channels[] = {
 
 static const struct bma180_part_info bma180_part_info[] = {
 	[BMA180] = {
-		.channels = bma180_channels,
-		.num_channels = ARRAY_SIZE(bma180_channels),
-		.scale_table = bma180_scale_table,
-		.num_scales = ARRAY_SIZE(bma180_scale_table),
-		.bw_table = bma180_bw_table,
-		.num_bw = ARRAY_SIZE(bma180_bw_table),
-		.int_reset_reg = BMA180_CTRL_REG0,
-		.int_reset_mask = BMA180_RESET_INT,
-		.sleep_reg = BMA180_CTRL_REG0,
-		.sleep_mask = BMA180_SLEEP,
-		.bw_reg = BMA180_BW_TCS,
-		.bw_mask = BMA180_BW,
-		.scale_reg = BMA180_OFFSET_LSB1,
-		.scale_mask = BMA180_RANGE,
-		.power_reg = BMA180_TCO_Z,
-		.power_mask = BMA180_MODE_CONFIG,
-		.lowpower_val = BMA180_LOW_POWER,
-		.int_enable_reg = BMA180_CTRL_REG3,
-		.int_enable_mask = BMA180_NEW_DATA_INT,
-		.softreset_reg = BMA180_RESET,
-		.chip_config = bma180_chip_config,
-		.chip_disable = bma180_chip_disable,
+		bma180_channels, ARRAY_SIZE(bma180_channels),
+		bma180_scale_table, ARRAY_SIZE(bma180_scale_table),
+		bma180_bw_table, ARRAY_SIZE(bma180_bw_table),
+		BMA180_CTRL_REG0, BMA180_RESET_INT,
+		BMA180_CTRL_REG0, BMA180_SLEEP,
+		BMA180_BW_TCS, BMA180_BW,
+		BMA180_OFFSET_LSB1, BMA180_RANGE,
+		BMA180_TCO_Z, BMA180_MODE_CONFIG, BMA180_LOW_POWER,
+		BMA180_CTRL_REG3, BMA180_NEW_DATA_INT,
+		BMA180_RESET,
+		bma180_chip_config,
+		bma180_chip_disable,
 	},
 	[BMA250] = {
-		.channels = bma250_channels,
-		.num_channels = ARRAY_SIZE(bma250_channels),
-		.scale_table = bma250_scale_table,
-		.num_scales = ARRAY_SIZE(bma250_scale_table),
-		.bw_table = bma250_bw_table,
-		.num_bw = ARRAY_SIZE(bma250_bw_table),
-		.int_reset_reg = BMA250_INT_RESET_REG,
-		.int_reset_mask = BMA250_INT_RESET_MASK,
-		.sleep_reg = BMA250_POWER_REG,
-		.sleep_mask = BMA250_SUSPEND_MASK,
-		.bw_reg = BMA250_BW_REG,
-		.bw_mask = BMA250_BW_MASK,
-		.bw_offset = BMA250_BW_OFFSET,
-		.scale_reg = BMA250_RANGE_REG,
-		.scale_mask = BMA250_RANGE_MASK,
-		.power_reg = BMA250_POWER_REG,
-		.power_mask = BMA250_LOWPOWER_MASK,
-		.lowpower_val = 1,
-		.int_enable_reg = BMA250_INT_ENABLE_REG,
-		.int_enable_mask = BMA250_DATA_INTEN_MASK,
-		.softreset_reg = BMA250_RESET_REG,
-		.chip_config = bma250_chip_config,
-		.chip_disable = bma250_chip_disable,
+		bma250_channels, ARRAY_SIZE(bma250_channels),
+		bma250_scale_table, ARRAY_SIZE(bma250_scale_table),
+		bma250_bw_table, ARRAY_SIZE(bma250_bw_table),
+		BMA250_INT_RESET_REG, BMA250_INT_RESET_MASK,
+		BMA250_POWER_REG, BMA250_SUSPEND_MASK,
+		BMA250_BW_REG, BMA250_BW_MASK,
+		BMA250_RANGE_REG, BMA250_RANGE_MASK,
+		BMA250_POWER_REG, BMA250_LOWPOWER_MASK, 1,
+		BMA250_INT_ENABLE_REG, BMA250_DATA_INTEN_MASK,
+		BMA250_RESET_REG,
+		bma250_chip_config,
+		bma250_chip_disable,
 	},
 };
 
@@ -690,7 +654,7 @@ static irqreturn_t bma180_trigger_handler(int irq, void *p)
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct bma180_data *data = iio_priv(indio_dev);
-	s64 time_ns = iio_get_time_ns(indio_dev);
+	int64_t time_ns = iio_get_time_ns();
 	int bit, ret, i = 0;
 
 	mutex_lock(&data->mutex);
@@ -702,12 +666,12 @@ static irqreturn_t bma180_trigger_handler(int irq, void *p)
 			mutex_unlock(&data->mutex);
 			goto err;
 		}
-		data->scan.chan[i++] = ret;
+		((s16 *)data->buff)[i++] = ret;
 	}
 
 	mutex_unlock(&data->mutex);
 
-	iio_push_to_buffers_with_timestamp(indio_dev, &data->scan, time_ns);
+	iio_push_to_buffers_with_timestamp(indio_dev, data->buff, time_ns);
 err:
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -734,6 +698,7 @@ static int bma180_trig_try_reen(struct iio_trigger *trig)
 static const struct iio_trigger_ops bma180_trigger_ops = {
 	.set_trigger_state = bma180_data_rdy_trigger_set_state,
 	.try_reenable = bma180_trig_try_reen,
+	.owner = THIS_MODULE,
 };
 
 static int bma180_probe(struct i2c_client *client,
@@ -741,7 +706,6 @@ static int bma180_probe(struct i2c_client *client,
 {
 	struct bma180_data *data;
 	struct iio_dev *indio_dev;
-	enum chip_ids chip;
 	int ret;
 
 	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*data));
@@ -751,16 +715,7 @@ static int bma180_probe(struct i2c_client *client,
 	data = iio_priv(indio_dev);
 	i2c_set_clientdata(client, indio_dev);
 	data->client = client;
-	if (client->dev.of_node)
-		chip = (enum chip_ids)of_device_get_match_data(&client->dev);
-	else
-		chip = id->driver_data;
-	data->part_info = &bma180_part_info[chip];
-
-	ret = iio_read_mount_matrix(&client->dev, "mount-matrix",
-				&data->orientation);
-	if (ret)
-		return ret;
+	data->part_info = &bma180_part_info[id->driver_data];
 
 	ret = data->part_info->chip_config(data);
 	if (ret < 0)
@@ -793,12 +748,11 @@ static int bma180_probe(struct i2c_client *client,
 		data->trig->dev.parent = &client->dev;
 		data->trig->ops = &bma180_trigger_ops;
 		iio_trigger_set_drvdata(data->trig, indio_dev);
+		indio_dev->trig = iio_trigger_get(data->trig);
 
 		ret = iio_trigger_register(data->trig);
 		if (ret)
 			goto err_trigger_free;
-
-		indio_dev->trig = iio_trigger_get(data->trig);
 	}
 
 	ret = iio_triggered_buffer_setup(indio_dev, NULL,
@@ -881,7 +835,7 @@ static SIMPLE_DEV_PM_OPS(bma180_pm_ops, bma180_suspend, bma180_resume);
 #define BMA180_PM_OPS NULL
 #endif
 
-static const struct i2c_device_id bma180_ids[] = {
+static struct i2c_device_id bma180_ids[] = {
 	{ "bma180", BMA180 },
 	{ "bma250", BMA250 },
 	{ }
@@ -889,24 +843,10 @@ static const struct i2c_device_id bma180_ids[] = {
 
 MODULE_DEVICE_TABLE(i2c, bma180_ids);
 
-static const struct of_device_id bma180_of_match[] = {
-	{
-		.compatible = "bosch,bma180",
-		.data = (void *)BMA180
-	},
-	{
-		.compatible = "bosch,bma250",
-		.data = (void *)BMA250
-	},
-	{ }
-};
-MODULE_DEVICE_TABLE(of, bma180_of_match);
-
 static struct i2c_driver bma180_driver = {
 	.driver = {
 		.name	= "bma180",
 		.pm	= BMA180_PM_OPS,
-		.of_match_table = bma180_of_match,
 	},
 	.probe		= bma180_probe,
 	.remove		= bma180_remove,

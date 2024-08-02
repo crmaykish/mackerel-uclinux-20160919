@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2002 Steve Schmidtke
+ * Licensed under the GPL
  */
 
 #include <linux/fs.h>
@@ -9,7 +9,7 @@
 #include <linux/sound.h>
 #include <linux/soundcard.h>
 #include <linux/mutex.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <init.h>
 #include <os.h>
 
@@ -105,9 +105,13 @@ static ssize_t hostaudio_write(struct file *file, const char __user *buffer,
 	printk(KERN_DEBUG "hostaudio: write called, count = %d\n", count);
 #endif
 
-	kbuf = memdup_user(buffer, count);
-	if (IS_ERR(kbuf))
-		return PTR_ERR(kbuf);
+	kbuf = kmalloc(count, GFP_KERNEL);
+	if (kbuf == NULL)
+		return -ENOMEM;
+
+	err = -EFAULT;
+	if (copy_from_user(kbuf, buffer, count))
+		goto out;
 
 	err = os_write_file(state->fd, kbuf, count);
 	if (err < 0)
@@ -119,10 +123,10 @@ static ssize_t hostaudio_write(struct file *file, const char __user *buffer,
 	return err;
 }
 
-static __poll_t hostaudio_poll(struct file *file,
-				struct poll_table_struct *wait)
+static unsigned int hostaudio_poll(struct file *file,
+				   struct poll_table_struct *wait)
 {
-	__poll_t mask = 0;
+	unsigned int mask = 0;
 
 #ifdef DEBUG
 	printk(KERN_DEBUG "hostaudio: poll called (unimplemented)\n");

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Kernel support for the ptrace() and syscall tracing interfaces.
  *
@@ -12,8 +11,6 @@
  */
 #include <linux/kernel.h>
 #include <linux/sched.h>
-#include <linux/sched/task.h>
-#include <linux/sched/task_stack.h>
 #include <linux/mm.h>
 #include <linux/errno.h>
 #include <linux/ptrace.h>
@@ -29,7 +26,7 @@
 #include <asm/processor.h>
 #include <asm/ptrace_offsets.h>
 #include <asm/rse.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/unwind.h>
 #ifdef CONFIG_PERFMON
 #include <asm/perfmon.h>
@@ -456,7 +453,7 @@ ia64_peek (struct task_struct *child, struct switch_stack *child_stack,
 			return 0;
 		}
 	}
-	copied = access_process_vm(child, addr, &ret, sizeof(ret), FOLL_FORCE);
+	copied = access_process_vm(child, addr, &ret, sizeof(ret), 0);
 	if (copied != sizeof(ret))
 		return -EIO;
 	*val = ret;
@@ -492,8 +489,7 @@ ia64_poke (struct task_struct *child, struct switch_stack *child_stack,
 				*ia64_rse_skip_regs(krbs, regnum) = val;
 			}
 		}
-	} else if (access_process_vm(child, addr, &val, sizeof(val),
-				FOLL_FORCE | FOLL_WRITE)
+	} else if (access_process_vm(child, addr, &val, sizeof(val), 1)
 		   != sizeof(val))
 		return -EIO;
 	return 0;
@@ -547,8 +543,7 @@ ia64_sync_user_rbs (struct task_struct *child, struct switch_stack *sw,
 		ret = ia64_peek(child, sw, user_rbs_end, addr, &val);
 		if (ret < 0)
 			return ret;
-		if (access_process_vm(child, addr, &val, sizeof(val),
-				FOLL_FORCE | FOLL_WRITE)
+		if (access_process_vm(child, addr, &val, sizeof(val), 1)
 		    != sizeof(val))
 			return -EIO;
 	}
@@ -564,8 +559,7 @@ ia64_sync_kernel_rbs (struct task_struct *child, struct switch_stack *sw,
 
 	/* now copy word for word from user rbs to kernel rbs: */
 	for (addr = user_rbs_start; addr < user_rbs_end; addr += 8) {
-		if (access_process_vm(child, addr, &val, sizeof(val),
-				FOLL_FORCE)
+		if (access_process_vm(child, addr, &val, sizeof(val), 0)
 				!= sizeof(val))
 			return -EIO;
 
@@ -836,7 +830,7 @@ ptrace_getregs (struct task_struct *child, struct pt_all_user_regs __user *ppr)
 	char nat = 0;
 	int i;
 
-	if (!access_ok(ppr, sizeof(struct pt_all_user_regs)))
+	if (!access_ok(VERIFY_WRITE, ppr, sizeof(struct pt_all_user_regs)))
 		return -EIO;
 
 	pt = task_pt_regs(child);
@@ -981,7 +975,7 @@ ptrace_setregs (struct task_struct *child, struct pt_all_user_regs __user *ppr)
 
 	memset(&fpval, 0, sizeof(fpval));
 
-	if (!access_ok(ppr, sizeof(struct pt_all_user_regs)))
+	if (!access_ok(VERIFY_READ, ppr, sizeof(struct pt_all_user_regs)))
 		return -EIO;
 
 	pt = task_pt_regs(child);
@@ -1162,8 +1156,7 @@ arch_ptrace (struct task_struct *child, long request,
 	case PTRACE_PEEKTEXT:
 	case PTRACE_PEEKDATA:
 		/* read word at location addr */
-		if (ptrace_access_vm(child, addr, &data, sizeof(data),
-				FOLL_FORCE)
+		if (access_process_vm(child, addr, &data, sizeof(data), 0)
 		    != sizeof(data))
 			return -EIO;
 		/* ensure return value is not mistaken for error code */
@@ -2147,39 +2140,27 @@ static void syscall_get_set_args_cb(struct unw_frame_info *info, void *data)
 {
 	struct syscall_get_set_args *args = data;
 	struct pt_regs *pt = args->regs;
-	unsigned long *krbs, cfm, ndirty, nlocals, nouts;
+	unsigned long *krbs, cfm, ndirty;
 	int i, count;
 
 	if (unw_unwind_to_user(info) < 0)
 		return;
 
-	/*
-	 * We get here via a few paths:
-	 * - break instruction: cfm is shared with caller.
-	 *   syscall args are in out= regs, locals are non-empty.
-	 * - epsinstruction: cfm is set by br.call
-	 *   locals don't exist.
-	 *
-	 * For both cases argguments are reachable in cfm.sof - cfm.sol.
-	 * CFM: [ ... | sor: 17..14 | sol : 13..7 | sof : 6..0 ]
-	 */
 	cfm = pt->cr_ifs;
-	nlocals = (cfm >> 7) & 0x7f; /* aka sol */
-	nouts = (cfm & 0x7f) - nlocals; /* aka sof - sol */
 	krbs = (unsigned long *)info->task + IA64_RBS_OFFSET/8;
 	ndirty = ia64_rse_num_regs(krbs, krbs + (pt->loadrs >> 19));
 
 	count = 0;
 	if (in_syscall(pt))
-		count = min_t(int, args->n, nouts);
+		count = min_t(int, args->n, cfm & 0x7f);
 
-	/* Iterate over outs. */
 	for (i = 0; i < count; i++) {
-		int j = ndirty + nlocals + i + args->i;
 		if (args->rw)
-			*ia64_rse_skip_regs(krbs, j) = args->args[i];
+			*ia64_rse_skip_regs(krbs, ndirty + i + args->i) =
+				args->args[i];
 		else
-			args->args[i] = *ia64_rse_skip_regs(krbs, j);
+			args->args[i] = *ia64_rse_skip_regs(krbs,
+				ndirty + i + args->i);
 	}
 
 	if (!args->rw) {
@@ -2191,11 +2172,12 @@ static void syscall_get_set_args_cb(struct unw_frame_info *info, void *data)
 }
 
 void ia64_syscall_get_set_arguments(struct task_struct *task,
-	struct pt_regs *regs, unsigned long *args, int rw)
+	struct pt_regs *regs, unsigned int i, unsigned int n,
+	unsigned long *args, int rw)
 {
 	struct syscall_get_set_args data = {
-		.i = 0,
-		.n = 6,
+		.i = i,
+		.n = n,
 		.args = args,
 		.regs = regs,
 		.rw = rw,

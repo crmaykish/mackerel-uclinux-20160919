@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * This file contains all the stubs needed when communicating with lockd.
  * This level of indirection is necessary so we can run nfsd+lockd without
@@ -59,7 +58,7 @@ nlm_fclose(struct file *filp)
 	fput(filp);
 }
 
-static const struct nlmsvc_binding nfsd_nlm_ops = {
+static struct nlmsvc_binding	nfsd_nlm_ops = {
 	.fopen		= nlm_fopen,		/* open file for locking */
 	.fclose		= nlm_fclose,		/* close file */
 };

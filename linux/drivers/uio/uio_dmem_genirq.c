@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/uio/uio_dmem_genirq.c
  *
@@ -7,6 +6,10 @@
  * Copyright (C) 2012 Damian Hobson-Garcia
  *
  * Based on uio_pdrv_genirq.c by Magnus Damm
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
  */
 
 #include <linux/platform_device.h>
@@ -110,10 +113,8 @@ static irqreturn_t uio_dmem_genirq_handler(int irq, struct uio_info *dev_info)
 	 * remember the state so we can allow user space to enable it later.
 	 */
 
-	spin_lock(&priv->lock);
 	if (!test_and_set_bit(0, &priv->flags))
 		disable_irq_nosync(irq);
-	spin_unlock(&priv->lock);
 
 	return IRQ_HANDLED;
 }
@@ -127,8 +128,7 @@ static int uio_dmem_genirq_irqcontrol(struct uio_info *dev_info, s32 irq_on)
 	 * in the interrupt controller, but keep track of the
 	 * state to prevent per-irq depth damage.
 	 *
-	 * Serialize this operation to support multiple tasks and concurrency
-	 * with irq handler on SMP systems.
+	 * Serialize this operation to support multiple tasks.
 	 */
 
 	spin_lock_irqsave(&priv->lock, flags);
@@ -137,7 +137,7 @@ static int uio_dmem_genirq_irqcontrol(struct uio_info *dev_info, s32 irq_on)
 			enable_irq(dev_info->irq);
 	} else {
 		if (!test_and_set_bit(0, &priv->flags))
-			disable_irq_nosync(dev_info->irq);
+			disable_irq(dev_info->irq);
 	}
 	spin_unlock_irqrestore(&priv->lock, flags);
 
@@ -163,8 +163,7 @@ static int uio_dmem_genirq_probe(struct platform_device *pdev)
 			dev_err(&pdev->dev, "unable to kmalloc\n");
 			goto bad2;
 		}
-		uioinfo->name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%pOFn",
-					       pdev->dev.of_node);
+		uioinfo->name = pdev->dev.of_node->name;
 		uioinfo->version = "devicetree";
 
 		/* Multiple IRQs are not supported */
@@ -203,8 +202,10 @@ static int uio_dmem_genirq_probe(struct platform_device *pdev)
 
 	if (!uioinfo->irq) {
 		ret = platform_get_irq(pdev, 0);
-		if (ret < 0)
+		if (ret < 0) {
+			dev_err(&pdev->dev, "failed to get IRQ\n");
 			goto bad1;
+		}
 		uioinfo->irq = ret;
 	}
 	uiomem = &uioinfo->mem[0];
@@ -228,7 +229,7 @@ static int uio_dmem_genirq_probe(struct platform_device *pdev)
 		++uiomem;
 	}
 
-	priv->dmem_region_start = uiomem - &uioinfo->mem[0];
+	priv->dmem_region_start = i;
 	priv->num_dmem_regions = pdata->num_dynamic_regions;
 
 	for (i = 0; i < pdata->num_dynamic_regions; ++i) {

@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * PMC MSP EHCI (Host Controller Driver) for USB.
  *
  * (C) Copyright 2006-2010 PMC-Sierra Inc
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
+ *
  */
 
 /* includes */
@@ -250,7 +254,7 @@ static const struct hc_driver ehci_msp_hc_driver = {
 	 * generic hardware linkage
 	 */
 	.irq =			ehci_irq,
-	.flags =		HCD_MEMORY | HCD_DMA | HCD_USB2 | HCD_BH,
+	.flags =		HCD_MEMORY | HCD_USB2 | HCD_BH,
 
 	/*
 	 * basic lifecycle operations

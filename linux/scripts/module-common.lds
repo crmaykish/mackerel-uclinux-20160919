@@ -4,10 +4,7 @@
  * combine them automatically.
  */
 SECTIONS {
-	/DISCARD/ : {
-		*(.discard)
-		*(.discard.*)
-	}
+	/DISCARD/ : { *(.discard) }
 
 	__ksymtab		0 : { *(SORT(___ksymtab+*)) }
 	__ksymtab_gpl		0 : { *(SORT(___ksymtab_gpl+*)) }
@@ -20,7 +17,6 @@ SECTIONS {
 	__kcrctab_unused_gpl	0 : { *(SORT(___kcrctab_unused_gpl+*)) }
 	__kcrctab_gpl_future	0 : { *(SORT(___kcrctab_gpl_future+*)) }
 
-	.init_array		0 : ALIGN(8) { *(SORT(.init_array.*)) *(.init_array) }
-
-	__jump_table		0 : ALIGN(8) { KEEP(*(__jump_table)) }
+	. = ALIGN(8);
+	.init_array		0 : { *(SORT(.init_array.*)) *(.init_array) }
 }

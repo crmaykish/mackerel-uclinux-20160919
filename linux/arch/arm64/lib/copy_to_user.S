@@ -1,13 +1,26 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2012 ARM Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/linkage.h>
 
-#include <asm/asm-uaccess.h>
+#include <asm/alternative.h>
 #include <asm/assembler.h>
 #include <asm/cache.h>
+#include <asm/cpufeature.h>
+#include <asm/sysreg.h>
 
 /*
  * Copy to user space from a kernel buffer (alignment handled by the hardware)
@@ -24,7 +37,7 @@
 	.endm
 
 	.macro strb1 ptr, regB, val
-	uao_user_alternative 9998f, strb, sttrb, \ptr, \regB, \val
+	USER(9998f, strb \ptr, [\regB], \val)
 	.endm
 
 	.macro ldrh1 ptr, regB, val
@@ -32,7 +45,7 @@
 	.endm
 
 	.macro strh1 ptr, regB, val
-	uao_user_alternative 9998f, strh, sttrh, \ptr, \regB, \val
+	USER(9998f, strh \ptr, [\regB], \val)
 	.endm
 
 	.macro ldr1 ptr, regB, val
@@ -40,7 +53,7 @@
 	.endm
 
 	.macro str1 ptr, regB, val
-	uao_user_alternative 9998f, str, sttr, \ptr, \regB, \val
+	USER(9998f, str \ptr, [\regB], \val)
 	.endm
 
 	.macro ldp1 ptr, regB, regC, val
@@ -48,17 +61,20 @@
 	.endm
 
 	.macro stp1 ptr, regB, regC, val
-	uao_stp 9998f, \ptr, \regB, \regC, \val
+	USER(9998f, stp \ptr, \regB, [\regC], \val)
 	.endm
 
 end	.req	x5
-SYM_FUNC_START(__arch_copy_to_user)
+ENTRY(__copy_to_user)
+ALTERNATIVE("nop", __stringify(SET_PSTATE_PAN(0)), ARM64_HAS_PAN, \
+	    CONFIG_ARM64_PAN)
 	add	end, x0, x2
 #include "copy_template.S"
+ALTERNATIVE("nop", __stringify(SET_PSTATE_PAN(1)), ARM64_HAS_PAN, \
+	    CONFIG_ARM64_PAN)
 	mov	x0, #0
 	ret
-SYM_FUNC_END(__arch_copy_to_user)
-EXPORT_SYMBOL(__arch_copy_to_user)
+ENDPROC(__copy_to_user)
 
 	.section .fixup,"ax"
 	.align	2

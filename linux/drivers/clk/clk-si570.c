@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for Silicon Labs Si570/Si571 Programmable XO/VCXO
  *
@@ -8,6 +7,16 @@
  *
  * Author: Guenter Roeck <guenter.roeck@ericsson.com>
  *	   Sören Brinkmann <soren.brinkmann@xilinx.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -399,6 +408,7 @@ static int si570_probe(struct i2c_client *client,
 {
 	struct clk_si570 *data;
 	struct clk_init_data init;
+	struct clk *clk;
 	u32 initial_fout, factory_fout, stability;
 	int err;
 	enum clk_si570_variant variant = id->driver_data;
@@ -408,7 +418,7 @@ static int si570_probe(struct i2c_client *client,
 		return -ENOMEM;
 
 	init.ops = &si570_clk_ops;
-	init.flags = 0;
+	init.flags = CLK_IS_ROOT;
 	init.num_parents = 0;
 	data->hw.init = &init;
 	data->i2c_client = client;
@@ -452,13 +462,13 @@ static int si570_probe(struct i2c_client *client,
 	if (err)
 		return err;
 
-	err = devm_clk_hw_register(&client->dev, &data->hw);
-	if (err) {
+	clk = devm_clk_register(&client->dev, &data->hw);
+	if (IS_ERR(clk)) {
 		dev_err(&client->dev, "clock registration failed\n");
-		return err;
+		return PTR_ERR(clk);
 	}
-	err = of_clk_add_hw_provider(client->dev.of_node, of_clk_hw_simple_get,
-				     &data->hw);
+	err = of_clk_add_provider(client->dev.of_node, of_clk_src_simple_get,
+			clk);
 	if (err) {
 		dev_err(&client->dev, "unable to add clk provider\n");
 		return err;
@@ -467,7 +477,7 @@ static int si570_probe(struct i2c_client *client,
 	/* Read the requested initial output frequency from device tree */
 	if (!of_property_read_u32(client->dev.of_node, "clock-frequency",
 				&initial_fout)) {
-		err = clk_set_rate(data->hw.clk, initial_fout);
+		err = clk_set_rate(clk, initial_fout);
 		if (err) {
 			of_clk_del_provider(client->dev.of_node);
 			return err;

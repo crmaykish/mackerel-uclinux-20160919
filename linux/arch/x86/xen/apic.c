@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/init.h>
 
 #include <asm/x86_init.h>
@@ -31,7 +30,7 @@ static unsigned int xen_io_apic_read(unsigned apic, unsigned reg)
 	return 0xfd;
 }
 
-static u32 xen_set_apic_id(unsigned int x)
+static unsigned long xen_set_apic_id(unsigned int x)
 {
 	WARN_ON(1);
 	return x;
@@ -57,7 +56,7 @@ static u32 xen_apic_read(u32 reg)
 		return 0;
 
 	if (reg == APIC_LVR)
-		return 0x14;
+		return 0x10;
 #ifdef CONFIG_X86_32
 	if (reg == APIC_LDR)
 		return SET_APIC_LOGICAL_ID(1UL << smp_processor_id());
@@ -65,9 +64,9 @@ static u32 xen_apic_read(u32 reg)
 	if (reg != APIC_ID)
 		return 0;
 
-	ret = HYPERVISOR_platform_op(&op);
+	ret = HYPERVISOR_dom0_op(&op);
 	if (ret)
-		op.u.pcpu_info.apic_id = BAD_APICID;
+		return 0;
 
 	return op.u.pcpu_info.apic_id << 24;
 }
@@ -112,7 +111,7 @@ static int xen_madt_oem_check(char *oem_id, char *oem_table_id)
 	return xen_pv_domain();
 }
 
-static int xen_id_always_valid(u32 apicid)
+static int xen_id_always_valid(int apicid)
 {
 	return 1;
 }
@@ -143,14 +142,6 @@ static void xen_silent_inquire(int apicid)
 {
 }
 
-static int xen_cpu_present_to_apicid(int cpu)
-{
-	if (cpu_present(cpu))
-		return cpu_data(cpu).apicid;
-	else
-		return BAD_APICID;
-}
-
 static struct apic xen_pv_apic = {
 	.name 				= "Xen PV",
 	.probe 				= xen_apic_probe_pv,
@@ -161,23 +152,26 @@ static struct apic xen_pv_apic = {
 	/* .irq_delivery_mode - used in native_compose_msi_msg only */
 	/* .irq_dest_mode     - used in native_compose_msi_msg only */
 
+	.target_cpus			= default_target_cpus,
 	.disable_esr			= 0,
 	/* .dest_logical      -  default_send_IPI_ use it but we use our own. */
 	.check_apicid_used		= default_check_apicid_used, /* Used on 32-bit */
 
+	.vector_allocation_domain	= flat_vector_allocation_domain,
 	.init_apic_ldr			= xen_noop, /* setup_local_APIC calls it */
 
 	.ioapic_phys_id_map		= default_ioapic_phys_id_map, /* Used on 32-bit */
 	.setup_apic_routing		= NULL,
-	.cpu_present_to_apicid		= xen_cpu_present_to_apicid,
+	.cpu_present_to_apicid		= default_cpu_present_to_apicid,
 	.apicid_to_cpu_present		= physid_set_mask_of_physid, /* Used on 32-bit */
 	.check_phys_apicid_present	= default_check_phys_apicid_present, /* smp_sanity_check needs it */
 	.phys_pkg_id			= xen_phys_pkg_id, /* detect_ht */
 
 	.get_apic_id 			= xen_get_apic_id,
 	.set_apic_id 			= xen_set_apic_id, /* Can be NULL on 32-bit. */
+	.apic_id_mask			= 0xFF << 24, /* Used by verify_local_APIC. Match with what xen_get_apic_id does. */
 
-	.calc_dest_apicid		= apic_flat_calc_apicid,
+	.cpu_mask_to_apicid_and		= flat_cpu_mask_to_apicid_and,
 
 #ifdef CONFIG_SMP
 	.send_IPI_mask 			= xen_send_IPI_mask,
@@ -215,7 +209,7 @@ static void __init xen_apic_check(void)
 }
 void __init xen_init_apic(void)
 {
-	x86_apic_ops.io_apic_read = xen_io_apic_read;
+	x86_io_apic_ops.read = xen_io_apic_read;
 	/* On PV guests the APIC CPUID bit is disabled so none of the
 	 * routines end up executing. */
 	if (!xen_initial_domain())

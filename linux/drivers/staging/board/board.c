@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2014 Magnus Damm
  * Copyright (C) 2015 Glider bvba
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
  */
 
 #define pr_fmt(fmt)	"board_staging: "  fmt
@@ -136,8 +139,8 @@ int __init board_staging_register_clock(const struct board_staging_clk *bsc)
 static int board_staging_add_dev_domain(struct platform_device *pdev,
 					const char *domain)
 {
-	struct device *dev = &pdev->dev;
 	struct of_phandle_args pd_args;
+	struct generic_pm_domain *pd;
 	struct device_node *np;
 
 	np = of_find_node_by_path(domain);
@@ -148,12 +151,15 @@ static int board_staging_add_dev_domain(struct platform_device *pdev,
 
 	pd_args.np = np;
 	pd_args.args_count = 0;
+	pd = of_genpd_get_from_provider(&pd_args);
+	if (IS_ERR(pd)) {
+		pr_err("Cannot find genpd %s (%ld)\n", domain, PTR_ERR(pd));
+		return PTR_ERR(pd);
 
-	/* Initialization similar to device_pm_init_common() */
-	spin_lock_init(&dev->power.lock);
-	dev->power.early_init = true;
+	}
+	pr_debug("Found genpd %s for device %s\n", pd->name, pdev->name);
 
-	return of_genpd_add_device(&pd_args, dev);
+	return pm_genpd_add_device(pd, &pdev->dev);
 }
 #else
 static inline int board_staging_add_dev_domain(struct platform_device *pdev,

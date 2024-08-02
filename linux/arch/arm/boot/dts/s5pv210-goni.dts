@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Samsung's S5PV210 SoC device tree source
  *
@@ -8,6 +7,10 @@
  * Tomasz Figa <t.figa@samsung.com>
  *
  * Board device tree source for Samsung Goni board.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 /dts-v1/;
@@ -26,7 +29,7 @@
 		bootargs = "console=ttySAC0,115200n8 root=/dev/mmcblk0p5 rw rootwait ignore_loglevel earlyprintk";
 	};
 
-	memory@30000000 {
+	memory {
 		device_type = "memory";
 		reg = <0x30000000 0x05000000
 			0x40000000 0x10000000
@@ -236,7 +239,7 @@
 			linux,code = <KEY_POWER>;
 			label = "power";
 			debounce-interval = <1>;
-			wakeup-source;
+			gpio-key,wakeup;
 		};
 	};
 };
@@ -247,7 +250,7 @@
 
 &keypad {
 	linux,input-no-autorepeat;
-	wakeup-source;
+	linux,input-wakeup;
 	samsung,keypad-num-rows = <3>;
 	samsung,keypad-num-columns = <3>;
 	pinctrl-names = "default";
@@ -376,7 +379,7 @@
 		vdd_core-supply = <&ldo14_reg>;
 
 		clock-frequency = <16000000>;
-		clocks = <&camera 0>;
+		clocks = <&clock_cam 0>;
 		clock-names = "mclk";
 		nreset-gpios = <&gpb 2 0>;
 		nstby-gpios = <&gpb 0 0>;

@@ -1,11 +1,25 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
 * Filename: core.c
+*
 *
 * Authors: Joshua Morris <josh.h.morris@us.ibm.com>
 *	Philip Kelleher <pjk1939@linux.vnet.ibm.com>
 *
 * (C) Copyright 2013 IBM Corporation
+*
+* This program is free software; you can redistribute it and/or
+* modify it under the terms of the GNU General Public License as
+* published by the Free Software Foundation; either version 2 of the
+* License, or (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful, but
+* WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+* General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software Foundation,
+* Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 */
 
 #include <linux/kernel.h>
@@ -44,6 +58,7 @@ MODULE_PARM_DESC(sync_start, "On by Default: Driver load will not complete "
 			     "until the card startup has completed.");
 
 static DEFINE_IDA(rsxx_disk_ida);
+static DEFINE_SPINLOCK(rsxx_ida_lock);
 
 /* --------------------Debugfs Setup ------------------- */
 
@@ -165,17 +180,15 @@ static ssize_t rsxx_cram_read(struct file *fp, char __user *ubuf,
 {
 	struct rsxx_cardinfo *card = file_inode(fp)->i_private;
 	char *buf;
-	int st;
+	ssize_t st;
 
 	buf = kzalloc(cnt, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
 	st = rsxx_creg_read(card, CREG_ADD_CRAM + (u32)*ppos, cnt, buf, 1);
-	if (!st) {
-		if (copy_to_user(ubuf, buf, cnt))
-			st = -EFAULT;
-	}
+	if (!st)
+		st = copy_to_user(ubuf, buf, cnt);
 	kfree(buf);
 	if (st)
 		return st;
@@ -190,11 +203,14 @@ static ssize_t rsxx_cram_write(struct file *fp, const char __user *ubuf,
 	char *buf;
 	ssize_t st;
 
-	buf = memdup_user(ubuf, cnt);
-	if (IS_ERR(buf))
-		return PTR_ERR(buf);
+	buf = kzalloc(cnt, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
 
-	st = rsxx_creg_write(card, CREG_ADD_CRAM + (u32)*ppos, cnt, buf, 1);
+	st = copy_from_user(buf, ubuf, cnt);
+	if (!st)
+		st = rsxx_creg_write(card, CREG_ADD_CRAM + (u32)*ppos, cnt,
+				     buf, 1);
 	kfree(buf);
 	if (st)
 		return st;
@@ -234,19 +250,19 @@ static void rsxx_debugfs_dev_new(struct rsxx_cardinfo *card)
 	if (IS_ERR_OR_NULL(card->debugfs_dir))
 		goto failed_debugfs_dir;
 
-	debugfs_stats = debugfs_create_file("stats", 0444,
+	debugfs_stats = debugfs_create_file("stats", S_IRUGO,
 					    card->debugfs_dir, card,
 					    &debugfs_stats_fops);
 	if (IS_ERR_OR_NULL(debugfs_stats))
 		goto failed_debugfs_stats;
 
-	debugfs_pci_regs = debugfs_create_file("pci_regs", 0444,
+	debugfs_pci_regs = debugfs_create_file("pci_regs", S_IRUGO,
 					       card->debugfs_dir, card,
 					       &debugfs_pci_regs_fops);
 	if (IS_ERR_OR_NULL(debugfs_pci_regs))
 		goto failed_debugfs_pci_regs;
 
-	debugfs_cram = debugfs_create_file("cram", 0644,
+	debugfs_cram = debugfs_create_file("cram", S_IRUGO | S_IWUSR,
 					   card->debugfs_dir, card,
 					   &debugfs_cram_fops);
 	if (IS_ERR_OR_NULL(debugfs_cram))
@@ -427,7 +443,6 @@ static void card_state_change(struct rsxx_cardinfo *card,
 		 * Fall through so the DMA devices can be attached and
 		 * the user can attempt to pull off their data.
 		 */
-		/* fall through */
 	case CARD_STATE_GOOD:
 		st = rsxx_get_card_size8(card, &card->size8);
 		if (st)
@@ -759,18 +774,28 @@ static int rsxx_pci_probe(struct pci_dev *dev,
 	card->dev = dev;
 	pci_set_drvdata(dev, card);
 
-	st = ida_alloc(&rsxx_disk_ida, GFP_KERNEL);
-	if (st < 0)
+	do {
+		if (!ida_pre_get(&rsxx_disk_ida, GFP_KERNEL)) {
+			st = -ENOMEM;
+			goto failed_ida_get;
+		}
+
+		spin_lock(&rsxx_ida_lock);
+		st = ida_get_new(&rsxx_disk_ida, &card->disk_id);
+		spin_unlock(&rsxx_ida_lock);
+	} while (st == -EAGAIN);
+
+	if (st)
 		goto failed_ida_get;
-	card->disk_id = st;
 
 	st = pci_enable_device(dev);
 	if (st)
 		goto failed_enable;
 
 	pci_set_master(dev);
+	pci_set_dma_max_seg_size(dev, RSXX_HW_BLK_SIZE);
 
-	st = dma_set_mask(&dev->dev, DMA_BIT_MASK(64));
+	st = pci_set_dma_mask(dev, DMA_BIT_MASK(64));
 	if (st) {
 		dev_err(CARD_TO_DEV(card),
 			"No usable DMA configuration,aborting\n");
@@ -851,8 +876,7 @@ static int rsxx_pci_probe(struct pci_dev *dev,
 		dev_info(CARD_TO_DEV(card),
 			"Failed reading the number of DMA targets\n");
 
-	card->ctrl = kcalloc(card->n_targets, sizeof(*card->ctrl),
-			     GFP_KERNEL);
+	card->ctrl = kzalloc(card->n_targets * sizeof(*card->ctrl), GFP_KERNEL);
 	if (!card->ctrl) {
 		st = -ENOMEM;
 		goto failed_dma_setup;
@@ -869,7 +893,6 @@ static int rsxx_pci_probe(struct pci_dev *dev,
 	card->event_wq = create_singlethread_workqueue(DRIVER_NAME"_event");
 	if (!card->event_wq) {
 		dev_err(CARD_TO_DEV(card), "Failed card event setup.\n");
-		st = -ENOMEM;
 		goto failed_event_handler;
 	}
 
@@ -964,7 +987,9 @@ failed_request_regions:
 failed_dma_mask:
 	pci_disable_device(dev);
 failed_enable:
-	ida_free(&rsxx_disk_ida, card->disk_id);
+	spin_lock(&rsxx_ida_lock);
+	ida_remove(&rsxx_disk_ida, card->disk_id);
+	spin_unlock(&rsxx_ida_lock);
 failed_ida_get:
 	kfree(card);
 
@@ -1003,10 +1028,8 @@ static void rsxx_pci_remove(struct pci_dev *dev)
 
 	cancel_work_sync(&card->event_work);
 
-	destroy_workqueue(card->event_wq);
 	rsxx_destroy_dev(card);
 	rsxx_dma_destroy(card);
-	destroy_workqueue(card->creg_ctrl.creg_wq);
 
 	spin_lock_irqsave(&card->irq_lock, flags);
 	rsxx_disable_ier_and_isr(card, CR_INTR_ALL);
@@ -1029,7 +1052,6 @@ static void rsxx_pci_remove(struct pci_dev *dev)
 	pci_disable_device(dev);
 	pci_release_regions(dev);
 
-	ida_free(&rsxx_disk_ida, card->disk_id);
 	kfree(card);
 }
 

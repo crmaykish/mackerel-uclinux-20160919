@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /**
  * Copyright (C) 2006 Juergen Beisert, Pengutronix
  * Copyright (C) 2008 Guennadi Liakhovetski, Pengutronix
  * Copyright (C) 2009 Wolfram Sang, Pengutronix
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * The Maxim MAX7300/1 device is an I2C/SPI driven GPIO expander. There are
  * 28 GPIOs. 8 of them can trigger an interrupt. See datasheet for more
@@ -32,7 +35,7 @@
 #include <linux/platform_device.h>
 #include <linux/mutex.h>
 #include <linux/spi/max7301.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/slab.h>
 
 /*
@@ -47,7 +50,7 @@
 
 static int max7301_direction_input(struct gpio_chip *chip, unsigned offset)
 {
-	struct max7301 *ts = gpiochip_get_data(chip);
+	struct max7301 *ts = container_of(chip, struct max7301, chip);
 	u8 *config;
 	u8 offset_bits, pin_config;
 	int ret;
@@ -89,7 +92,7 @@ static int __max7301_set(struct max7301 *ts, unsigned offset, int value)
 static int max7301_direction_output(struct gpio_chip *chip, unsigned offset,
 				    int value)
 {
-	struct max7301 *ts = gpiochip_get_data(chip);
+	struct max7301 *ts = container_of(chip, struct max7301, chip);
 	u8 *config;
 	u8 offset_bits;
 	int ret;
@@ -117,7 +120,7 @@ static int max7301_direction_output(struct gpio_chip *chip, unsigned offset,
 
 static int max7301_get(struct gpio_chip *chip, unsigned offset)
 {
-	struct max7301 *ts = gpiochip_get_data(chip);
+	struct max7301 *ts = container_of(chip, struct max7301, chip);
 	int config, level = -EINVAL;
 
 	/* First 4 pins are unused in the controller */
@@ -145,7 +148,7 @@ static int max7301_get(struct gpio_chip *chip, unsigned offset)
 
 static void max7301_set(struct gpio_chip *chip, unsigned offset, int value)
 {
-	struct max7301 *ts = gpiochip_get_data(chip);
+	struct max7301 *ts = container_of(chip, struct max7301, chip);
 
 	/* First 4 pins are unused in the controller */
 	offset += 4;
@@ -186,12 +189,8 @@ int __max730x_probe(struct max7301 *ts)
 
 	ts->chip.ngpio = PIN_NUMBER;
 	ts->chip.can_sleep = true;
-	ts->chip.parent = dev;
+	ts->chip.dev = dev;
 	ts->chip.owner = THIS_MODULE;
-
-	ret = gpiochip_add_data(&ts->chip, ts);
-	if (ret)
-		goto exit_destroy;
 
 	/*
 	 * initialize pullups according to platform data and cache the
@@ -213,6 +212,10 @@ int __max730x_probe(struct max7301 *ts)
 				goto exit_destroy;
 		}
 	}
+
+	ret = gpiochip_add(&ts->chip);
+	if (ret)
+		goto exit_destroy;
 
 	return ret;
 

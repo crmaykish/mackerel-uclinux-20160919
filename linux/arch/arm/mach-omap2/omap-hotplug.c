@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * OMAP4 SMP cpu-hotplug support
  *
@@ -9,6 +8,10 @@
  * Platform file needed for the OMAP4 SMP. This file is based on arm
  * realview smp platform.
  * Copyright (c) 2002 ARM Limited.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -47,7 +50,7 @@ void omap4_cpu_die(unsigned int cpu)
 		omap4_hotplug_cpu(cpu, PWRDM_POWER_OFF);
 
 		if (omap_secure_apis_support())
-			boot_cpu = omap_read_auxcoreboot0() >> 9;
+			boot_cpu = omap_read_auxcoreboot0();
 		else
 			boot_cpu =
 				readl_relaxed(base + OMAP_AUX_CORE_BOOT_0) >> 5;
@@ -60,10 +63,4 @@ void omap4_cpu_die(unsigned int cpu)
 		}
 		pr_debug("CPU%u: spurious wakeup call\n", cpu);
 	}
-}
-
-/* Needed by kexec and platform_can_cpu_hotplug() */
-int omap4_cpu_kill(unsigned int cpu)
-{
-	return 1;
 }

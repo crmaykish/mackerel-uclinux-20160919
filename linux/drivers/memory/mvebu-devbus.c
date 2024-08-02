@@ -1,9 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Marvell EBU SoC Device Bus Controller
  * (memory controller for NOR/NAND/SRAM/FPGA devices)
  *
  * Copyright (C) 2013-2014 Marvell
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation version 2 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
  */
 
 #include <linux/kernel.h>
@@ -93,8 +105,8 @@ static int get_timing_param_ps(struct devbus *devbus,
 
 	err = of_property_read_u32(node, name, &time_ps);
 	if (err < 0) {
-		dev_err(devbus->dev, "%pOF has no '%s' property\n",
-			node, name);
+		dev_err(devbus->dev, "%s has no '%s' property\n",
+			name, node->full_name);
 		return err;
 	}
 
@@ -115,8 +127,8 @@ static int devbus_get_timing_params(struct devbus *devbus,
 	err = of_property_read_u32(node, "devbus,bus-width", &r->bus_width);
 	if (err < 0) {
 		dev_err(devbus->dev,
-			"%pOF has no 'devbus,bus-width' property\n",
-			node);
+			"%s has no 'devbus,bus-width' property\n",
+			node->full_name);
 		return err;
 	}
 
@@ -168,8 +180,8 @@ static int devbus_get_timing_params(struct devbus *devbus,
 					   &w->sync_enable);
 		if (err < 0) {
 			dev_err(devbus->dev,
-				"%pOF has no 'devbus,sync-enable' property\n",
-				node);
+				"%s has no 'devbus,sync-enable' property\n",
+				node->full_name);
 			return err;
 		}
 	}
@@ -282,9 +294,10 @@ static int mvebu_devbus_probe(struct platform_device *pdev)
 	if (IS_ERR(devbus->base))
 		return PTR_ERR(devbus->base);
 
-	clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
+	clk_prepare_enable(clk);
 
 	/*
 	 * Obtain clock period in picoseconds,

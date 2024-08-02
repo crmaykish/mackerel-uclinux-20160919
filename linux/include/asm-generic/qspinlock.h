@@ -1,11 +1,19 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Queued spinlock
  *
- * (C) Copyright 2013-2015 Hewlett-Packard Development Company, L.P.
- * (C) Copyright 2015 Hewlett-Packard Enterprise Development LP
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- * Authors: Waiman Long <waiman.long@hpe.com>
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * (C) Copyright 2013-2015 Hewlett-Packard Development Company, L.P.
+ *
+ * Authors: Waiman Long <waiman.long@hp.com>
  */
 #ifndef __ASM_GENERIC_QSPINLOCK_H
 #define __ASM_GENERIC_QSPINLOCK_H
@@ -19,10 +27,6 @@
  */
 static __always_inline int queued_spin_is_locked(struct qspinlock *lock)
 {
-	/*
-	 * Any !0 state indicates it is locked, even if _Q_LOCKED_VAL
-	 * isn't immediately observable.
-	 */
 	return atomic_read(&lock->val);
 }
 
@@ -38,7 +42,7 @@ static __always_inline int queued_spin_is_locked(struct qspinlock *lock)
  */
 static __always_inline int queued_spin_value_unlocked(struct qspinlock lock)
 {
-	return !lock.val.counter;
+	return !atomic_read(&lock.val);
 }
 
 /**
@@ -57,12 +61,10 @@ static __always_inline int queued_spin_is_contended(struct qspinlock *lock)
  */
 static __always_inline int queued_spin_trylock(struct qspinlock *lock)
 {
-	u32 val = atomic_read(&lock->val);
-
-	if (unlikely(val))
-		return 0;
-
-	return likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL));
+	if (!atomic_read(&lock->val) &&
+	   (atomic_cmpxchg(&lock->val, 0, _Q_LOCKED_VAL) == 0))
+		return 1;
+	return 0;
 }
 
 extern void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val);
@@ -73,11 +75,11 @@ extern void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val);
  */
 static __always_inline void queued_spin_lock(struct qspinlock *lock)
 {
-	u32 val = 0;
+	u32 val;
 
-	if (likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL)))
+	val = atomic_cmpxchg(&lock->val, 0, _Q_LOCKED_VAL);
+	if (likely(val == 0))
 		return;
-
 	queued_spin_lock_slowpath(lock, val);
 }
 
@@ -89,11 +91,25 @@ static __always_inline void queued_spin_lock(struct qspinlock *lock)
 static __always_inline void queued_spin_unlock(struct qspinlock *lock)
 {
 	/*
-	 * unlock() needs release semantics:
+	 * smp_mb__before_atomic() in order to guarantee release semantics
 	 */
-	smp_store_release(&lock->locked, 0);
+	smp_mb__before_atomic_dec();
+	atomic_sub(_Q_LOCKED_VAL, &lock->val);
 }
 #endif
+
+/**
+ * queued_spin_unlock_wait - wait until current lock holder releases the lock
+ * @lock : Pointer to queued spinlock structure
+ *
+ * There is a very slight possibility of live-lock if the lockers keep coming
+ * and the waiter is just unfortunate enough to not see any unlock state.
+ */
+static inline void queued_spin_unlock_wait(struct qspinlock *lock)
+{
+	while (atomic_read(&lock->val) & _Q_LOCKED_MASK)
+		cpu_relax();
+}
 
 #ifndef virt_spin_lock
 static __always_inline bool virt_spin_lock(struct qspinlock *lock)
@@ -101,6 +117,11 @@ static __always_inline bool virt_spin_lock(struct qspinlock *lock)
 	return false;
 }
 #endif
+
+/*
+ * Initializier
+ */
+#define	__ARCH_SPIN_LOCK_UNLOCKED	{ ATOMIC_INIT(0) }
 
 /*
  * Remapping spinlock architecture specific functions to the corresponding
@@ -112,5 +133,7 @@ static __always_inline bool virt_spin_lock(struct qspinlock *lock)
 #define arch_spin_lock(l)		queued_spin_lock(l)
 #define arch_spin_trylock(l)		queued_spin_trylock(l)
 #define arch_spin_unlock(l)		queued_spin_unlock(l)
+#define arch_spin_lock_flags(l, f)	queued_spin_lock(l)
+#define arch_spin_unlock_wait(l)	queued_spin_unlock_wait(l)
 
 #endif /* __ASM_GENERIC_QSPINLOCK_H */

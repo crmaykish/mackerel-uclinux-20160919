@@ -1,12 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2002, 2003 Andi Kleen, SuSE Labs.
+ * Subject to the GNU Public License v.2
  *
  * Wrappers of assembly checksum functions for x86-64.
  */
 #include <asm/checksum.h>
-#include <linux/export.h>
-#include <linux/uaccess.h>
+#include <linux/module.h>
 #include <asm/smap.h>
 
 /**
@@ -27,7 +26,7 @@ csum_partial_copy_from_user(const void __user *src, void *dst,
 	might_sleep();
 	*errp = 0;
 
-	if (!likely(access_ok(src, len)))
+	if (!likely(access_ok(VERIFY_READ, src, len)))
 		goto out_err;
 
 	/*
@@ -89,7 +88,7 @@ csum_partial_copy_to_user(const void *src, void __user *dst,
 
 	might_sleep();
 
-	if (unlikely(!access_ok(dst, len))) {
+	if (unlikely(!access_ok(VERIFY_WRITE, dst, len))) {
 		*errp = -EFAULT;
 		return 0;
 	}
@@ -136,7 +135,7 @@ EXPORT_SYMBOL(csum_partial_copy_nocheck);
 
 __sum16 csum_ipv6_magic(const struct in6_addr *saddr,
 			const struct in6_addr *daddr,
-			__u32 len, __u8 proto, __wsum sum)
+			__u32 len, unsigned short proto, __wsum sum)
 {
 	__u64 rest, sum64;
 

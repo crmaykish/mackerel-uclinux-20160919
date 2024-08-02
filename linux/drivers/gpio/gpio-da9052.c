@@ -1,16 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * GPIO Driver for Dialog DA9052 PMICs.
  *
  * Copyright(c) 2011 Dialog Semiconductor Ltd.
  *
  * Author: David Dajun Chen <dchen@diasemi.com>
+ *
+ *  This program is free software; you can redistribute  it and/or modify it
+ *  under  the terms of  the GNU General  Public License as published by the
+ *  Free Software Foundation;  either version 2 of the  License, or (at your
+ *  option) any later version.
+ *
  */
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/platform_device.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/syscalls.h>
 #include <linux/seq_file.h>
 
@@ -46,6 +51,11 @@ struct da9052_gpio {
 	struct gpio_chip gp;
 };
 
+static inline struct da9052_gpio *to_da9052_gpio(struct gpio_chip *chip)
+{
+	return container_of(chip, struct da9052_gpio, gp);
+}
+
 static unsigned char da9052_gpio_port_odd(unsigned offset)
 {
 	return offset % 2;
@@ -53,7 +63,7 @@ static unsigned char da9052_gpio_port_odd(unsigned offset)
 
 static int da9052_gpio_get(struct gpio_chip *gc, unsigned offset)
 {
-	struct da9052_gpio *gpio = gpiochip_get_data(gc);
+	struct da9052_gpio *gpio = to_da9052_gpio(gc);
 	int da9052_port_direction = 0;
 	int ret;
 
@@ -79,12 +89,15 @@ static int da9052_gpio_get(struct gpio_chip *gc, unsigned offset)
 					      DA9052_STATUS_D_REG);
 		if (ret < 0)
 			return ret;
-		return !!(ret & (1 << DA9052_GPIO_SHIFT_COUNT(offset)));
+		if (ret & (1 << DA9052_GPIO_SHIFT_COUNT(offset)))
+			return 1;
+		else
+			return 0;
 	case DA9052_OUTPUT_PUSHPULL:
 		if (da9052_gpio_port_odd(offset))
-			return !!(ret & DA9052_GPIO_ODD_PORT_MODE);
+			return ret & DA9052_GPIO_ODD_PORT_MODE;
 		else
-			return !!(ret & DA9052_GPIO_EVEN_PORT_MODE);
+			return ret & DA9052_GPIO_EVEN_PORT_MODE;
 	default:
 		return -EINVAL;
 	}
@@ -92,7 +105,7 @@ static int da9052_gpio_get(struct gpio_chip *gc, unsigned offset)
 
 static void da9052_gpio_set(struct gpio_chip *gc, unsigned offset, int value)
 {
-	struct da9052_gpio *gpio = gpiochip_get_data(gc);
+	struct da9052_gpio *gpio = to_da9052_gpio(gc);
 	int ret;
 
 	if (da9052_gpio_port_odd(offset)) {
@@ -118,7 +131,7 @@ static void da9052_gpio_set(struct gpio_chip *gc, unsigned offset, int value)
 
 static int da9052_gpio_direction_input(struct gpio_chip *gc, unsigned offset)
 {
-	struct da9052_gpio *gpio = gpiochip_get_data(gc);
+	struct da9052_gpio *gpio = to_da9052_gpio(gc);
 	unsigned char register_value;
 	int ret;
 
@@ -144,7 +157,7 @@ static int da9052_gpio_direction_input(struct gpio_chip *gc, unsigned offset)
 static int da9052_gpio_direction_output(struct gpio_chip *gc,
 					unsigned offset, int value)
 {
-	struct da9052_gpio *gpio = gpiochip_get_data(gc);
+	struct da9052_gpio *gpio = to_da9052_gpio(gc);
 	unsigned char register_value;
 	int ret;
 
@@ -169,7 +182,7 @@ static int da9052_gpio_direction_output(struct gpio_chip *gc,
 
 static int da9052_gpio_to_irq(struct gpio_chip *gc, u32 offset)
 {
-	struct da9052_gpio *gpio = gpiochip_get_data(gc);
+	struct da9052_gpio *gpio = to_da9052_gpio(gc);
 	struct da9052 *da9052 = gpio->da9052;
 
 	int irq;
@@ -179,7 +192,7 @@ static int da9052_gpio_to_irq(struct gpio_chip *gc, u32 offset)
 	return irq;
 }
 
-static const struct gpio_chip reference_gp = {
+static struct gpio_chip reference_gp = {
 	.label = "da9052-gpio",
 	.owner = THIS_MODULE,
 	.get = da9052_gpio_get,
@@ -209,7 +222,7 @@ static int da9052_gpio_probe(struct platform_device *pdev)
 	if (pdata && pdata->gpio_base)
 		gpio->gp.base = pdata->gpio_base;
 
-	ret = devm_gpiochip_add_data(&pdev->dev, &gpio->gp, gpio);
+	ret = gpiochip_add(&gpio->gp);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Could not register gpiochip, %d\n", ret);
 		return ret;
@@ -220,8 +233,17 @@ static int da9052_gpio_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int da9052_gpio_remove(struct platform_device *pdev)
+{
+	struct da9052_gpio *gpio = platform_get_drvdata(pdev);
+
+	gpiochip_remove(&gpio->gp);
+	return 0;
+}
+
 static struct platform_driver da9052_gpio_driver = {
 	.probe = da9052_gpio_probe,
+	.remove = da9052_gpio_remove,
 	.driver = {
 		.name	= "da9052-gpio",
 	},

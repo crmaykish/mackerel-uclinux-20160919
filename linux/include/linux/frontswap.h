@@ -1,18 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_FRONTSWAP_H
 #define _LINUX_FRONTSWAP_H
 
 #include <linux/swap.h>
 #include <linux/mm.h>
 #include <linux/bitops.h>
-#include <linux/jump_label.h>
-
-/*
- * Return code to denote that requested number of
- * frontswap pages are unused(moved to page cache).
- * Used in in shmem_unuse and try_to_unuse.
- */
-#define FRONTSWAP_PAGES_UNUSED	2
 
 struct frontswap_ops {
 	void (*init)(unsigned); /* this swap type was just swapon'ed */
@@ -23,6 +14,7 @@ struct frontswap_ops {
 	struct frontswap_ops *next; /* private pointer to next ops */
 };
 
+extern bool frontswap_enabled;
 extern void frontswap_register_ops(struct frontswap_ops *ops);
 extern void frontswap_shrink(unsigned long);
 extern unsigned long frontswap_curr_pages(void);
@@ -38,12 +30,7 @@ extern void __frontswap_invalidate_page(unsigned, pgoff_t);
 extern void __frontswap_invalidate_area(unsigned);
 
 #ifdef CONFIG_FRONTSWAP
-extern struct static_key_false frontswap_enabled_key;
-
-static inline bool frontswap_enabled(void)
-{
-	return static_branch_unlikely(&frontswap_enabled_key);
-}
+#define frontswap_enabled (1)
 
 static inline bool frontswap_test(struct swap_info_struct *sis, pgoff_t offset)
 {
@@ -63,10 +50,7 @@ static inline unsigned long *frontswap_map_get(struct swap_info_struct *p)
 #else
 /* all inline routines become no-ops and all externs are ignored */
 
-static inline bool frontswap_enabled(void)
-{
-	return false;
-}
+#define frontswap_enabled (0)
 
 static inline bool frontswap_test(struct swap_info_struct *sis, pgoff_t offset)
 {
@@ -86,37 +70,38 @@ static inline unsigned long *frontswap_map_get(struct swap_info_struct *p)
 
 static inline int frontswap_store(struct page *page)
 {
-	if (frontswap_enabled())
-		return __frontswap_store(page);
+	int ret = -1;
 
-	return -1;
+	if (frontswap_enabled)
+		ret = __frontswap_store(page);
+	return ret;
 }
 
 static inline int frontswap_load(struct page *page)
 {
-	if (frontswap_enabled())
-		return __frontswap_load(page);
+	int ret = -1;
 
-	return -1;
+	if (frontswap_enabled)
+		ret = __frontswap_load(page);
+	return ret;
 }
 
 static inline void frontswap_invalidate_page(unsigned type, pgoff_t offset)
 {
-	if (frontswap_enabled())
+	if (frontswap_enabled)
 		__frontswap_invalidate_page(type, offset);
 }
 
 static inline void frontswap_invalidate_area(unsigned type)
 {
-	if (frontswap_enabled())
+	if (frontswap_enabled)
 		__frontswap_invalidate_area(type);
 }
 
 static inline void frontswap_init(unsigned type, unsigned long *map)
 {
-#ifdef CONFIG_FRONTSWAP
-	__frontswap_init(type, map);
-#endif
+	if (frontswap_enabled)
+		__frontswap_init(type, map);
 }
 
 #endif /* _LINUX_FRONTSWAP_H */

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Pioctl operations for Coda.
  * Original version: (C) 1996 Peter Braam
@@ -20,7 +19,8 @@
 #include <linux/uaccess.h>
 
 #include <linux/coda.h>
-#include "coda_psdev.h"
+#include <linux/coda_psdev.h>
+
 #include "coda_linux.h"
 
 /* pioctl ops */
@@ -35,6 +35,7 @@ const struct inode_operations coda_ioctl_inode_operations = {
 };
 
 const struct file_operations coda_ioctl_operations = {
+	.owner		= THIS_MODULE,
 	.unlocked_ioctl	= coda_pioctl,
 	.llseek		= noop_llseek,
 };
@@ -63,8 +64,11 @@ static long coda_pioctl(struct file *filp, unsigned int cmd,
 	 * Look up the pathname. Note that the pathname is in
 	 * user memory, and namei takes care of this
 	 */
-	error = user_path_at(AT_FDCWD, data.path,
-			     data.follow ? LOOKUP_FOLLOW : 0, &path);
+	if (data.follow)
+		error = user_path(data.path, &path);
+	else
+		error = user_lpath(data.path, &path);
+
 	if (error)
 		return error;
 

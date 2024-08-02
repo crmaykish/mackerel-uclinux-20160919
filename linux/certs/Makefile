@@ -1,15 +1,8 @@
-# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for the linux kernel signature checking certificates.
 #
 
-obj-$(CONFIG_SYSTEM_TRUSTED_KEYRING) += system_keyring.o system_certificates.o common.o
-obj-$(CONFIG_SYSTEM_BLACKLIST_KEYRING) += blacklist.o
-ifneq ($(CONFIG_SYSTEM_BLACKLIST_HASH_LIST),"")
-obj-$(CONFIG_SYSTEM_BLACKLIST_KEYRING) += blacklist_hashes.o
-else
-obj-$(CONFIG_SYSTEM_BLACKLIST_KEYRING) += blacklist_nohashes.o
-endif
+obj-$(CONFIG_SYSTEM_TRUSTED_KEYRING) += system_keyring.o system_certificates.o
 
 ifeq ($(CONFIG_SYSTEM_TRUSTED_KEYRING),y)
 
@@ -22,12 +15,12 @@ $(obj)/system_certificates.o: $(obj)/x509_certificate_list
 AFLAGS_system_certificates.o := -I$(srctree)
 
 quiet_cmd_extract_certs  = EXTRACT_CERTS   $(patsubst "%",%,$(2))
-      cmd_extract_certs  = scripts/extract-cert $(2) $@
+      cmd_extract_certs  = scripts/extract-cert $(2) $@ || ( rm $@; exit 1)
 
 targets += x509_certificate_list
 $(obj)/x509_certificate_list: scripts/extract-cert $(SYSTEM_TRUSTED_KEYS_SRCPREFIX)$(SYSTEM_TRUSTED_KEYS_FILENAME) FORCE
 	$(call if_changed,extract_certs,$(SYSTEM_TRUSTED_KEYS_SRCPREFIX)$(CONFIG_SYSTEM_TRUSTED_KEYS))
-endif # CONFIG_SYSTEM_TRUSTED_KEYRING
+endif
 
 clean-files := x509_certificate_list .x509.list
 
@@ -43,42 +36,29 @@ ifndef CONFIG_MODULE_SIG_HASH
 $(error Could not determine digest type to use from kernel config)
 endif
 
-redirect_openssl	= 2>&1
-quiet_redirect_openssl	= 2>&1
-silent_redirect_openssl = 2>/dev/null
-openssl_available       = $(shell openssl help 2>/dev/null && echo yes)
-
 # We do it this way rather than having a boolean option for enabling an
 # external private key, because 'make randconfig' might enable such a
 # boolean option and we unfortunately can't make it depend on !RANDCONFIG.
 ifeq ($(CONFIG_MODULE_SIG_KEY),"certs/signing_key.pem")
-
-ifeq ($(openssl_available),yes)
-X509TEXT=$(shell openssl x509 -in "certs/signing_key.pem" -text 2>/dev/null)
-
-$(if $(findstring rsaEncryption,$(X509TEXT)),,$(shell rm -f "certs/signing_key.pem"))
-endif
-
 $(obj)/signing_key.pem: $(obj)/x509.genkey
-	@$(kecho) "###"
-	@$(kecho) "### Now generating an X.509 key pair to be used for signing modules."
-	@$(kecho) "###"
-	@$(kecho) "### If this takes a long time, you might wish to run rngd in the"
-	@$(kecho) "### background to keep the supply of entropy topped up.  It"
-	@$(kecho) "### needs to be run as root, and uses a hardware random"
-	@$(kecho) "### number generator if one is available."
-	@$(kecho) "###"
-	$(Q)openssl req -new -nodes -utf8 -$(CONFIG_MODULE_SIG_HASH) -days 36500 \
+	@echo "###"
+	@echo "### Now generating an X.509 key pair to be used for signing modules."
+	@echo "###"
+	@echo "### If this takes a long time, you might wish to run rngd in the"
+	@echo "### background to keep the supply of entropy topped up.  It"
+	@echo "### needs to be run as root, and uses a hardware random"
+	@echo "### number generator if one is available."
+	@echo "###"
+	openssl req -new -nodes -utf8 -$(CONFIG_MODULE_SIG_HASH) -days 36500 \
 		-batch -x509 -config $(obj)/x509.genkey \
 		-outform PEM -out $(obj)/signing_key.pem \
-		-keyout $(obj)/signing_key.pem \
-		$($(quiet)redirect_openssl)
-	@$(kecho) "###"
-	@$(kecho) "### Key pair generated."
-	@$(kecho) "###"
+		-keyout $(obj)/signing_key.pem 2>&1
+	@echo "###"
+	@echo "### Key pair generated."
+	@echo "###"
 
 $(obj)/x509.genkey:
-	@$(kecho) Generating X.509 key generation config
+	@echo Generating X.509 key generation config
 	@echo  >$@ "[ req ]"
 	@echo >>$@ "default_bits = 4096"
 	@echo >>$@ "distinguished_name = req_distinguished_name"
@@ -96,7 +76,7 @@ $(obj)/x509.genkey:
 	@echo >>$@ "keyUsage=digitalSignature"
 	@echo >>$@ "subjectKeyIdentifier=hash"
 	@echo >>$@ "authorityKeyIdentifier=keyid"
-endif # CONFIG_MODULE_SIG_KEY
+endif
 
 $(eval $(call config_filename,MODULE_SIG_KEY))
 
@@ -111,4 +91,4 @@ $(obj)/system_certificates.o: $(obj)/signing_key.x509
 targets += signing_key.x509
 $(obj)/signing_key.x509: scripts/extract-cert $(X509_DEP) FORCE
 	$(call if_changed,extract_certs,$(MODULE_SIG_KEY_SRCPREFIX)$(CONFIG_MODULE_SIG_KEY))
-endif # CONFIG_MODULE_SIG
+endif

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * workqueue.h --- work queue handling for Linux.
  */
@@ -13,13 +12,12 @@
 #include <linux/threads.h>
 #include <linux/atomic.h>
 #include <linux/cpumask.h>
-#include <linux/rcupdate.h>
 
 struct workqueue_struct;
 
 struct work_struct;
 typedef void (*work_func_t)(struct work_struct *work);
-void delayed_work_timer_fn(struct timer_list *t);
+void delayed_work_timer_fn(unsigned long __data);
 
 /*
  * The first word is the work queue pointer and the flags rolled into
@@ -73,6 +71,7 @@ enum {
 	WORK_OFFQ_FLAG_BASE	= WORK_STRUCT_COLOR_SHIFT,
 
 	__WORK_OFFQ_CANCELING	= WORK_OFFQ_FLAG_BASE,
+	WORK_OFFQ_CANCELING	= (1 << __WORK_OFFQ_CANCELING),
 
 	/*
 	 * When a work item is off queue, its high bits point to the last
@@ -83,6 +82,12 @@ enum {
 	WORK_OFFQ_POOL_SHIFT	= WORK_OFFQ_FLAG_BASE + WORK_OFFQ_FLAG_BITS,
 	WORK_OFFQ_LEFT		= BITS_PER_LONG - WORK_OFFQ_POOL_SHIFT,
 	WORK_OFFQ_POOL_BITS	= WORK_OFFQ_LEFT <= 31 ? WORK_OFFQ_LEFT : 31,
+	WORK_OFFQ_POOL_NONE	= (1LU << WORK_OFFQ_POOL_BITS) - 1,
+
+	/* convenience constants */
+	WORK_STRUCT_FLAG_MASK	= (1UL << WORK_STRUCT_FLAG_BITS) - 1,
+	WORK_STRUCT_WQ_DATA_MASK = ~WORK_STRUCT_FLAG_MASK,
+	WORK_STRUCT_NO_POOL	= (unsigned long)WORK_OFFQ_POOL_NONE << WORK_OFFQ_POOL_SHIFT,
 
 	/* bit mask for work_busy() return values */
 	WORK_BUSY_PENDING	= 1 << 0,
@@ -91,14 +96,6 @@ enum {
 	/* maximum string length for set_worker_desc() */
 	WORKER_DESC_LEN		= 24,
 };
-
-/* Convenience constants - of type 'unsigned long', not 'enum'! */
-#define WORK_OFFQ_CANCELING	(1ul << __WORK_OFFQ_CANCELING)
-#define WORK_OFFQ_POOL_NONE	((1ul << WORK_OFFQ_POOL_BITS) - 1)
-#define WORK_STRUCT_NO_POOL	(WORK_OFFQ_POOL_NONE << WORK_OFFQ_POOL_SHIFT)
-
-#define WORK_STRUCT_FLAG_MASK    ((1ul << WORK_STRUCT_FLAG_BITS) - 1)
-#define WORK_STRUCT_WQ_DATA_MASK (~WORK_STRUCT_FLAG_MASK)
 
 struct work_struct {
 	atomic_long_t data;
@@ -109,9 +106,9 @@ struct work_struct {
 #endif
 };
 
-#define WORK_DATA_INIT()	ATOMIC_LONG_INIT((unsigned long)WORK_STRUCT_NO_POOL)
+#define WORK_DATA_INIT()	ATOMIC_LONG_INIT(WORK_STRUCT_NO_POOL)
 #define WORK_DATA_STATIC_INIT()	\
-	ATOMIC_LONG_INIT((unsigned long)(WORK_STRUCT_NO_POOL | WORK_STRUCT_STATIC))
+	ATOMIC_LONG_INIT(WORK_STRUCT_NO_POOL | WORK_STRUCT_STATIC)
 
 struct delayed_work {
 	struct work_struct work;
@@ -122,48 +119,23 @@ struct delayed_work {
 	int cpu;
 };
 
-struct rcu_work {
-	struct work_struct work;
-	struct rcu_head rcu;
-
-	/* target workqueue ->rcu uses to queue ->work */
-	struct workqueue_struct *wq;
-};
-
-/**
- * struct workqueue_attrs - A struct for workqueue attributes.
+/*
+ * A struct for workqueue attributes.  This can be used to change
+ * attributes of an unbound workqueue.
  *
- * This can be used to change attributes of an unbound workqueue.
+ * Unlike other fields, ->no_numa isn't a property of a worker_pool.  It
+ * only modifies how apply_workqueue_attrs() select pools and thus doesn't
+ * participate in pool hash calculations or equality comparisons.
  */
 struct workqueue_attrs {
-	/**
-	 * @nice: nice level
-	 */
-	int nice;
-
-	/**
-	 * @cpumask: allowed CPUs
-	 */
-	cpumask_var_t cpumask;
-
-	/**
-	 * @no_numa: disable NUMA affinity
-	 *
-	 * Unlike other fields, ``no_numa`` isn't a property of a worker_pool. It
-	 * only modifies how :c:func:`apply_workqueue_attrs` select pools and thus
-	 * doesn't participate in pool hash calculations or equality comparisons.
-	 */
-	bool no_numa;
+	int			nice;		/* nice level */
+	cpumask_var_t		cpumask;	/* allowed CPUs */
+	bool			no_numa;	/* disable NUMA affinity */
 };
 
 static inline struct delayed_work *to_delayed_work(struct work_struct *work)
 {
 	return container_of(work, struct delayed_work, work);
-}
-
-static inline struct rcu_work *to_rcu_work(struct work_struct *work)
-{
-	return container_of(work, struct rcu_work, work);
 }
 
 struct execute_work {
@@ -191,7 +163,8 @@ struct execute_work {
 
 #define __DELAYED_WORK_INITIALIZER(n, f, tflags) {			\
 	.work = __WORK_INITIALIZER((n).work, (f)),			\
-	.timer = __TIMER_INITIALIZER(delayed_work_timer_fn,\
+	.timer = __TIMER_INITIALIZER(delayed_work_timer_fn,		\
+				     0, (unsigned long)&(n),		\
 				     (tflags) | TIMER_IRQSAFE),		\
 	}
 
@@ -233,7 +206,7 @@ static inline unsigned int work_static(struct work_struct *work) { return 0; }
 									\
 		__init_work((_work), _onstack);				\
 		(_work)->data = (atomic_long_t) WORK_DATA_INIT();	\
-		lockdep_init_map(&(_work)->lockdep_map, "(work_completion)"#_work, &__key, 0); \
+		lockdep_init_map(&(_work)->lockdep_map, #_work, &__key, 0); \
 		INIT_LIST_HEAD(&(_work)->entry);			\
 		(_work)->func = (_func);				\
 	} while (0)
@@ -256,17 +229,18 @@ static inline unsigned int work_static(struct work_struct *work) { return 0; }
 #define __INIT_DELAYED_WORK(_work, _func, _tflags)			\
 	do {								\
 		INIT_WORK(&(_work)->work, (_func));			\
-		__init_timer(&(_work)->timer,				\
-			     delayed_work_timer_fn,			\
-			     (_tflags) | TIMER_IRQSAFE);		\
+		__setup_timer(&(_work)->timer, delayed_work_timer_fn,	\
+			      (unsigned long)(_work),			\
+			      (_tflags) | TIMER_IRQSAFE);		\
 	} while (0)
 
 #define __INIT_DELAYED_WORK_ONSTACK(_work, _func, _tflags)		\
 	do {								\
 		INIT_WORK_ONSTACK(&(_work)->work, (_func));		\
-		__init_timer_on_stack(&(_work)->timer,			\
-				      delayed_work_timer_fn,		\
-				      (_tflags) | TIMER_IRQSAFE);	\
+		__setup_timer_on_stack(&(_work)->timer,			\
+				       delayed_work_timer_fn,		\
+				       (unsigned long)(_work),		\
+				       (_tflags) | TIMER_IRQSAFE);	\
 	} while (0)
 
 #define INIT_DELAYED_WORK(_work, _func)					\
@@ -280,12 +254,6 @@ static inline unsigned int work_static(struct work_struct *work) { return 0; }
 
 #define INIT_DEFERRABLE_WORK_ONSTACK(_work, _func)			\
 	__INIT_DELAYED_WORK_ONSTACK(_work, _func, TIMER_DEFERRABLE)
-
-#define INIT_RCU_WORK(_work, _func)					\
-	INIT_WORK(&(_work)->work, (_func))
-
-#define INIT_RCU_WORK_ONSTACK(_work, _func)				\
-	INIT_WORK_ONSTACK(&(_work)->work, (_func))
 
 /**
  * work_pending - Find out whether a work item is currently pending
@@ -304,7 +272,7 @@ static inline unsigned int work_static(struct work_struct *work) { return 0; }
 
 /*
  * Workqueue flags and constants.  For details, please refer to
- * Documentation/core-api/workqueue.rst.
+ * Documentation/workqueue.txt.
  */
 enum {
 	WQ_UNBOUND		= 1 << 1, /* not bound to any cpu */
@@ -343,8 +311,6 @@ enum {
 
 	__WQ_DRAINING		= 1 << 16, /* internal: workqueue is draining */
 	__WQ_ORDERED		= 1 << 17, /* internal: workqueue is ordered */
-	__WQ_LEGACY		= 1 << 18, /* internal: create*_workqueue() */
-	__WQ_ORDERED_EXPLICIT	= 1 << 19, /* internal: alloc_ordered_workqueue() */
 
 	WQ_MAX_ACTIVE		= 512,	  /* I like 512, better ideas? */
 	WQ_MAX_UNBOUND_PER_CPU	= 4,	  /* 4 * #cpus for unbound wq */
@@ -391,23 +357,42 @@ extern struct workqueue_struct *system_freezable_wq;
 extern struct workqueue_struct *system_power_efficient_wq;
 extern struct workqueue_struct *system_freezable_power_efficient_wq;
 
+extern struct workqueue_struct *
+__alloc_workqueue_key(const char *fmt, unsigned int flags, int max_active,
+	struct lock_class_key *key, const char *lock_name, ...) __printf(1, 6);
+
 /**
  * alloc_workqueue - allocate a workqueue
  * @fmt: printf format for the name of the workqueue
  * @flags: WQ_* flags
  * @max_active: max in-flight work items, 0 for default
- * remaining args: args for @fmt
+ * @args...: args for @fmt
  *
  * Allocate a workqueue with the specified parameters.  For detailed
- * information on WQ_* flags, please refer to
- * Documentation/core-api/workqueue.rst.
+ * information on WQ_* flags, please refer to Documentation/workqueue.txt.
+ *
+ * The __lock_name macro dance is to guarantee that single lock_class_key
+ * doesn't end up with different namesm, which isn't allowed by lockdep.
  *
  * RETURNS:
  * Pointer to the allocated workqueue on success, %NULL on failure.
  */
-struct workqueue_struct *alloc_workqueue(const char *fmt,
-					 unsigned int flags,
-					 int max_active, ...);
+#ifdef CONFIG_LOCKDEP
+#define alloc_workqueue(fmt, flags, max_active, args...)		\
+({									\
+	static struct lock_class_key __key;				\
+	const char *__lock_name;					\
+									\
+	__lock_name = #fmt#args;					\
+									\
+	__alloc_workqueue_key((fmt), (flags), (max_active),		\
+			      &__key, __lock_name, ##args);		\
+})
+#else
+#define alloc_workqueue(fmt, flags, max_active, args...)		\
+	__alloc_workqueue_key((fmt), (flags), (max_active),		\
+			      NULL, NULL, ##args)
+#endif
 
 /**
  * alloc_ordered_workqueue - allocate an ordered workqueue
@@ -423,20 +408,19 @@ struct workqueue_struct *alloc_workqueue(const char *fmt,
  * Pointer to the allocated workqueue on success, %NULL on failure.
  */
 #define alloc_ordered_workqueue(fmt, flags, args...)			\
-	alloc_workqueue(fmt, WQ_UNBOUND | __WQ_ORDERED |		\
-			__WQ_ORDERED_EXPLICIT | (flags), 1, ##args)
+	alloc_workqueue(fmt, WQ_UNBOUND | __WQ_ORDERED | (flags), 1, ##args)
 
 #define create_workqueue(name)						\
-	alloc_workqueue("%s", __WQ_LEGACY | WQ_MEM_RECLAIM, 1, (name))
+	alloc_workqueue("%s", WQ_MEM_RECLAIM, 1, (name))
 #define create_freezable_workqueue(name)				\
-	alloc_workqueue("%s", __WQ_LEGACY | WQ_FREEZABLE | WQ_UNBOUND |	\
-			WQ_MEM_RECLAIM, 1, (name))
+	alloc_workqueue("%s", WQ_FREEZABLE | WQ_UNBOUND | WQ_MEM_RECLAIM, \
+			1, (name))
 #define create_singlethread_workqueue(name)				\
-	alloc_ordered_workqueue("%s", __WQ_LEGACY | WQ_MEM_RECLAIM, name)
+	alloc_ordered_workqueue("%s", WQ_MEM_RECLAIM, name)
 
 extern void destroy_workqueue(struct workqueue_struct *wq);
 
-struct workqueue_attrs *alloc_workqueue_attrs(void);
+struct workqueue_attrs *alloc_workqueue_attrs(gfp_t gfp_mask);
 void free_workqueue_attrs(struct workqueue_attrs *attrs);
 int apply_workqueue_attrs(struct workqueue_struct *wq,
 			  const struct workqueue_attrs *attrs);
@@ -444,13 +428,10 @@ int workqueue_set_unbound_cpumask(cpumask_var_t cpumask);
 
 extern bool queue_work_on(int cpu, struct workqueue_struct *wq,
 			struct work_struct *work);
-extern bool queue_work_node(int node, struct workqueue_struct *wq,
-			    struct work_struct *work);
 extern bool queue_delayed_work_on(int cpu, struct workqueue_struct *wq,
 			struct delayed_work *work, unsigned long delay);
 extern bool mod_delayed_work_on(int cpu, struct workqueue_struct *wq,
 			struct delayed_work *dwork, unsigned long delay);
-extern bool queue_rcu_work(struct workqueue_struct *wq, struct rcu_work *rwork);
 
 extern void flush_workqueue(struct workqueue_struct *wq);
 extern void drain_workqueue(struct workqueue_struct *wq);
@@ -466,18 +447,14 @@ extern bool flush_delayed_work(struct delayed_work *dwork);
 extern bool cancel_delayed_work(struct delayed_work *dwork);
 extern bool cancel_delayed_work_sync(struct delayed_work *dwork);
 
-extern bool flush_rcu_work(struct rcu_work *rwork);
-
 extern void workqueue_set_max_active(struct workqueue_struct *wq,
 				     int max_active);
-extern struct work_struct *current_work(void);
 extern bool current_is_workqueue_rescuer(void);
 extern bool workqueue_congested(int cpu, struct workqueue_struct *wq);
 extern unsigned int work_busy(struct work_struct *work);
 extern __printf(1, 2) void set_worker_desc(const char *fmt, ...);
 extern void print_worker_info(const char *log_lvl, struct task_struct *task);
 extern void show_workqueue_state(void);
-extern void wq_worker_comm(char *buf, size_t size, struct task_struct *task);
 
 /**
  * queue_work - queue work on a workqueue
@@ -611,18 +588,21 @@ static inline bool schedule_delayed_work(struct delayed_work *dwork,
 	return queue_delayed_work(system_wq, dwork, delay);
 }
 
+/**
+ * keventd_up - is workqueue initialized yet?
+ */
+static inline bool keventd_up(void)
+{
+	return system_wq != NULL;
+}
+
 #ifndef CONFIG_SMP
 static inline long work_on_cpu(int cpu, long (*fn)(void *), void *arg)
 {
 	return fn(arg);
 }
-static inline long work_on_cpu_safe(int cpu, long (*fn)(void *), void *arg)
-{
-	return fn(arg);
-}
 #else
 long work_on_cpu(int cpu, long (*fn)(void *), void *arg);
-long work_on_cpu_safe(int cpu, long (*fn)(void *), void *arg);
 #endif /* CONFIG_SMP */
 
 #ifdef CONFIG_FREEZER
@@ -637,20 +617,5 @@ int workqueue_sysfs_register(struct workqueue_struct *wq);
 static inline int workqueue_sysfs_register(struct workqueue_struct *wq)
 { return 0; }
 #endif	/* CONFIG_SYSFS */
-
-#ifdef CONFIG_WQ_WATCHDOG
-void wq_watchdog_touch(int cpu);
-#else	/* CONFIG_WQ_WATCHDOG */
-static inline void wq_watchdog_touch(int cpu) { }
-#endif	/* CONFIG_WQ_WATCHDOG */
-
-#ifdef CONFIG_SMP
-int workqueue_prepare_cpu(unsigned int cpu);
-int workqueue_online_cpu(unsigned int cpu);
-int workqueue_offline_cpu(unsigned int cpu);
-#endif
-
-int __init workqueue_init_early(void);
-int __init workqueue_init(void);
 
 #endif

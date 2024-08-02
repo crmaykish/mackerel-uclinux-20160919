@@ -1,13 +1,11 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_ALTERNATIVE_H
 #define _ASM_X86_ALTERNATIVE_H
-
-#ifndef __ASSEMBLY__
 
 #include <linux/types.h>
 #include <linux/stddef.h>
 #include <linux/stringify.h>
 #include <asm/asm.h>
+#include <asm/ptrace.h>
 
 /*
  * Alternative inline assembly for SMP.
@@ -44,16 +42,6 @@
 #define LOCK_PREFIX_HERE ""
 #define LOCK_PREFIX ""
 #endif
-
-/*
- * objtool annotation to ignore the alternatives and only consider the original
- * instruction(s).
- */
-#define ANNOTATE_IGNORE_ALTERNATIVE				\
-	"999:\n\t"						\
-	".pushsection .discard.ignore_alts\n\t"			\
-	".long 999b - .\n\t"					\
-	".popsection\n\t"
 
 struct alt_instr {
 	s32 instr_offset;	/* original instruction */
@@ -104,42 +92,31 @@ static inline int alternatives_text_reserved(void *start, void *end)
 #define alt_total_slen		alt_end_marker"b-661b"
 #define alt_rlen(num)		e_replacement(num)"f-"b_replacement(num)"f"
 
-#define OLDINSTR(oldinstr, num)						\
-	"# ALT: oldnstr\n"						\
+#define __OLDINSTR(oldinstr, num)					\
 	"661:\n\t" oldinstr "\n662:\n"					\
-	"# ALT: padding\n"						\
 	".skip -(((" alt_rlen(num) ")-(" alt_slen ")) > 0) * "		\
-		"((" alt_rlen(num) ")-(" alt_slen ")),0x90\n"		\
+		"((" alt_rlen(num) ")-(" alt_slen ")),0x90\n"
+
+#define OLDINSTR(oldinstr, num)						\
+	__OLDINSTR(oldinstr, num)					\
 	alt_end_marker ":\n"
 
 /*
- * gas compatible max based on the idea from:
+ * max without conditionals. Idea adapted from:
  * http://graphics.stanford.edu/~seander/bithacks.html#IntegerMinOrMax
  *
- * The additional "-" is needed because gas uses a "true" value of -1.
+ * The additional "-" is needed because gas works with s32s.
  */
-#define alt_max_short(a, b)	"((" a ") ^ (((" a ") ^ (" b ")) & -(-((" a ") < (" b ")))))"
+#define alt_max_short(a, b)	"((" a ") ^ (((" a ") ^ (" b ")) & -(-((" a ") - (" b ")))))"
 
 /*
  * Pad the second replacement alternative with additional NOPs if it is
  * additionally longer than the first replacement alternative.
  */
 #define OLDINSTR_2(oldinstr, num1, num2) \
-	"# ALT: oldinstr2\n"									\
 	"661:\n\t" oldinstr "\n662:\n"								\
-	"# ALT: padding2\n"									\
 	".skip -((" alt_max_short(alt_rlen(num1), alt_rlen(num2)) " - (" alt_slen ")) > 0) * "	\
 		"(" alt_max_short(alt_rlen(num1), alt_rlen(num2)) " - (" alt_slen ")), 0x90\n"	\
-	alt_end_marker ":\n"
-
-#define OLDINSTR_3(oldinsn, n1, n2, n3)								\
-	"# ALT: oldinstr3\n"									\
-	"661:\n\t" oldinsn "\n662:\n"								\
-	"# ALT: padding3\n"									\
-	".skip -((" alt_max_short(alt_max_short(alt_rlen(n1), alt_rlen(n2)), alt_rlen(n3))	\
-		" - (" alt_slen ")) > 0) * "							\
-		"(" alt_max_short(alt_max_short(alt_rlen(n1), alt_rlen(n2)), alt_rlen(n3))	\
-		" - (" alt_slen ")), 0x90\n"							\
 	alt_end_marker ":\n"
 
 #define ALTINSTR_ENTRY(feature, num)					      \
@@ -150,9 +127,8 @@ static inline int alternatives_text_reserved(void *start, void *end)
 	" .byte " alt_rlen(num) "\n"			/* replacement len */ \
 	" .byte " alt_pad_len "\n"			/* pad len */
 
-#define ALTINSTR_REPLACEMENT(newinstr, feature, num)	/* replacement */	\
-	"# ALT: replacement " #num "\n"						\
-	b_replacement(num)":\n\t" newinstr "\n" e_replacement(num) ":\n"
+#define ALTINSTR_REPLACEMENT(newinstr, feature, num)	/* replacement */     \
+	b_replacement(num)":\n\t" newinstr "\n" e_replacement(num) ":\n\t"
 
 /* alternative assembly primitive: */
 #define ALTERNATIVE(oldinstr, newinstr, feature)			\
@@ -162,7 +138,7 @@ static inline int alternatives_text_reserved(void *start, void *end)
 	".popsection\n"							\
 	".pushsection .altinstr_replacement, \"ax\"\n"			\
 	ALTINSTR_REPLACEMENT(newinstr, feature, 1)			\
-	".popsection\n"
+	".popsection"
 
 #define ALTERNATIVE_2(oldinstr, newinstr1, feature1, newinstr2, feature2)\
 	OLDINSTR_2(oldinstr, 1, 2)					\
@@ -173,20 +149,13 @@ static inline int alternatives_text_reserved(void *start, void *end)
 	".pushsection .altinstr_replacement, \"ax\"\n"			\
 	ALTINSTR_REPLACEMENT(newinstr1, feature1, 1)			\
 	ALTINSTR_REPLACEMENT(newinstr2, feature2, 2)			\
-	".popsection\n"
+	".popsection"
 
-#define ALTERNATIVE_3(oldinsn, newinsn1, feat1, newinsn2, feat2, newinsn3, feat3) \
-	OLDINSTR_3(oldinsn, 1, 2, 3)						\
-	".pushsection .altinstructions,\"a\"\n"					\
-	ALTINSTR_ENTRY(feat1, 1)						\
-	ALTINSTR_ENTRY(feat2, 2)						\
-	ALTINSTR_ENTRY(feat3, 3)						\
-	".popsection\n"								\
-	".pushsection .altinstr_replacement, \"ax\"\n"				\
-	ALTINSTR_REPLACEMENT(newinsn1, feat1, 1)				\
-	ALTINSTR_REPLACEMENT(newinsn2, feat2, 2)				\
-	ALTINSTR_REPLACEMENT(newinsn3, feat3, 3)				\
-	".popsection\n"
+/*
+ * This must be included *after* the definition of ALTERNATIVE due to
+ * <asm/arch_hweight.h>
+ */
+#include <asm/cpufeature.h>
 
 /*
  * Alternative instructions for different CPU types or capabilities.
@@ -201,15 +170,15 @@ static inline int alternatives_text_reserved(void *start, void *end)
  * without volatile and memory clobber.
  */
 #define alternative(oldinstr, newinstr, feature)			\
-	asm_inline volatile (ALTERNATIVE(oldinstr, newinstr, feature) : : : "memory")
+	asm volatile (ALTERNATIVE(oldinstr, newinstr, feature) : : : "memory")
 
 #define alternative_2(oldinstr, newinstr1, feature1, newinstr2, feature2) \
-	asm_inline volatile(ALTERNATIVE_2(oldinstr, newinstr1, feature1, newinstr2, feature2) ::: "memory")
+	asm volatile(ALTERNATIVE_2(oldinstr, newinstr1, feature1, newinstr2, feature2) ::: "memory")
 
 /*
  * Alternative inline assembly with input.
  *
- * Peculiarities:
+ * Pecularities:
  * No memory clobber here.
  * Argument numbers start with 1.
  * Best is to use constraints that are fixed size (like (%1) ... "r")
@@ -218,7 +187,7 @@ static inline int alternatives_text_reserved(void *start, void *end)
  * Leaving an unused argument 0 to keep API compatibility.
  */
 #define alternative_input(oldinstr, newinstr, feature, input...)	\
-	asm_inline volatile (ALTERNATIVE(oldinstr, newinstr, feature)	\
+	asm volatile (ALTERNATIVE(oldinstr, newinstr, feature)		\
 		: : "i" (0), ## input)
 
 /*
@@ -231,18 +200,18 @@ static inline int alternatives_text_reserved(void *start, void *end)
  */
 #define alternative_input_2(oldinstr, newinstr1, feature1, newinstr2,	     \
 			   feature2, input...)				     \
-	asm_inline volatile(ALTERNATIVE_2(oldinstr, newinstr1, feature1,     \
+	asm volatile(ALTERNATIVE_2(oldinstr, newinstr1, feature1,	     \
 		newinstr2, feature2)					     \
 		: : "i" (0), ## input)
 
 /* Like alternative_input, but with a single output argument */
 #define alternative_io(oldinstr, newinstr, feature, output, input...)	\
-	asm_inline volatile (ALTERNATIVE(oldinstr, newinstr, feature)	\
+	asm volatile (ALTERNATIVE(oldinstr, newinstr, feature)		\
 		: output : "i" (0), ## input)
 
 /* Like alternative_io, but for replacing a direct call with another one. */
 #define alternative_call(oldfunc, newfunc, feature, output, input...)	\
-	asm_inline volatile (ALTERNATIVE("call %P[old]", "call %P[new]", feature) \
+	asm volatile (ALTERNATIVE("call %P[old]", "call %P[new]", feature) \
 		: output : [old] "i" (oldfunc), [new] "i" (newfunc), ## input)
 
 /*
@@ -253,11 +222,10 @@ static inline int alternatives_text_reserved(void *start, void *end)
  */
 #define alternative_call_2(oldfunc, newfunc1, feature1, newfunc2, feature2,   \
 			   output, input...)				      \
-	asm_inline volatile (ALTERNATIVE_2("call %P[old]", "call %P[new1]", feature1,\
+	asm volatile (ALTERNATIVE_2("call %P[old]", "call %P[new1]", feature1,\
 		"call %P[new2]", feature2)				      \
-		: output, ASM_CALL_CONSTRAINT				      \
-		: [old] "i" (oldfunc), [new1] "i" (newfunc1),		      \
-		  [new2] "i" (newfunc2), ## input)
+		: output : [old] "i" (oldfunc), [new1] "i" (newfunc1),	      \
+		[new2] "i" (newfunc2), ## input)
 
 /*
  * use this macro(s) if you need more than one output parameter
@@ -271,6 +239,36 @@ static inline int alternatives_text_reserved(void *start, void *end)
  */
 #define ASM_NO_INPUT_CLOBBER(clbr...) "i" (0) : clbr
 
-#endif /* __ASSEMBLY__ */
+struct paravirt_patch_site;
+#ifdef CONFIG_PARAVIRT
+void apply_paravirt(struct paravirt_patch_site *start,
+		    struct paravirt_patch_site *end);
+#else
+static inline void apply_paravirt(struct paravirt_patch_site *start,
+				  struct paravirt_patch_site *end)
+{}
+#define __parainstructions	NULL
+#define __parainstructions_end	NULL
+#endif
+
+extern void *text_poke_early(void *addr, const void *opcode, size_t len);
+
+/*
+ * Clear and restore the kernel write-protection flag on the local CPU.
+ * Allows the kernel to edit read-only pages.
+ * Side-effect: any interrupt handler running between save and restore will have
+ * the ability to write to read-only pages.
+ *
+ * Warning:
+ * Code patching in the UP case is safe if NMIs and MCE handlers are stopped and
+ * no thread can be preempted in the instructions being modified (no iret to an
+ * invalid instruction possible) or if the instructions are changed from a
+ * consistent state to another consistent state atomically.
+ * On the local CPU you need to be protected again NMI or MCE handlers seeing an
+ * inconsistent instruction while you patch.
+ */
+extern void *text_poke(void *addr, const void *opcode, size_t len);
+extern int poke_int3_handler(struct pt_regs *regs);
+extern void *text_poke_bp(void *addr, const void *opcode, size_t len, void *handler);
 
 #endif /* _ASM_X86_ALTERNATIVE_H */

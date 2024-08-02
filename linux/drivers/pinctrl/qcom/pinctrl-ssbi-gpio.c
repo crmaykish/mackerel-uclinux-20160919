@@ -1,7 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015, Sony Mobile Communications AB.
  * Copyright (c) 2013, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -12,10 +20,9 @@
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/slab.h>
 #include <linux/regmap.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/interrupt.h>
 #include <linux/of_device.h>
-#include <linux/of_irq.h>
 
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 
@@ -46,8 +53,6 @@
 #define PM8XXX_BANK_WRITE		BIT(7)
 
 #define PM8XXX_MAX_GPIOS               44
-
-#define PM8XXX_GPIO_PHYSICAL_OFFSET	1
 
 /* custom pinconf parameters */
 #define PM8XXX_QCOM_DRIVE_STRENGH      (PIN_CONFIG_END + 1)
@@ -93,9 +98,6 @@ struct pm8xxx_gpio {
 
 	struct pinctrl_desc desc;
 	unsigned npins;
-
-	struct fwnode_handle *fwnode;
-	struct irq_domain *domain;
 };
 
 static const struct pinconf_generic_params pm8xxx_gpio_bindings[] = {
@@ -197,7 +199,7 @@ static const struct pinctrl_ops pm8xxx_pinctrl_ops = {
 	.get_group_name		= pm8xxx_get_group_name,
 	.get_group_pins         = pm8xxx_get_group_pins,
 	.dt_node_to_map		= pinconf_generic_dt_node_to_map_group,
-	.dt_free_map		= pinctrl_utils_free_map,
+	.dt_free_map		= pinctrl_utils_dt_free_map,
 };
 
 static int pm8xxx_get_functions_count(struct pinctrl_dev *pctldev)
@@ -257,32 +259,22 @@ static int pm8xxx_pin_config_get(struct pinctrl_dev *pctldev,
 
 	switch (param) {
 	case PIN_CONFIG_BIAS_DISABLE:
-		if (pin->bias != PM8XXX_GPIO_BIAS_NP)
-			return -EINVAL;
-		arg = 1;
+		arg = pin->bias == PM8XXX_GPIO_BIAS_NP;
 		break;
 	case PIN_CONFIG_BIAS_PULL_DOWN:
-		if (pin->bias != PM8XXX_GPIO_BIAS_PD)
-			return -EINVAL;
-		arg = 1;
+		arg = pin->bias == PM8XXX_GPIO_BIAS_PD;
 		break;
 	case PIN_CONFIG_BIAS_PULL_UP:
-		if (pin->bias > PM8XXX_GPIO_BIAS_PU_1P5_30)
-			return -EINVAL;
-		arg = 1;
+		arg = pin->bias <= PM8XXX_GPIO_BIAS_PU_1P5_30;
 		break;
 	case PM8XXX_QCOM_PULL_UP_STRENGTH:
 		arg = pin->pull_up_strength;
 		break;
 	case PIN_CONFIG_BIAS_HIGH_IMPEDANCE:
-		if (!pin->disable)
-			return -EINVAL;
-		arg = 1;
+		arg = pin->disable;
 		break;
 	case PIN_CONFIG_INPUT_ENABLE:
-		if (pin->mode != PM8XXX_GPIO_MODE_INPUT)
-			return -EINVAL;
-		arg = 1;
+		arg = pin->mode == PM8XXX_GPIO_MODE_INPUT;
 		break;
 	case PIN_CONFIG_OUTPUT:
 		if (pin->mode & PM8XXX_GPIO_MODE_OUTPUT)
@@ -297,14 +289,10 @@ static int pm8xxx_pin_config_get(struct pinctrl_dev *pctldev,
 		arg = pin->output_strength;
 		break;
 	case PIN_CONFIG_DRIVE_PUSH_PULL:
-		if (pin->open_drain)
-			return -EINVAL;
-		arg = 1;
+		arg = !pin->open_drain;
 		break;
 	case PIN_CONFIG_DRIVE_OPEN_DRAIN:
-		if (!pin->open_drain)
-			return -EINVAL;
-		arg = 1;
+		arg = pin->open_drain;
 		break;
 	default:
 		return -EINVAL;
@@ -455,7 +443,7 @@ static struct pinctrl_desc pm8xxx_pinctrl_desc = {
 static int pm8xxx_gpio_direction_input(struct gpio_chip *chip,
 				       unsigned offset)
 {
-	struct pm8xxx_gpio *pctrl = gpiochip_get_data(chip);
+	struct pm8xxx_gpio *pctrl = container_of(chip, struct pm8xxx_gpio, chip);
 	struct pm8xxx_pin_data *pin = pctrl->desc.pins[offset].drv_data;
 	u8 val;
 
@@ -471,7 +459,7 @@ static int pm8xxx_gpio_direction_output(struct gpio_chip *chip,
 					unsigned offset,
 					int value)
 {
-	struct pm8xxx_gpio *pctrl = gpiochip_get_data(chip);
+	struct pm8xxx_gpio *pctrl = container_of(chip, struct pm8xxx_gpio, chip);
 	struct pm8xxx_pin_data *pin = pctrl->desc.pins[offset].drv_data;
 	u8 val;
 
@@ -489,26 +477,25 @@ static int pm8xxx_gpio_direction_output(struct gpio_chip *chip,
 
 static int pm8xxx_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
-	struct pm8xxx_gpio *pctrl = gpiochip_get_data(chip);
+	struct pm8xxx_gpio *pctrl = container_of(chip, struct pm8xxx_gpio, chip);
 	struct pm8xxx_pin_data *pin = pctrl->desc.pins[offset].drv_data;
 	bool state;
 	int ret;
 
 	if (pin->mode == PM8XXX_GPIO_MODE_OUTPUT) {
 		ret = pin->output_value;
-	} else if (pin->irq >= 0) {
+	} else {
 		ret = irq_get_irqchip_state(pin->irq, IRQCHIP_STATE_LINE_LEVEL, &state);
 		if (!ret)
 			ret = !!state;
-	} else
-		ret = -EINVAL;
+	}
 
 	return ret;
 }
 
 static void pm8xxx_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
-	struct pm8xxx_gpio *pctrl = gpiochip_get_data(chip);
+	struct pm8xxx_gpio *pctrl = container_of(chip, struct pm8xxx_gpio, chip);
 	struct pm8xxx_pin_data *pin = pctrl->desc.pins[offset].drv_data;
 	u8 val;
 
@@ -531,39 +518,16 @@ static int pm8xxx_gpio_of_xlate(struct gpio_chip *chip,
 	if (flags)
 		*flags = gpio_desc->args[1];
 
-	return gpio_desc->args[0] - PM8XXX_GPIO_PHYSICAL_OFFSET;
+	return gpio_desc->args[0] - 1;
 }
 
 
 static int pm8xxx_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
 {
-	struct pm8xxx_gpio *pctrl = gpiochip_get_data(chip);
-	struct pm8xxx_pin_data *pin = pctrl->desc.pins[offset].drv_data;
-	struct irq_fwspec fwspec;
-	int ret;
-
-	fwspec.fwnode = pctrl->fwnode;
-	fwspec.param_count = 2;
-	fwspec.param[0] = offset + PM8XXX_GPIO_PHYSICAL_OFFSET;
-	fwspec.param[1] = IRQ_TYPE_EDGE_RISING;
-
-	ret = irq_create_fwspec_mapping(&fwspec);
-
-	/*
-	 * Cache the IRQ since pm8xxx_gpio_get() needs this to get determine the
-	 * line level.
-	 */
-	pin->irq = ret;
-
-	return ret;
-}
-
-static void pm8xxx_gpio_free(struct gpio_chip *chip, unsigned int offset)
-{
-	struct pm8xxx_gpio *pctrl = gpiochip_get_data(chip);
+	struct pm8xxx_gpio *pctrl = container_of(chip, struct pm8xxx_gpio, chip);
 	struct pm8xxx_pin_data *pin = pctrl->desc.pins[offset].drv_data;
 
-	pin->irq = -1;
+	return pin->irq;
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -575,7 +539,7 @@ static void pm8xxx_gpio_dbg_show_one(struct seq_file *s,
 				  unsigned offset,
 				  unsigned gpio)
 {
-	struct pm8xxx_gpio *pctrl = gpiochip_get_data(chip);
+	struct pm8xxx_gpio *pctrl = container_of(chip, struct pm8xxx_gpio, chip);
 	struct pm8xxx_pin_data *pin = pctrl->desc.pins[offset].drv_data;
 
 	static const char * const modes[] = {
@@ -592,7 +556,7 @@ static void pm8xxx_gpio_dbg_show_one(struct seq_file *s,
 		"no", "high", "medium", "low"
 	};
 
-	seq_printf(s, " gpio%-2d:", offset + PM8XXX_GPIO_PHYSICAL_OFFSET);
+	seq_printf(s, " gpio%-2d:", offset + 1);
 	if (pin->disable) {
 		seq_puts(s, " ---");
 	} else {
@@ -623,8 +587,7 @@ static void pm8xxx_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 #define pm8xxx_gpio_dbg_show NULL
 #endif
 
-static const struct gpio_chip pm8xxx_gpio_template = {
-	.free = pm8xxx_gpio_free,
+static struct gpio_chip pm8xxx_gpio_template = {
 	.direction_input = pm8xxx_gpio_direction_input,
 	.direction_output = pm8xxx_gpio_direction_output,
 	.get = pm8xxx_gpio_get,
@@ -686,75 +649,12 @@ static int pm8xxx_pin_populate(struct pm8xxx_gpio *pctrl,
 	return 0;
 }
 
-static struct irq_chip pm8xxx_irq_chip = {
-	.name = "ssbi-gpio",
-	.irq_mask_ack = irq_chip_mask_ack_parent,
-	.irq_unmask = irq_chip_unmask_parent,
-	.irq_set_type = irq_chip_set_type_parent,
-	.flags = IRQCHIP_MASK_ON_SUSPEND | IRQCHIP_SKIP_SET_WAKE,
-};
-
-static int pm8xxx_domain_translate(struct irq_domain *domain,
-				   struct irq_fwspec *fwspec,
-				   unsigned long *hwirq,
-				   unsigned int *type)
-{
-	struct pm8xxx_gpio *pctrl = container_of(domain->host_data,
-						 struct pm8xxx_gpio, chip);
-
-	if (fwspec->param_count != 2 || fwspec->param[0] < 1 ||
-	    fwspec->param[0] > pctrl->chip.ngpio)
-		return -EINVAL;
-
-	*hwirq = fwspec->param[0] - PM8XXX_GPIO_PHYSICAL_OFFSET;
-	*type = fwspec->param[1];
-
-	return 0;
-}
-
-static int pm8xxx_domain_alloc(struct irq_domain *domain, unsigned int virq,
-			       unsigned int nr_irqs, void *data)
-{
-	struct pm8xxx_gpio *pctrl = container_of(domain->host_data,
-						 struct pm8xxx_gpio, chip);
-	struct irq_fwspec *fwspec = data;
-	struct irq_fwspec parent_fwspec;
-	irq_hw_number_t hwirq;
-	unsigned int type;
-	int ret, i;
-
-	ret = pm8xxx_domain_translate(domain, fwspec, &hwirq, &type);
-	if (ret)
-		return ret;
-
-	for (i = 0; i < nr_irqs; i++)
-		irq_domain_set_info(domain, virq + i, hwirq + i,
-				    &pm8xxx_irq_chip, pctrl, handle_level_irq,
-				    NULL, NULL);
-
-	parent_fwspec.fwnode = domain->parent->fwnode;
-	parent_fwspec.param_count = 2;
-	parent_fwspec.param[0] = hwirq + 0xc0;
-	parent_fwspec.param[1] = fwspec->param[1];
-
-	return irq_domain_alloc_irqs_parent(domain, virq, nr_irqs,
-					    &parent_fwspec);
-}
-
-static const struct irq_domain_ops pm8xxx_domain_ops = {
-	.activate = gpiochip_irq_domain_activate,
-	.alloc = pm8xxx_domain_alloc,
-	.deactivate = gpiochip_irq_domain_deactivate,
-	.free = irq_domain_free_irqs_common,
-	.translate = pm8xxx_domain_translate,
-};
-
 static const struct of_device_id pm8xxx_gpio_of_match[] = {
-	{ .compatible = "qcom,pm8018-gpio", .data = (void *) 6 },
-	{ .compatible = "qcom,pm8038-gpio", .data = (void *) 12 },
-	{ .compatible = "qcom,pm8058-gpio", .data = (void *) 44 },
-	{ .compatible = "qcom,pm8917-gpio", .data = (void *) 38 },
-	{ .compatible = "qcom,pm8921-gpio", .data = (void *) 44 },
+	{ .compatible = "qcom,pm8018-gpio", .data = (void *)6 },
+	{ .compatible = "qcom,pm8038-gpio", .data = (void *)12 },
+	{ .compatible = "qcom,pm8058-gpio", .data = (void *)40 },
+	{ .compatible = "qcom,pm8917-gpio", .data = (void *)38 },
+	{ .compatible = "qcom,pm8921-gpio", .data = (void *)44 },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, pm8xxx_gpio_of_match);
@@ -762,18 +662,17 @@ MODULE_DEVICE_TABLE(of, pm8xxx_gpio_of_match);
 static int pm8xxx_gpio_probe(struct platform_device *pdev)
 {
 	struct pm8xxx_pin_data *pin_data;
-	struct irq_domain *parent_domain;
-	struct device_node *parent_node;
 	struct pinctrl_pin_desc *pins;
 	struct pm8xxx_gpio *pctrl;
-	int ret, i;
+	int ret;
+	int i;
 
 	pctrl = devm_kzalloc(&pdev->dev, sizeof(*pctrl), GFP_KERNEL);
 	if (!pctrl)
 		return -ENOMEM;
 
 	pctrl->dev = &pdev->dev;
-	pctrl->npins = (uintptr_t) device_get_match_data(&pdev->dev);
+	pctrl->npins = (unsigned long)of_device_get_match_data(&pdev->dev);
 
 	pctrl->regmap = dev_get_regmap(pdev->dev.parent, NULL);
 	if (!pctrl->regmap) {
@@ -800,7 +699,12 @@ static int pm8xxx_gpio_probe(struct platform_device *pdev)
 
 	for (i = 0; i < pctrl->desc.npins; i++) {
 		pin_data[i].reg = SSBI_REG_ADDR_GPIO(i);
-		pin_data[i].irq = -1;
+		pin_data[i].irq = platform_get_irq(pdev, i);
+		if (pin_data[i].irq < 0) {
+			dev_err(&pdev->dev,
+				"missing interrupts for pin %d\n", i);
+			return pin_data[i].irq;
+		}
 
 		ret = pm8xxx_pin_populate(pctrl, &pin_data[i]);
 		if (ret)
@@ -818,7 +722,7 @@ static int pm8xxx_gpio_probe(struct platform_device *pdev)
 	pctrl->desc.custom_conf_items = pm8xxx_conf_items;
 #endif
 
-	pctrl->pctrl = devm_pinctrl_register(&pdev->dev, &pctrl->desc, pctrl);
+	pctrl->pctrl = pinctrl_register(&pctrl->desc, &pdev->dev, pctrl);
 	if (IS_ERR(pctrl->pctrl)) {
 		dev_err(&pdev->dev, "couldn't register pm8xxx gpio driver\n");
 		return PTR_ERR(pctrl->pctrl);
@@ -826,53 +730,23 @@ static int pm8xxx_gpio_probe(struct platform_device *pdev)
 
 	pctrl->chip = pm8xxx_gpio_template;
 	pctrl->chip.base = -1;
-	pctrl->chip.parent = &pdev->dev;
+	pctrl->chip.dev = &pdev->dev;
 	pctrl->chip.of_node = pdev->dev.of_node;
 	pctrl->chip.of_gpio_n_cells = 2;
 	pctrl->chip.label = dev_name(pctrl->dev);
 	pctrl->chip.ngpio = pctrl->npins;
-
-	parent_node = of_irq_find_parent(pctrl->dev->of_node);
-	if (!parent_node)
-		return -ENXIO;
-
-	parent_domain = irq_find_host(parent_node);
-	of_node_put(parent_node);
-	if (!parent_domain)
-		return -ENXIO;
-
-	pctrl->fwnode = of_node_to_fwnode(pctrl->dev->of_node);
-	pctrl->domain = irq_domain_create_hierarchy(parent_domain, 0,
-						    pctrl->chip.ngpio,
-						    pctrl->fwnode,
-						    &pm8xxx_domain_ops,
-						    &pctrl->chip);
-	if (!pctrl->domain)
-		return -ENODEV;
-
-	ret = gpiochip_add_data(&pctrl->chip, pctrl);
+	ret = gpiochip_add(&pctrl->chip);
 	if (ret) {
 		dev_err(&pdev->dev, "failed register gpiochip\n");
-		goto err_chip_add_data;
+		goto unregister_pinctrl;
 	}
 
-	/*
-	 * For DeviceTree-supported systems, the gpio core checks the
-	 * pinctrl's device node for the "gpio-ranges" property.
-	 * If it is present, it takes care of adding the pin ranges
-	 * for the driver. In this case the driver can skip ahead.
-	 *
-	 * In order to remain compatible with older, existing DeviceTree
-	 * files which don't set the "gpio-ranges" property or systems that
-	 * utilize ACPI the driver has to call gpiochip_add_pin_range().
-	 */
-	if (!of_property_read_bool(pctrl->dev->of_node, "gpio-ranges")) {
-		ret = gpiochip_add_pin_range(&pctrl->chip, dev_name(pctrl->dev),
-					     0, 0, pctrl->chip.ngpio);
-		if (ret) {
-			dev_err(pctrl->dev, "failed to add pin range\n");
-			goto unregister_gpiochip;
-		}
+	ret = gpiochip_add_pin_range(&pctrl->chip,
+				     dev_name(pctrl->dev),
+				     0, 0, pctrl->chip.ngpio);
+	if (ret) {
+		dev_err(pctrl->dev, "failed to add pin range\n");
+		goto unregister_gpiochip;
 	}
 
 	platform_set_drvdata(pdev, pctrl);
@@ -883,8 +757,9 @@ static int pm8xxx_gpio_probe(struct platform_device *pdev)
 
 unregister_gpiochip:
 	gpiochip_remove(&pctrl->chip);
-err_chip_add_data:
-	irq_domain_remove(pctrl->domain);
+
+unregister_pinctrl:
+	pinctrl_unregister(pctrl->pctrl);
 
 	return ret;
 }
@@ -894,7 +769,8 @@ static int pm8xxx_gpio_remove(struct platform_device *pdev)
 	struct pm8xxx_gpio *pctrl = platform_get_drvdata(pdev);
 
 	gpiochip_remove(&pctrl->chip);
-	irq_domain_remove(pctrl->domain);
+
+	pinctrl_unregister(pctrl->pctrl);
 
 	return 0;
 }

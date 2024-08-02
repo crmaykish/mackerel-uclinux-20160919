@@ -1,10 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
+ *  This program is free software; you can redistribute it and/or modify it
+ *  under the terms of the GNU General Public License version 2 as published
+ *  by the Free Software Foundation.
  *
- *  Copyright (C) 2012 John Crispin <john@phrozen.org>
+ *  Copyright (C) 2012 John Crispin <blogic@openwrt.org>
  */
 
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/of_platform.h>
 #include <linux/of_gpio.h>
 #include <linux/dma-mapping.h>
@@ -29,8 +31,8 @@ static int vmmc_probe(struct platform_device *pdev)
 	dma_addr_t dma;
 
 	cp1_base =
-		(void *) CPHYSADDR(dma_alloc_coherent(&pdev->dev, CP1_SIZE,
-						    &dma, GFP_KERNEL));
+		(void *) CPHYSADDR(dma_alloc_coherent(NULL, CP1_SIZE,
+						    &dma, GFP_ATOMIC));
 
 	gpio_count = of_gpio_count(pdev->dev.of_node);
 	while (gpio_count > 0) {
@@ -53,6 +55,7 @@ static const struct of_device_id vmmc_match[] = {
 	{ .compatible = "lantiq,vmmc-xway" },
 	{},
 };
+MODULE_DEVICE_TABLE(of, vmmc_match);
 
 static struct platform_driver vmmc_driver = {
 	.probe = vmmc_probe,
@@ -61,4 +64,5 @@ static struct platform_driver vmmc_driver = {
 		.of_match_table = vmmc_match,
 	},
 };
-builtin_platform_driver(vmmc_driver);
+
+module_platform_driver(vmmc_driver);

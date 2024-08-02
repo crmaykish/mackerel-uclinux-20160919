@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Device tree sources for Exynos4 thermal zone
  *
  * Copyright (c) 2014 Lukasz Majewski <l.majewski@samsung.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #include <dt-bindings/thermal/thermal.h>
@@ -10,7 +14,7 @@
 / {
 thermal-zones {
 	cpu_thermal: cpu-thermal {
-		thermal-sensors = <&tmu>;
+		thermal-sensors = <&tmu 0>;
 		polling-delay-passive = <0>;
 		polling-delay = <0>;
 		trips {

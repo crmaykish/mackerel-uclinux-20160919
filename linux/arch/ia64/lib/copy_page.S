@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
  * Optimized version of the standard copy_page() function
@@ -17,7 +16,6 @@
  */
 #include <asm/asmmacro.h>
 #include <asm/page.h>
-#include <asm/export.h>
 
 #define PIPE_DEPTH	3
 #define EPI		p[PIPE_DEPTH-1]
@@ -98,4 +96,3 @@ GLOBAL_ENTRY(copy_page)
 	mov ar.lc=saved_lc
 	br.ret.sptk.many rp
 END(copy_page)
-EXPORT_SYMBOL(copy_page)

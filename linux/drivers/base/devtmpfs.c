@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * devtmpfs - kernel-maintained tmpfs-based /dev
  *
@@ -25,8 +24,6 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/kthread.h>
-#include <linux/fs_context.h>
-#include <uapi/linux/mount.h>
 #include "base.h"
 
 static struct task_struct *thread;
@@ -57,39 +54,20 @@ static int __init mount_param(char *str)
 }
 __setup("devtmpfs.mount=", mount_param);
 
-static struct vfsmount *mnt;
-
-static struct dentry *public_dev_mount(struct file_system_type *fs_type, int flags,
+static struct dentry *dev_mount(struct file_system_type *fs_type, int flags,
 		      const char *dev_name, void *data)
 {
-	struct super_block *s = mnt->mnt_sb;
-	int err;
-
-	atomic_inc(&s->s_active);
-	down_write(&s->s_umount);
-	err = reconfigure_single(s, flags, data);
-	if (err < 0) {
-		deactivate_locked_super(s);
-		return ERR_PTR(err);
-	}
-	return dget(s->s_root);
-}
-
-static struct file_system_type internal_fs_type = {
-	.name = "devtmpfs",
 #ifdef CONFIG_TMPFS
-	.init_fs_context = shmem_init_fs_context,
-	.parameters	= &shmem_fs_parameters,
+	return mount_single(fs_type, flags, data, shmem_fill_super);
 #else
-	.init_fs_context = ramfs_init_fs_context,
-	.parameters	= &ramfs_fs_parameters,
+	return mount_single(fs_type, flags, data, ramfs_fill_super);
 #endif
-	.kill_sb = kill_litter_super,
-};
+}
 
 static struct file_system_type dev_fs_type = {
 	.name = "devtmpfs",
-	.mount = public_dev_mount,
+	.mount = dev_mount,
+	.kill_sb = kill_litter_super,
 };
 
 #ifdef CONFIG_BLOCK
@@ -237,9 +215,9 @@ static int handle_create(const char *nodename, umode_t mode, kuid_t uid,
 		newattrs.ia_uid = uid;
 		newattrs.ia_gid = gid;
 		newattrs.ia_valid = ATTR_MODE|ATTR_UID|ATTR_GID;
-		inode_lock(d_inode(dentry));
+		mutex_lock(&d_inode(dentry)->i_mutex);
 		notify_change(dentry, &newattrs, NULL);
-		inode_unlock(d_inode(dentry));
+		mutex_unlock(&d_inode(dentry)->i_mutex);
 
 		/* mark as kernel-created inode */
 		d_inode(dentry)->i_private = &thread;
@@ -266,14 +244,14 @@ static int dev_rmdir(const char *name)
 		err = -ENOENT;
 	}
 	dput(dentry);
-	inode_unlock(d_inode(parent.dentry));
+	mutex_unlock(&d_inode(parent.dentry)->i_mutex);
 	path_put(&parent);
 	return err;
 }
 
 static int delete_path(const char *nodepath)
 {
-	char *path;
+	const char *path;
 	int err = 0;
 
 	path = kstrdup(nodepath, GFP_KERNEL);
@@ -331,8 +309,7 @@ static int handle_remove(const char *nodename, struct device *dev)
 	if (d_really_is_positive(dentry)) {
 		struct kstat stat;
 		struct path p = {.mnt = parent.mnt, .dentry = dentry};
-		err = vfs_getattr(&p, &stat, STATX_TYPE | STATX_MODE,
-				  AT_STATX_SYNC_AS_STAT);
+		err = vfs_getattr(&p, &stat);
 		if (!err && dev_mynode(dev, d_inode(dentry), &stat)) {
 			struct iattr newattrs;
 			/*
@@ -344,9 +321,9 @@ static int handle_remove(const char *nodename, struct device *dev)
 			newattrs.ia_mode = stat.mode & ~0777;
 			newattrs.ia_valid =
 				ATTR_UID|ATTR_GID|ATTR_MODE;
-			inode_lock(d_inode(dentry));
+			mutex_lock(&d_inode(dentry)->i_mutex);
 			notify_change(dentry, &newattrs, NULL);
-			inode_unlock(d_inode(dentry));
+			mutex_unlock(&d_inode(dentry)->i_mutex);
 			err = vfs_unlink(d_inode(parent.dentry), dentry, NULL);
 			if (!err || err == -ENOENT)
 				deleted = 1;
@@ -355,7 +332,7 @@ static int handle_remove(const char *nodename, struct device *dev)
 		err = -ENOENT;
 	}
 	dput(dentry);
-	inode_unlock(d_inode(parent.dentry));
+	mutex_unlock(&d_inode(parent.dentry)->i_mutex);
 
 	path_put(&parent);
 	if (deleted && strchr(nodename, '/'))
@@ -377,7 +354,7 @@ int devtmpfs_mount(const char *mntdir)
 	if (!thread)
 		return 0;
 
-	err = ksys_mount("devtmpfs", mntdir, "devtmpfs", MS_SILENT, NULL);
+	err = sys_mount("devtmpfs", (char *)mntdir, "devtmpfs", MS_SILENT, NULL);
 	if (err)
 		printk(KERN_INFO "devtmpfs: error mounting %i\n", err);
 	else
@@ -398,15 +375,16 @@ static int handle(const char *name, umode_t mode, kuid_t uid, kgid_t gid,
 
 static int devtmpfsd(void *p)
 {
+	char options[] = "mode=0755";
 	int *err = p;
-	*err = ksys_unshare(CLONE_NEWNS);
+	*err = sys_unshare(CLONE_NEWNS);
 	if (*err)
 		goto out;
-	*err = ksys_mount("devtmpfs", "/", "devtmpfs", MS_SILENT, NULL);
+	*err = sys_mount("devtmpfs", "/", "devtmpfs", MS_SILENT, options);
 	if (*err)
 		goto out;
-	ksys_chdir("/.."); /* will traverse into overmounted root */
-	ksys_chroot(".");
+	sys_chdir("/.."); /* will traverse into overmounted root */
+	sys_chroot(".");
 	complete(&setup_done);
 	while (1) {
 		spin_lock(&req_lock);
@@ -439,16 +417,7 @@ out:
  */
 int __init devtmpfs_init(void)
 {
-	char opts[] = "mode=0755";
-	int err;
-
-	mnt = vfs_kern_mount(&internal_fs_type, 0, "devtmpfs", opts);
-	if (IS_ERR(mnt)) {
-		printk(KERN_ERR "devtmpfs: unable to create devtmpfs %ld\n",
-				PTR_ERR(mnt));
-		return PTR_ERR(mnt);
-	}
-	err = register_filesystem(&dev_fs_type);
+	int err = register_filesystem(&dev_fs_type);
 	if (err) {
 		printk(KERN_ERR "devtmpfs: unable to register devtmpfs "
 		       "type %i\n", err);

@@ -1,10 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * fsl_asrc.h - Freescale ASRC ALSA SoC header file
  *
  * Copyright (C) 2014 Freescale Semiconductor, Inc.
  *
  * Author: Nicolin Chen <nicoleotsuka@gmail.com>
+ *
+ * This file is licensed under the terms of the GNU General Public License
+ * version 2. This program is licensed "as is" without any warranty of any
+ * kind, whether express or implied.
  */
 
 #ifndef _FSL_ASRC_H
@@ -54,7 +57,7 @@
 #define REG_ASRDOC			0x74
 #define REG_ASRDI(i)			(REG_ASRDIA + (i << 3))
 #define REG_ASRDO(i)			(REG_ASRDOA + (i << 3))
-#define REG_ASRDx(x, i)			((x) == IN ? REG_ASRDI(i) : REG_ASRDO(i))
+#define REG_ASRDx(x, i)			(x == IN ? REG_ASRDI(i) : REG_ASRDO(i))
 
 #define REG_ASRIDRHA			0x80
 #define REG_ASRIDRLA			0x84
@@ -129,13 +132,10 @@
 #define ASRCFG_INIRQi			(1 << ASRCFG_INIRQi_SHIFT(i))
 #define ASRCFG_NDPRi_SHIFT(i)		(18 + i)
 #define ASRCFG_NDPRi_MASK(i)		(1 << ASRCFG_NDPRi_SHIFT(i))
-#define ASRCFG_NDPRi_ALL_SHIFT		18
-#define ASRCFG_NDPRi_ALL_MASK		(7 << ASRCFG_NDPRi_ALL_SHIFT)
 #define ASRCFG_NDPRi			(1 << ASRCFG_NDPRi_SHIFT(i))
 #define ASRCFG_POSTMODi_SHIFT(i)	(8 + (i << 2))
 #define ASRCFG_POSTMODi_WIDTH		2
 #define ASRCFG_POSTMODi_MASK(i)		(((1 << ASRCFG_POSTMODi_WIDTH) - 1) << ASRCFG_POSTMODi_SHIFT(i))
-#define ASRCFG_POSTMODi_ALL_MASK	(ASRCFG_POSTMODi_MASK(0) | ASRCFG_POSTMODi_MASK(1) | ASRCFG_POSTMODi_MASK(2))
 #define ASRCFG_POSTMOD(i, v)		((v) << ASRCFG_POSTMODi_SHIFT(i))
 #define ASRCFG_POSTMODi_UP(i)		(0 << ASRCFG_POSTMODi_SHIFT(i))
 #define ASRCFG_POSTMODi_DCON(i)		(1 << ASRCFG_POSTMODi_SHIFT(i))
@@ -143,7 +143,6 @@
 #define ASRCFG_PREMODi_SHIFT(i)		(6 + (i << 2))
 #define ASRCFG_PREMODi_WIDTH		2
 #define ASRCFG_PREMODi_MASK(i)		(((1 << ASRCFG_PREMODi_WIDTH) - 1) << ASRCFG_PREMODi_SHIFT(i))
-#define ASRCFG_PREMODi_ALL_MASK		(ASRCFG_PREMODi_MASK(0) | ASRCFG_PREMODi_MASK(1) | ASRCFG_PREMODi_MASK(2))
 #define ASRCFG_PREMOD(i, v)		((v) << ASRCFG_PREMODi_SHIFT(i))
 #define ASRCFG_PREMODi_UP(i)		(0 << ASRCFG_PREMODi_SHIFT(i))
 #define ASRCFG_PREMODi_DCON(i)		(1 << ASRCFG_PREMODi_SHIFT(i))
@@ -257,8 +256,8 @@
 #define ASRFSTi_OUTPUT_FIFO_SHIFT	12
 #define ASRFSTi_OUTPUT_FIFO_MASK	(((1 << ASRFSTi_OUTPUT_FIFO_WIDTH) - 1) << ASRFSTi_OUTPUT_FIFO_SHIFT)
 #define ASRFSTi_IAEi_SHIFT		11
-#define ASRFSTi_IAEi_MASK		(1 << ASRFSTi_IAEi_SHIFT)
-#define ASRFSTi_IAEi			(1 << ASRFSTi_IAEi_SHIFT)
+#define ASRFSTi_IAEi_MASK		(1 << ASRFSTi_OAFi_SHIFT)
+#define ASRFSTi_IAEi			(1 << ASRFSTi_OAFi_SHIFT)
 #define ASRFSTi_INPUT_FIFO_WIDTH	7
 #define ASRFSTi_INPUT_FIFO_SHIFT	0
 #define ASRFSTi_INPUT_FIFO_MASK		((1 << ASRFSTi_INPUT_FIFO_WIDTH) - 1)
@@ -427,7 +426,6 @@ struct fsl_asrc_pair {
  * @paddr: physical address to the base address of registers
  * @mem_clk: clock source to access register
  * @ipg_clk: clock source to drive peripheral
- * @spba_clk: SPBA clock (optional, depending on SoC design)
  * @asrck_clk: clock sources to driver ASRC internal logic
  * @lock: spin lock for resource protection
  * @pair: pair pointers
@@ -435,7 +433,6 @@ struct fsl_asrc_pair {
  * @channel_avail: non-occupied channel numbers
  * @asrc_rate: default sample rate for ASoC Back-Ends
  * @asrc_width: default sample width for ASoC Back-Ends
- * @regcache_cfg: store register value of REG_ASRCFG
  */
 struct fsl_asrc {
 	struct snd_dmaengine_dai_dma_data dma_params_rx;
@@ -445,7 +442,6 @@ struct fsl_asrc {
 	unsigned long paddr;
 	struct clk *mem_clk;
 	struct clk *ipg_clk;
-	struct clk *spba_clk;
 	struct clk *asrck_clk[ASRC_CLK_MAX_NUM];
 	spinlock_t lock;
 
@@ -455,11 +451,8 @@ struct fsl_asrc {
 
 	int asrc_rate;
 	int asrc_width;
-
-	u32 regcache_cfg;
 };
 
-#define DRV_NAME "fsl-asrc-dai"
-extern struct snd_soc_component_driver fsl_asrc_component;
+extern struct snd_soc_platform_driver fsl_asrc_platform;
 struct dma_chan *fsl_asrc_get_dma_channel(struct fsl_asrc_pair *pair, bool dir);
 #endif /* _FSL_ASRC_H */

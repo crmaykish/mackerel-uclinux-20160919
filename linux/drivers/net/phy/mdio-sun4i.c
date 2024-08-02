@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Allwinner EMAC MDIO interface driver
  *
@@ -7,6 +6,10 @@
  *
  * Based on the Linux driver provided by Allwinner:
  * Copyright (C) 1997  Sten Wang
+ *
+ * This file is licensed under the terms of the GNU General Public
+ * License version 2. This program is licensed "as is" without any
+ * warranty of any kind, whether express or implied.
  */
 
 #include <linux/delay.h>
@@ -92,7 +95,8 @@ static int sun4i_mdio_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	struct mii_bus *bus;
 	struct sun4i_mdio_data *data;
-	int ret;
+	struct resource *res;
+	int ret, i;
 
 	bus = mdiobus_alloc_size(sizeof(*data));
 	if (!bus)
@@ -104,8 +108,19 @@ static int sun4i_mdio_probe(struct platform_device *pdev)
 	snprintf(bus->id, MII_BUS_ID_SIZE, "%s-mii", dev_name(&pdev->dev));
 	bus->parent = &pdev->dev;
 
+	bus->irq = devm_kzalloc(&pdev->dev, sizeof(int) * PHY_MAX_ADDR,
+			GFP_KERNEL);
+	if (!bus->irq) {
+		ret = -ENOMEM;
+		goto err_out_free_mdiobus;
+	}
+
+	for (i = 0; i < PHY_MAX_ADDR; i++)
+		bus->irq[i] = PHY_POLL;
+
 	data = bus->priv;
-	data->membase = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	data->membase = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(data->membase)) {
 		ret = PTR_ERR(data->membase);
 		goto err_out_free_mdiobus;
@@ -113,13 +128,10 @@ static int sun4i_mdio_probe(struct platform_device *pdev)
 
 	data->regulator = devm_regulator_get(&pdev->dev, "phy");
 	if (IS_ERR(data->regulator)) {
-		if (PTR_ERR(data->regulator) == -EPROBE_DEFER) {
-			ret = -EPROBE_DEFER;
-			goto err_out_free_mdiobus;
-		}
+		if (PTR_ERR(data->regulator) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
 
 		dev_info(&pdev->dev, "no regulator found\n");
-		data->regulator = NULL;
 	} else {
 		ret = regulator_enable(data->regulator);
 		if (ret)
@@ -135,8 +147,7 @@ static int sun4i_mdio_probe(struct platform_device *pdev)
 	return 0;
 
 err_out_disable_regulator:
-	if (data->regulator)
-		regulator_disable(data->regulator);
+	regulator_disable(data->regulator);
 err_out_free_mdiobus:
 	mdiobus_free(bus);
 	return ret;
@@ -145,11 +156,8 @@ err_out_free_mdiobus:
 static int sun4i_mdio_remove(struct platform_device *pdev)
 {
 	struct mii_bus *bus = platform_get_drvdata(pdev);
-	struct sun4i_mdio_data *data = bus->priv;
 
 	mdiobus_unregister(bus);
-	if (data->regulator)
-		regulator_disable(data->regulator);
 	mdiobus_free(bus);
 
 	return 0;
@@ -177,4 +185,4 @@ module_platform_driver(sun4i_mdio_driver);
 
 MODULE_DESCRIPTION("Allwinner EMAC MDIO interface driver");
 MODULE_AUTHOR("Maxime Ripard <maxime.ripard@free-electrons.com>");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

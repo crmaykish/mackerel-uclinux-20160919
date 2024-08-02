@@ -1,8 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AD7887 SPI ADC driver
  *
  * Copyright 2010-2011 Analog Devices Inc.
+ *
+ * Licensed under the GPL-2.
  */
 
 #include <linux/device.h>
@@ -121,7 +122,7 @@ static irqreturn_t ad7887_trigger_handler(int irq, void *p)
 		goto done;
 
 	iio_push_to_buffers_with_timestamp(indio_dev, st->data,
-		iio_get_time_ns(indio_dev));
+		iio_get_time_ns());
 done:
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -155,11 +156,12 @@ static int ad7887_read_raw(struct iio_dev *indio_dev,
 
 	switch (m) {
 	case IIO_CHAN_INFO_RAW:
-		ret = iio_device_claim_direct_mode(indio_dev);
-		if (ret)
-			return ret;
-		ret = ad7887_scan_direct(st, chan->address);
-		iio_device_release_direct_mode(indio_dev);
+		mutex_lock(&indio_dev->mlock);
+		if (iio_buffer_enabled(indio_dev))
+			ret = -EBUSY;
+		else
+			ret = ad7887_scan_direct(st, chan->address);
+		mutex_unlock(&indio_dev->mlock);
 
 		if (ret < 0)
 			return ret;
@@ -228,6 +230,7 @@ static const struct ad7887_chip_info ad7887_chip_info_tbl[] = {
 
 static const struct iio_info ad7887_info = {
 	.read_raw = &ad7887_read_raw,
+	.driver_module = THIS_MODULE,
 };
 
 static int ad7887_probe(struct spi_device *spi)
@@ -262,7 +265,6 @@ static int ad7887_probe(struct spi_device *spi)
 
 	/* Estabilish that the iio_dev is a child of the spi device */
 	indio_dev->dev.parent = &spi->dev;
-	indio_dev->dev.of_node = spi->dev.of_node;
 	indio_dev->name = spi_get_device_id(spi)->name;
 	indio_dev->info = &ad7887_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
@@ -361,6 +363,6 @@ static struct spi_driver ad7887_driver = {
 };
 module_spi_driver(ad7887_driver);
 
-MODULE_AUTHOR("Michael Hennerich <michael.hennerich@analog.com>");
+MODULE_AUTHOR("Michael Hennerich <hennerich@blackfin.uclinux.org>");
 MODULE_DESCRIPTION("Analog Devices AD7887 ADC");
 MODULE_LICENSE("GPL v2");

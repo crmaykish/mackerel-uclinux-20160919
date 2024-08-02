@@ -1,9 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *
  *  AVM BlueFRITZ! USB driver
  *
  *  Copyright (C) 2003-2006  Marcel Holtmann <marcel@holtmann.org>
+ *
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  */
 
 #include <linux/module.h>
@@ -309,7 +324,7 @@ static inline int bfusb_recv_block(struct bfusb_data *data, int hdr, unsigned ch
 			return -ENOMEM;
 		}
 
-		hci_skb_pkt_type(skb) = pkt_type;
+		bt_cb(skb)->pkt_type = pkt_type;
 
 		data->reassembly = skb;
 	} else {
@@ -320,7 +335,7 @@ static inline int bfusb_recv_block(struct bfusb_data *data, int hdr, unsigned ch
 	}
 
 	if (len > 0)
-		skb_put_data(data->reassembly, buf, len);
+		memcpy(skb_put(data->reassembly, len), buf, len);
 
 	if (hdr & 0x08) {
 		hci_recv_frame(data->hdev, data->reassembly);
@@ -454,10 +469,9 @@ static int bfusb_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 	unsigned char buf[3];
 	int sent = 0, size, count;
 
-	BT_DBG("hdev %p skb %p type %d len %d", hdev, skb,
-	       hci_skb_pkt_type(skb), skb->len);
+	BT_DBG("hdev %p skb %p type %d len %d", hdev, skb, bt_cb(skb)->pkt_type, skb->len);
 
-	switch (hci_skb_pkt_type(skb)) {
+	switch (bt_cb(skb)->pkt_type) {
 	case HCI_COMMAND_PKT:
 		hdev->stat.cmd_tx++;
 		break;
@@ -470,12 +484,12 @@ static int bfusb_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 	}
 
 	/* Prepend skb with frame type */
-	memcpy(skb_push(skb, 1), &hci_skb_pkt_type(skb), 1);
+	memcpy(skb_push(skb, 1), &bt_cb(skb)->pkt_type, 1);
 
 	count = skb->len;
 
 	/* Max HCI frame size seems to be 1511 + 1 */
-	nskb = bt_skb_alloc(count + 32, GFP_KERNEL);
+	nskb = bt_skb_alloc(count + 32, GFP_ATOMIC);
 	if (!nskb) {
 		BT_ERR("Can't allocate memory for new packet");
 		return -ENOMEM;
@@ -490,7 +504,7 @@ static int bfusb_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 		buf[1] = 0x00;
 		buf[2] = (size == BFUSB_MAX_BLOCK_SIZE) ? 0 : size;
 
-		skb_put_data(nskb, buf, 3);
+		memcpy(skb_put(nskb, 3), buf, 3);
 		skb_copy_from_linear_data_offset(skb, sent, skb_put(nskb, size), size);
 
 		sent  += size;
@@ -501,7 +515,7 @@ static int bfusb_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 	if ((nskb->len % data->bulk_pkt_size) == 0) {
 		buf[0] = 0xdd;
 		buf[1] = 0x00;
-		skb_put_data(nskb, buf, 2);
+		memcpy(skb_put(nskb, 2), buf, 2);
 	}
 
 	read_lock(&data->lock);
@@ -621,16 +635,15 @@ static int bfusb_probe(struct usb_interface *intf, const struct usb_device_id *i
 
 	/* Initialize control structure and load firmware */
 	data = devm_kzalloc(&intf->dev, sizeof(struct bfusb_data), GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	if (!data) {
+		BT_ERR("Can't allocate memory for control structure");
+		goto done;
+	}
 
 	data->udev = udev;
 	data->bulk_in_ep    = bulk_in_ep->desc.bEndpointAddress;
 	data->bulk_out_ep   = bulk_out_ep->desc.bEndpointAddress;
 	data->bulk_pkt_size = le16_to_cpu(bulk_out_ep->desc.wMaxPacketSize);
-
-	if (!data->bulk_pkt_size)
-		goto done;
 
 	rwlock_init(&data->lock);
 

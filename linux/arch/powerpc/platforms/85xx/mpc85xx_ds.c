@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * MPC85xx DS Board Setup
  *
@@ -6,6 +5,11 @@
  * Roy Zang <tie-fei.zang@freescale.com>
  * 	- Add PCI/PCI Exprees support
  * Copyright 2007 Freescale Semiconductor Inc.
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #include <linux/stddef.h>
@@ -47,7 +51,7 @@ static void mpc85xx_8259_cascade(struct irq_desc *desc)
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	unsigned int cascade_irq = i8259_irq();
 
-	if (cascade_irq) {
+	if (cascade_irq != NO_IRQ) {
 		generic_handle_irq(cascade_irq);
 	}
 	chip->irq_eoi(&desc->irq_data);
@@ -62,7 +66,9 @@ void __init mpc85xx_ds_pic_init(void)
 	struct device_node *cascade_node = NULL;
 	int cascade_irq;
 #endif
-	if (of_machine_is_compatible("fsl,MPC8572DS-CAMP")) {
+	unsigned long root = of_get_flat_dt_root();
+
+	if (of_flat_dt_is_compatible(root, "fsl,MPC8572DS-CAMP")) {
 		mpic = mpic_alloc(NULL, 0,
 			MPIC_NO_RESET |
 			MPIC_BIG_ENDIAN |
@@ -92,7 +98,7 @@ void __init mpc85xx_ds_pic_init(void)
 	}
 
 	cascade_irq = irq_of_parse_and_map(cascade_node, 0);
-	if (!cascade_irq) {
+	if (cascade_irq == NO_IRQ) {
 		printk(KERN_ERR "Failed to map cascade interrupt\n");
 		return;
 	}
@@ -163,19 +169,27 @@ static void __init mpc85xx_ds_setup_arch(void)
  */
 static int __init mpc8544_ds_probe(void)
 {
-	return !!of_machine_is_compatible("MPC8544DS");
+	unsigned long root = of_get_flat_dt_root();
+
+	return !!of_flat_dt_is_compatible(root, "MPC8544DS");
 }
 
 machine_arch_initcall(mpc8544_ds, mpc85xx_common_publish_devices);
 machine_arch_initcall(mpc8572_ds, mpc85xx_common_publish_devices);
 machine_arch_initcall(p2020_ds, mpc85xx_common_publish_devices);
 
+machine_arch_initcall(mpc8544_ds, swiotlb_setup_bus_notifier);
+machine_arch_initcall(mpc8572_ds, swiotlb_setup_bus_notifier);
+machine_arch_initcall(p2020_ds, swiotlb_setup_bus_notifier);
+
 /*
  * Called very early, device-tree isn't unflattened
  */
 static int __init mpc8572_ds_probe(void)
 {
-	return !!of_machine_is_compatible("fsl,MPC8572DS");
+	unsigned long root = of_get_flat_dt_root();
+
+	return !!of_flat_dt_is_compatible(root, "fsl,MPC8572DS");
 }
 
 /*
@@ -183,7 +197,9 @@ static int __init mpc8572_ds_probe(void)
  */
 static int __init p2020_ds_probe(void)
 {
-	return !!of_machine_is_compatible("fsl,P2020DS");
+	unsigned long root = of_get_flat_dt_root();
+
+	return !!of_flat_dt_is_compatible(root, "fsl,P2020DS");
 }
 
 define_machine(mpc8544_ds) {
@@ -196,6 +212,7 @@ define_machine(mpc8544_ds) {
 	.pcibios_fixup_phb      = fsl_pcibios_fixup_phb,
 #endif
 	.get_irq		= mpic_get_irq,
+	.restart		= fsl_rstcr_restart,
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
 };
@@ -210,6 +227,7 @@ define_machine(mpc8572_ds) {
 	.pcibios_fixup_phb      = fsl_pcibios_fixup_phb,
 #endif
 	.get_irq		= mpic_get_irq,
+	.restart		= fsl_rstcr_restart,
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
 };
@@ -224,6 +242,7 @@ define_machine(p2020_ds) {
 	.pcibios_fixup_phb      = fsl_pcibios_fixup_phb,
 #endif
 	.get_irq		= mpic_get_irq,
+	.restart		= fsl_rstcr_restart,
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
 };

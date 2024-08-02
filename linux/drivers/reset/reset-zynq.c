@@ -1,15 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015, National Instruments Corp.
  *
  * Xilinx Zynq Reset controller driver
  *
- * Author: Moritz Fischer <moritz.fischer@ettus.com>
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; version 2 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/err.h>
 #include <linux/io.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -80,7 +86,7 @@ static int zynq_reset_status(struct reset_controller_dev *rcdev,
 	return !!(reg & BIT(offset));
 }
 
-static const struct reset_control_ops zynq_reset_ops = {
+static struct reset_control_ops zynq_reset_ops = {
 	.assert		= zynq_reset_assert,
 	.deassert	= zynq_reset_deassert,
 	.status		= zynq_reset_status,
@@ -115,8 +121,18 @@ static int zynq_reset_probe(struct platform_device *pdev)
 	priv->rcdev.nr_resets = resource_size(res) / 4 * BITS_PER_LONG;
 	priv->rcdev.ops = &zynq_reset_ops;
 	priv->rcdev.of_node = pdev->dev.of_node;
+	reset_controller_register(&priv->rcdev);
 
-	return devm_reset_controller_register(&pdev->dev, &priv->rcdev);
+	return 0;
+}
+
+static int zynq_reset_remove(struct platform_device *pdev)
+{
+	struct zynq_reset_data *priv = platform_get_drvdata(pdev);
+
+	reset_controller_unregister(&priv->rcdev);
+
+	return 0;
 }
 
 static const struct of_device_id zynq_reset_dt_ids[] = {
@@ -126,9 +142,14 @@ static const struct of_device_id zynq_reset_dt_ids[] = {
 
 static struct platform_driver zynq_reset_driver = {
 	.probe	= zynq_reset_probe,
+	.remove	= zynq_reset_remove,
 	.driver = {
 		.name		= KBUILD_MODNAME,
 		.of_match_table	= zynq_reset_dt_ids,
 	},
 };
-builtin_platform_driver(zynq_reset_driver);
+module_platform_driver(zynq_reset_driver);
+
+MODULE_LICENSE("GPL v2");
+MODULE_AUTHOR("Moritz Fischer <moritz.fischer@ettus.com>");
+MODULE_DESCRIPTION("Zynq Reset Controller Driver");

@@ -1,10 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
+/* linux/arch/arm/plat-samsung/include/plat/map-s3c.h
+ *
  * Copyright (c) 2008 Simtec Electronics
  *	Ben Dooks <ben@simtec.co.uk>
  *
  * S3C24XX - Memory map definitions
- */
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+*/
 
 #ifndef __ASM_PLAT_MAP_S3C_H
 #define __ASM_PLAT_MAP_S3C_H __FILE__
@@ -22,6 +26,10 @@
 
 #define S3C2410_PA_UART		(0x50000000)
 #define S3C24XX_PA_UART		S3C2410_PA_UART
+
+#ifndef S3C_UART_OFFSET
+#define S3C_UART_OFFSET		(0x400)
+#endif
 
 /*
  * GPIO ports
@@ -57,7 +65,7 @@
 
 /* deal with the registers that move under the 2412/2413 */
 
-#if defined(CONFIG_CPU_S3C2412)
+#if defined(CONFIG_CPU_S3C2412) || defined(CONFIG_CPU_S3C2413)
 #ifndef __ASSEMBLY__
 extern void __iomem *s3c24xx_va_gpio2;
 #endif

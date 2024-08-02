@@ -65,6 +65,11 @@
 /* Core SCSI definitions */
 #define AIC_LIB_PREFIX ahd
 
+/* Name space conflict with BSD queue macros */
+#ifdef LIST_HEAD
+#undef LIST_HEAD
+#endif
+
 #include "cam.h"
 #include "queue.h"
 #include "scsi_message.h"
@@ -203,6 +208,9 @@ int	ahd_dmamap_unload(struct ahd_softc *, bus_dma_tag_t, bus_dmamap_t);
  */
 #define ahd_dmamap_sync(ahd, dma_tag, dmamap, offset, len, op)
 
+/************************** Timer DataStructures ******************************/
+typedef struct timer_list ahd_timer_t;
+
 /********************************** Includes **********************************/
 #ifdef CONFIG_AIC79XX_REG_PRETTY_PRINT
 #define AIC_DEBUG_REGISTERS 1
@@ -210,6 +218,10 @@ int	ahd_dmamap_unload(struct ahd_softc *, bus_dma_tag_t, bus_dmamap_t);
 #define AIC_DEBUG_REGISTERS 0
 #endif
 #include "aic79xx.h"
+
+/***************************** Timer Facilities *******************************/
+#define ahd_timer_init init_timer
+#define ahd_timer_stop del_timer_sync
 
 /***************************** SMP support ************************************/
 #include <linux/spinlock.h>

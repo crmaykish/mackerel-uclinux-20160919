@@ -1,6 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * lib/ts_bm.c		Boyer-Moore text search implementation
+ *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
  *
  * Authors:	Pablo Neira Ayuso <pablo@eurodev.net>
  *
@@ -60,12 +64,10 @@ static unsigned int bm_find(struct ts_config *conf, struct ts_state *state)
 	struct ts_bm *bm = ts_config_priv(conf);
 	unsigned int i, text_len, consumed = state->offset;
 	const u8 *text;
-	int bs;
+	int shift = bm->patlen - 1, bs;
 	const u8 icase = conf->flags & TS_IGNORECASE;
 
 	for (;;) {
-		int shift = bm->patlen - 1;
-
 		text_len = conf->get_next_block(consumed, &text, conf, state);
 
 		if (unlikely(text_len == 0))

@@ -167,7 +167,7 @@ struct qlcnic_dcb_cfg {
 	u32 version;
 };
 
-static const struct qlcnic_dcb_ops qlcnic_83xx_dcb_ops = {
+static struct qlcnic_dcb_ops qlcnic_83xx_dcb_ops = {
 	.init_dcbnl_ops		= __qlcnic_init_dcbnl_ops,
 	.free			= __qlcnic_dcb_free,
 	.attach			= __qlcnic_dcb_attach,
@@ -180,7 +180,7 @@ static const struct qlcnic_dcb_ops qlcnic_83xx_dcb_ops = {
 	.aen_handler		= qlcnic_83xx_dcb_aen_handler,
 };
 
-static const struct qlcnic_dcb_ops qlcnic_82xx_dcb_ops = {
+static struct qlcnic_dcb_ops qlcnic_82xx_dcb_ops = {
 	.init_dcbnl_ops		= __qlcnic_init_dcbnl_ops,
 	.free			= __qlcnic_dcb_free,
 	.attach			= __qlcnic_dcb_attach,
@@ -883,7 +883,7 @@ static u8 qlcnic_dcb_get_capability(struct net_device *netdev, int capid,
 	struct qlcnic_adapter *adapter = netdev_priv(netdev);
 
 	if (!test_bit(QLCNIC_DCB_STATE, &adapter->dcb->state))
-		return 1;
+		return 0;
 
 	switch (capid) {
 	case DCB_CAP_ATTR_PG:

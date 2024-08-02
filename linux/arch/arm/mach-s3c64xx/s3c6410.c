@@ -1,9 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0
-//
-// Copyright 2008 Simtec Electronics
-// Copyright 2008 Simtec Electronics
-//	Ben Dooks <ben@simtec.co.uk>
-//	http://armlinux.simtec.co.uk/
+/* linux/arch/arm/mach-s3c64xx/s3c6410.c
+ *
+ * Copyright 2008 Simtec Electronics
+ * Copyright 2008 Simtec Electronics
+ *	Ben Dooks <ben@simtec.co.uk>
+ *	http://armlinux.simtec.co.uk/
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+*/
 
 /*
  * NOTE: Code in this file is not used when booting with Device Tree support.
@@ -79,7 +84,7 @@ static struct device s3c6410_dev = {
 static int __init s3c6410_core_init(void)
 {
 	/* Not applicable when using DT. */
-	if (of_have_populated_dt() || !soc_is_s3c64xx())
+	if (of_have_populated_dt())
 		return 0;
 
 	return subsys_system_register(&s3c6410_subsys, NULL);

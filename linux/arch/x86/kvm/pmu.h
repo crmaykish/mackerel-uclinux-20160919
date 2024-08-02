@@ -1,8 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __KVM_X86_PMU_H
 #define __KVM_X86_PMU_H
-
-#include <linux/nospec.h>
 
 #define vcpu_to_pmu(vcpu) (&(vcpu)->arch.pmu)
 #define pmu_to_vcpu(pmu)  (container_of((pmu), struct kvm_vcpu, arch.pmu))
@@ -11,10 +8,6 @@
 /* retrieve the 4 bits for EN and PMI out of IA32_FIXED_CTR_CTRL */
 #define fixed_ctrl_field(ctrl_reg, idx) (((ctrl_reg) >> ((idx)*4)) & 0xf)
 
-#define VMWARE_BACKDOOR_PMC_HOST_TSC		0x10000
-#define VMWARE_BACKDOOR_PMC_REAL_TIME		0x10001
-#define VMWARE_BACKDOOR_PMC_APPARENT_TIME	0x10002
-
 struct kvm_event_hw_type_mapping {
 	u8 eventsel;
 	u8 unit_mask;
@@ -22,12 +15,12 @@ struct kvm_event_hw_type_mapping {
 };
 
 struct kvm_pmu_ops {
-	unsigned int (*pmc_perf_hw_id)(struct kvm_pmc *pmc);
+	unsigned (*find_arch_event)(struct kvm_pmu *pmu, u8 event_select,
+				    u8 unit_mask);
 	unsigned (*find_fixed_event)(int idx);
 	bool (*pmc_is_enabled)(struct kvm_pmc *pmc);
 	struct kvm_pmc *(*pmc_idx_to_pmc)(struct kvm_pmu *pmu, int pmc_idx);
-	struct kvm_pmc *(*msr_idx_to_pmc)(struct kvm_vcpu *vcpu, unsigned idx,
-					  u64 *mask);
+	struct kvm_pmc *(*msr_idx_to_pmc)(struct kvm_vcpu *vcpu, unsigned idx);
 	int (*is_valid_msr_idx)(struct kvm_vcpu *vcpu, unsigned idx);
 	bool (*is_valid_msr)(struct kvm_vcpu *vcpu, u32 msr);
 	int (*get_msr)(struct kvm_vcpu *vcpu, u32 msr, u64 *data);
@@ -87,12 +80,8 @@ static inline bool pmc_is_enabled(struct kvm_pmc *pmc)
 static inline struct kvm_pmc *get_gp_pmc(struct kvm_pmu *pmu, u32 msr,
 					 u32 base)
 {
-	if (msr >= base && msr < base + pmu->nr_arch_gp_counters) {
-		u32 index = array_index_nospec(msr - base,
-					       pmu->nr_arch_gp_counters);
-
-		return &pmu->gp_counters[index];
-	}
+	if (msr >= base && msr < base + pmu->nr_arch_gp_counters)
+		return &pmu->gp_counters[msr - base];
 
 	return NULL;
 }
@@ -102,12 +91,8 @@ static inline struct kvm_pmc *get_fixed_pmc(struct kvm_pmu *pmu, u32 msr)
 {
 	int base = MSR_CORE_PERF_FIXED_CTR0;
 
-	if (msr >= base && msr < base + pmu->nr_arch_fixed_counters) {
-		u32 index = array_index_nospec(msr - base,
-					       pmu->nr_arch_fixed_counters);
-
-		return &pmu->fixed_counters[index];
-	}
+	if (msr >= base && msr < base + pmu->nr_arch_fixed_counters)
+		return &pmu->fixed_counters[msr - base];
 
 	return NULL;
 }
@@ -127,9 +112,6 @@ void kvm_pmu_refresh(struct kvm_vcpu *vcpu);
 void kvm_pmu_reset(struct kvm_vcpu *vcpu);
 void kvm_pmu_init(struct kvm_vcpu *vcpu);
 void kvm_pmu_destroy(struct kvm_vcpu *vcpu);
-int kvm_vm_ioctl_set_pmu_event_filter(struct kvm *kvm, void __user *argp);
-
-bool is_vmware_backdoor_pmc(u32 pmc_idx);
 
 extern struct kvm_pmu_ops intel_pmu_ops;
 extern struct kvm_pmu_ops amd_pmu_ops;

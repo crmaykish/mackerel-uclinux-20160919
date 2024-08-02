@@ -598,9 +598,7 @@ static int __qlcnic_pci_sriov_enable(struct qlcnic_adapter *adapter,
 	if (err)
 		goto del_flr_queue;
 
-	err = qlcnic_sriov_alloc_vlans(adapter);
-	if (err)
-		goto del_flr_queue;
+	qlcnic_sriov_alloc_vlans(adapter);
 
 	return err;
 
@@ -1068,7 +1066,10 @@ static int qlcnic_sriov_pf_cfg_ip_cmd(struct qlcnic_bc_trans *trans,
 {
 	struct qlcnic_vf_info *vf = trans->vf;
 	struct qlcnic_adapter *adapter = vf->adapter;
-	int err;
+	int err = -EIO;
+	u8 op;
+
+	op =  cmd->req.arg[1] & 0xff;
 
 	cmd->req.arg[1] |= vf->vp->handle << 16;
 	cmd->req.arg[1] |= BIT_31;
@@ -1338,13 +1339,14 @@ static int qlcnic_sriov_pf_get_acl_cmd(struct qlcnic_bc_trans *trans,
 {
 	struct qlcnic_vf_info *vf = trans->vf;
 	struct qlcnic_vport *vp = vf->vp;
-	u8 mode = vp->vlan_mode;
+	u8 cmd_op, mode = vp->vlan_mode;
 	struct qlcnic_adapter *adapter;
 	struct qlcnic_sriov *sriov;
 
 	adapter = vf->adapter;
 	sriov = adapter->ahw->sriov;
 
+	cmd_op = trans->req_hdr->cmd_op;
 	cmd->rsp.arg[0] |= 1 << 25;
 
 	/* For 84xx adapter in case of PVID , PFD should send vlan mode as
@@ -1913,7 +1915,7 @@ int qlcnic_sriov_set_vf_tx_rate(struct net_device *netdev, int vf,
 }
 
 int qlcnic_sriov_set_vf_vlan(struct net_device *netdev, int vf,
-			     u16 vlan, u8 qos, __be16 vlan_proto)
+			     u16 vlan, u8 qos)
 {
 	struct qlcnic_adapter *adapter = netdev_priv(netdev);
 	struct qlcnic_sriov *sriov = adapter->ahw->sriov;
@@ -1925,9 +1927,6 @@ int qlcnic_sriov_set_vf_vlan(struct net_device *netdev, int vf,
 
 	if (vf >= sriov->num_vfs || qos > 7)
 		return -EINVAL;
-
-	if (vlan_proto != htons(ETH_P_8021Q))
-		return -EPROTONOSUPPORT;
 
 	if (vlan > MAX_VLAN_ID) {
 		netdev_err(netdev,

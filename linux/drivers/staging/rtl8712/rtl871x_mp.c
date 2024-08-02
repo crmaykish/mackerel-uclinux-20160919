@@ -1,7 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0
 /******************************************************************************
  *
  * Copyright(c) 2007 - 2010 Realtek Corporation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
  *
  * Modifications for inclusion into the Linux staging tree are
  * Copyright(c) 2010 Larry Finger. All rights reserved.
@@ -35,7 +47,7 @@ static void _init_mp_priv_(struct mp_priv *pmp_priv)
 
 static int init_mp_priv(struct mp_priv *pmp_priv)
 {
-	int i;
+	int i, res;
 	struct mp_xmit_frame *pmp_xmitframe;
 
 	_init_mp_priv_(pmp_priv);
@@ -45,7 +57,8 @@ static int init_mp_priv(struct mp_priv *pmp_priv)
 				sizeof(struct mp_xmit_frame) + 4,
 				GFP_ATOMIC);
 	if (!pmp_priv->pallocated_mp_xmitframe_buf) {
-		return -ENOMEM;
+		res = _FAIL;
+		goto _exit_init_mp_priv;
 	}
 	pmp_priv->pmp_xmtframe_buf = pmp_priv->pallocated_mp_xmitframe_buf +
 			 4 -
@@ -61,7 +74,9 @@ static int init_mp_priv(struct mp_priv *pmp_priv)
 		pmp_xmitframe++;
 	}
 	pmp_priv->free_mp_xmitframe_cnt = NR_MP_XMITFRAME;
-	return 0;
+	res = _SUCCESS;
+_exit_init_mp_priv:
+	return res;
 }
 
 static int free_mp_priv(struct mp_priv *pmp_priv)
@@ -220,7 +235,7 @@ static u8 set_bb_reg(struct _adapter *pAdapter,
 	if (bitmask != bMaskDWord) {
 		org_value = r8712_bb_reg_read(pAdapter, offset);
 		bit_shift = bitshift(bitmask);
-		new_value = (org_value & (~bitmask)) | (value << bit_shift);
+		new_value = ((org_value & (~bitmask)) | (value << bit_shift));
 	} else {
 		new_value = value;
 	}
@@ -245,7 +260,7 @@ static u8 set_rf_reg(struct _adapter *pAdapter, u8 path, u8 offset, u32 bitmask,
 	if (bitmask != bMaskDWord) {
 		org_value = r8712_rf_reg_read(pAdapter, path, offset);
 		bit_shift = bitshift(bitmask);
-		new_value = (org_value & (~bitmask)) | (value << bit_shift);
+		new_value = ((org_value & (~bitmask)) | (value << bit_shift));
 	} else {
 		new_value = value;
 	}
@@ -266,10 +281,10 @@ void r8712_SetChannel(struct _adapter *pAdapter)
 	u16 code = GEN_CMD_CODE(_SetChannel);
 
 	pcmd = kmalloc(sizeof(*pcmd), GFP_ATOMIC);
-	if (!pcmd)
+	if (pcmd == NULL)
 		return;
 	pparm = kmalloc(sizeof(*pparm), GFP_ATOMIC);
-	if (!pparm) {
+	if (pparm == NULL) {
 		kfree(pcmd);
 		return;
 	}
@@ -312,10 +327,10 @@ void r8712_SetTxAGCOffset(struct _adapter *pAdapter, u32 ulTxAGCOffset)
 {
 	u32 TxAGCOffset_B, TxAGCOffset_C, TxAGCOffset_D, tmpAGC;
 
-	TxAGCOffset_B = ulTxAGCOffset & 0x000000ff;
+	TxAGCOffset_B = (ulTxAGCOffset & 0x000000ff);
 	TxAGCOffset_C = (ulTxAGCOffset & 0x0000ff00) >> 8;
 	TxAGCOffset_D = (ulTxAGCOffset & 0x00ff0000) >> 16;
-	tmpAGC = TxAGCOffset_D << 8 | TxAGCOffset_C << 4 | TxAGCOffset_B;
+	tmpAGC = (TxAGCOffset_D << 8 | TxAGCOffset_C << 4 | TxAGCOffset_B);
 	set_bb_reg(pAdapter, rFPGA0_TxGainStage,
 			(bXBTxAGC | bXCTxAGC | bXDTxAGC), tmpAGC);
 }
@@ -361,8 +376,7 @@ void r8712_SwitchBandwidth(struct _adapter *pAdapter)
 		/* Use PHY_REG.txt default value. Do not need to change.
 		 * Correct the tx power for CCK rate in 40M.
 		 * Set Control channel to upper or lower. These settings are
-		 * required only for 40MHz
-		 */
+		 * required only for 40MHz */
 		set_bb_reg(pAdapter, rCCK0_System, bCCKSideBand,
 			   (HAL_PRIME_CHNL_OFFSET_DONT_CARE >> 1));
 		set_bb_reg(pAdapter, rOFDM1_LSTF, 0xC00,
@@ -526,7 +540,7 @@ void r8712_SetSingleCarrierTx(struct _adapter *pAdapter, u8 bStart)
 
 void r8712_SetSingleToneTx(struct _adapter *pAdapter, u8 bStart)
 {
-	u8 rfPath;
+	u8 rfPath = pAdapter->mppriv.curr_rfpath;
 
 	switch (pAdapter->mppriv.antenna_tx) {
 	case ANTENNA_B:
@@ -694,30 +708,33 @@ void r8712_ResetPhyRxPktCount(struct _adapter *pAdapter)
 static u32 GetPhyRxPktCounts(struct _adapter *pAdapter, u32 selbit)
 {
 	/*selection*/
-	u32 phyrx_set = 0;
+	u32 phyrx_set = 0, count = 0;
 	u32 SelectBit;
 
 	SelectBit = selbit << 28;
 	phyrx_set |= (SelectBit & 0xF0000000);
 	r8712_write32(pAdapter, RXERR_RPT, phyrx_set);
 	/*Read packet count*/
-	return r8712_read32(pAdapter, RXERR_RPT) & RPTMaxCount;
+	count = r8712_read32(pAdapter, RXERR_RPT) & RPTMaxCount;
+	return count;
 }
 
 u32 r8712_GetPhyRxPktReceived(struct _adapter *pAdapter)
 {
-	u32 OFDM_cnt = GetPhyRxPktCounts(pAdapter, OFDM_MPDU_OK_BIT);
-	u32 CCK_cnt  = GetPhyRxPktCounts(pAdapter, CCK_MPDU_OK_BIT);
-	u32 HT_cnt   = GetPhyRxPktCounts(pAdapter, HT_MPDU_OK_BIT);
+	u32 OFDM_cnt = 0, CCK_cnt = 0, HT_cnt = 0;
 
+	OFDM_cnt = GetPhyRxPktCounts(pAdapter, OFDM_MPDU_OK_BIT);
+	CCK_cnt = GetPhyRxPktCounts(pAdapter, CCK_MPDU_OK_BIT);
+	HT_cnt = GetPhyRxPktCounts(pAdapter, HT_MPDU_OK_BIT);
 	return OFDM_cnt + CCK_cnt + HT_cnt;
 }
 
 u32 r8712_GetPhyRxPktCRC32Error(struct _adapter *pAdapter)
 {
-	u32 OFDM_cnt = GetPhyRxPktCounts(pAdapter, OFDM_MPDU_FAIL_BIT);
-	u32 CCK_cnt  = GetPhyRxPktCounts(pAdapter, CCK_MPDU_FAIL_BIT);
-	u32 HT_cnt   = GetPhyRxPktCounts(pAdapter, HT_MPDU_FAIL_BIT);
+	u32 OFDM_cnt = 0, CCK_cnt = 0, HT_cnt = 0;
 
+	OFDM_cnt = GetPhyRxPktCounts(pAdapter, OFDM_MPDU_FAIL_BIT);
+	CCK_cnt = GetPhyRxPktCounts(pAdapter, CCK_MPDU_FAIL_BIT);
+	HT_cnt = GetPhyRxPktCounts(pAdapter, HT_MPDU_FAIL_BIT);
 	return OFDM_cnt + CCK_cnt + HT_cnt;
 }

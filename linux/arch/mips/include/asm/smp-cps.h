@@ -1,7 +1,11 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (C) 2013 Imagination Technologies
- * Author: Paul Burton <paul.burton@mips.com>
+ * Author: Paul Burton <paul.burton@imgtec.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #ifndef __MIPS_ASM_SMP_CPS_H__
@@ -25,7 +29,7 @@ extern struct core_boot_config *mips_cps_core_bootcfg;
 extern void mips_cps_core_entry(void);
 extern void mips_cps_core_init(void);
 
-extern void mips_cps_boot_vpes(struct core_boot_config *cfg, unsigned vpe);
+extern struct vpe_boot_config *mips_cps_boot_vpes(void);
 
 extern void mips_cps_pm_save(void);
 extern void mips_cps_pm_restore(void);

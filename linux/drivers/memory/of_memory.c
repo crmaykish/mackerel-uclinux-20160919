@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * OpenFirmware helpers for memory drivers
  *
  * Copyright (C) 2012 Texas Instruments, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/device.h>
@@ -10,10 +14,8 @@
 #include <linux/list.h>
 #include <linux/of.h>
 #include <linux/gfp.h>
+#include <memory/jedec_ddr.h>
 #include <linux/export.h>
-
-#include "jedec_ddr.h"
-#include "of_memory.h"
 
 /**
  * of_get_min_tck() - extract min timing values for ddr
@@ -107,7 +109,7 @@ const struct lpddr2_timings *of_get_ddr_timings(struct device_node *np_ddr,
 	struct lpddr2_timings	*timings = NULL;
 	u32			arr_sz = 0, i = 0;
 	struct device_node	*np_tim;
-	char			*tim_compat = NULL;
+	char			*tim_compat;
 
 	switch (device_type) {
 	case DDR_TYPE_LPDDR2_S2:
@@ -123,8 +125,8 @@ const struct lpddr2_timings *of_get_ddr_timings(struct device_node *np_ddr,
 			arr_sz++;
 
 	if (arr_sz)
-		timings = devm_kcalloc(dev, arr_sz, sizeof(*timings),
-				       GFP_KERNEL);
+		timings = devm_kzalloc(dev, sizeof(*timings) * arr_sz,
+			GFP_KERNEL);
 
 	if (!timings)
 		goto default_timings;
@@ -132,7 +134,6 @@ const struct lpddr2_timings *of_get_ddr_timings(struct device_node *np_ddr,
 	for_each_child_of_node(np_ddr, np_tim) {
 		if (of_device_is_compatible(np_tim, tim_compat)) {
 			if (of_do_get_timings(np_tim, &timings[i])) {
-				of_node_put(np_tim);
 				devm_kfree(dev, timings);
 				goto default_timings;
 			}

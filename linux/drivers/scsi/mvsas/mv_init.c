@@ -1,10 +1,26 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Marvell 88SE64xx/88SE94xx pci init
  *
  * Copyright 2007 Red Hat, Inc.
  * Copyright 2008 Marvell. <kewei@marvell.com>
  * Copyright 2009-2011 Marvell. <yuxiangl@marvell.com>
+ *
+ * This file is licensed under GPLv2.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; version 2 of the
+ * License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+ * USA
 */
 
 
@@ -43,9 +59,9 @@ static struct scsi_host_template mvs_sht = {
 	.this_id		= -1,
 	.sg_tablesize		= SG_ALL,
 	.max_sectors		= SCSI_DEFAULT_MAX_SECTORS,
+	.use_clustering		= ENABLE_CLUSTERING,
 	.eh_device_reset_handler = sas_eh_device_reset_handler,
-	.eh_target_reset_handler = sas_eh_target_reset_handler,
-	.slave_alloc		= sas_slave_alloc,
+	.eh_bus_reset_handler	= sas_eh_bus_reset_handler,
 	.target_destroy		= sas_target_destroy,
 	.ioctl			= sas_ioctl,
 	.shost_attrs		= mvst_host_attrs,
@@ -68,8 +84,6 @@ static struct sas_domain_function_template mvs_transport_ops = {
 	.lldd_port_formed	= mvs_port_formed,
 	.lldd_port_deformed     = mvs_port_deformed,
 
-	.lldd_write_gpio	= mvs_gpio_write,
-
 };
 
 static void mvs_phy_init(struct mvs_info *mvi, int phy_id)
@@ -79,7 +93,7 @@ static void mvs_phy_init(struct mvs_info *mvi, int phy_id)
 
 	phy->mvi = mvi;
 	phy->port = NULL;
-	timer_setup(&phy->timer, NULL, 0);
+	init_timer(&phy->timer);
 	sas_phy->enabled = (phy_id < mvi->chip->n_phy) ? 1 : 0;
 	sas_phy->class = SAS;
 	sas_phy->iproto = SAS_PROTOCOL_ALL;
@@ -109,7 +123,8 @@ static void mvs_free(struct mvs_info *mvi)
 	else
 		slot_nr = MVS_CHIP_SLOT_SZ;
 
-	dma_pool_destroy(mvi->dma_pool);
+	if (mvi->dma_pool)
+		pci_pool_destroy(mvi->dma_pool);
 
 	if (mvi->tx)
 		dma_free_coherent(mvi->dev,
@@ -232,6 +247,7 @@ static int mvs_alloc(struct mvs_info *mvi, struct Scsi_Host *shost)
 		mvi->devices[i].dev_type = SAS_PHY_UNUSED;
 		mvi->devices[i].device_id = i;
 		mvi->devices[i].dev_status = MVS_DEV_NORMAL;
+		init_timer(&mvi->devices[i].timer);
 	}
 
 	/*
@@ -278,8 +294,7 @@ static int mvs_alloc(struct mvs_info *mvi, struct Scsi_Host *shost)
 		goto err_out;
 
 	sprintf(pool_name, "%s%d", "mvs_dma_pool", mvi->id);
-	mvi->dma_pool = dma_pool_create(pool_name, &mvi->pdev->dev,
-					MVS_SLOT_BUF_SZ, 16, 0);
+	mvi->dma_pool = pci_pool_create(pool_name, mvi->pdev, MVS_SLOT_BUF_SZ, 16, 0);
 	if (!mvi->dma_pool) {
 			printk(KERN_DEBUG "failed to create dma pool %s.\n", pool_name);
 			goto err_out;
@@ -387,12 +402,27 @@ static int pci_go_64(struct pci_dev *pdev)
 {
 	int rc;
 
-	rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (rc) {
-		rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	if (!pci_set_dma_mask(pdev, DMA_BIT_MASK(64))) {
+		rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64));
+		if (rc) {
+			rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
+			if (rc) {
+				dev_printk(KERN_ERR, &pdev->dev,
+					   "64-bit DMA enable failed\n");
+				return rc;
+			}
+		}
+	} else {
+		rc = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
 		if (rc) {
 			dev_printk(KERN_ERR, &pdev->dev,
 				   "32-bit DMA enable failed\n");
+			return rc;
+		}
+		rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
+		if (rc) {
+			dev_printk(KERN_ERR, &pdev->dev,
+				   "32-bit consistent DMA enable failed\n");
 			return rc;
 		}
 	}
@@ -525,14 +555,14 @@ static int mvs_pci_init(struct pci_dev *pdev, const struct pci_device_id *ent)
 	SHOST_TO_SAS_HA(shost) =
 		kcalloc(1, sizeof(struct sas_ha_struct), GFP_KERNEL);
 	if (!SHOST_TO_SAS_HA(shost)) {
-		scsi_host_put(shost);
+		kfree(shost);
 		rc = -ENOMEM;
 		goto err_out_regions;
 	}
 
 	rc = mvs_prep_sas_ha_init(shost, chip);
 	if (rc) {
-		scsi_host_put(shost);
+		kfree(shost);
 		rc = -ENOMEM;
 		goto err_out_regions;
 	}
@@ -610,6 +640,7 @@ static void mvs_pci_remove(struct pci_dev *pdev)
 	tasklet_kill(&((struct mvs_prv_info *)sha->lldd_ha)->mv_tasklet);
 #endif
 
+	scsi_remove_host(mvi->shost);
 	sas_unregister_ha(sha);
 	sas_remove_host(mvi->shost);
 
@@ -646,7 +677,6 @@ static struct pci_device_id mvs_pci_table[] = {
 	{ PCI_VDEVICE(ARECA, PCI_DEVICE_ID_ARECA_1300), chip_1300 },
 	{ PCI_VDEVICE(ARECA, PCI_DEVICE_ID_ARECA_1320), chip_1320 },
 	{ PCI_VDEVICE(ADAPTEC2, 0x0450), chip_6440 },
-	{ PCI_VDEVICE(TTI, 0x2640), chip_6440 },
 	{ PCI_VDEVICE(TTI, 0x2710), chip_9480 },
 	{ PCI_VDEVICE(TTI, 0x2720), chip_9480 },
 	{ PCI_VDEVICE(TTI, 0x2721), chip_9480 },
@@ -672,7 +702,24 @@ static struct pci_device_id mvs_pci_table[] = {
 		.class_mask	= 0,
 		.driver_data	= chip_9445,
 	},
-	{ PCI_VDEVICE(MARVELL_EXT, 0x9485), chip_9485 }, /* Marvell 9480/9485 (any vendor/model) */
+	{
+		.vendor		= PCI_VENDOR_ID_MARVELL_EXT,
+		.device		= 0x9485,
+		.subvendor	= PCI_ANY_ID,
+		.subdevice	= 0x9480,
+		.class		= 0,
+		.class_mask	= 0,
+		.driver_data	= chip_9485,
+	},
+	{
+		.vendor		= PCI_VENDOR_ID_MARVELL_EXT,
+		.device		= 0x9485,
+		.subvendor	= PCI_ANY_ID,
+		.subdevice	= 0x9485,
+		.class		= 0,
+		.class_mask	= 0,
+		.driver_data	= chip_9485,
+	},
 	{ PCI_VDEVICE(OCZ, 0x1021), chip_9485}, /* OCZ RevoDrive3 */
 	{ PCI_VDEVICE(OCZ, 0x1022), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
 	{ PCI_VDEVICE(OCZ, 0x1040), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
@@ -698,7 +745,7 @@ static ssize_t
 mvs_show_driver_version(struct device *cdev,
 		struct device_attribute *attr,  char *buffer)
 {
-	return sysfs_emit(buffer, "%s\n", DRV_VERSION);
+	return snprintf(buffer, PAGE_SIZE, "%s\n", DRV_VERSION);
 }
 
 static DEVICE_ATTR(driver_version,
@@ -750,7 +797,7 @@ mvs_store_interrupt_coalescing(struct device *cdev,
 static ssize_t mvs_show_interrupt_coalescing(struct device *cdev,
 			struct device_attribute *attr, char *buffer)
 {
-	return sysfs_emit(buffer, "%d\n", interrupt_coalescing);
+	return snprintf(buffer, PAGE_SIZE, "%d\n", interrupt_coalescing);
 }
 
 static DEVICE_ATTR(interrupt_coalescing,

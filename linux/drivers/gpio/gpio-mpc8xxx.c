@@ -1,8 +1,7 @@
 /*
- * GPIOs on MPC512x/8349/8572/8610/QorIQ and compatible
+ * GPIOs on MPC512x/8349/8572/8610 and compatible
  *
  * Copyright (C) 2008 Peter Korsgaard <jacmet@sunsite.dk>
- * Copyright (C) 2016 Freescale Semiconductor Inc.
  *
  * This file is licensed under the terms of the GNU General Public License
  * version 2.  This program is licensed "as is" without any warranty of any
@@ -15,13 +14,11 @@
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
-#include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
+#include <linux/gpio.h>
 #include <linux/slab.h>
 #include <linux/irq.h>
-#include <linux/gpio/driver.h>
-#include <linux/bitops.h>
 
 #define MPC8XXX_GPIO_PINS	32
 
@@ -32,49 +29,37 @@
 #define GPIO_IMR		0x10
 #define GPIO_ICR		0x14
 #define GPIO_ICR2		0x18
-#define GPIO_IBE		0x18
 
 struct mpc8xxx_gpio_chip {
-	struct gpio_chip	gc;
-	void __iomem *regs;
+	struct of_mm_gpio_chip mm_gc;
 	raw_spinlock_t lock;
 
-	int (*direction_output)(struct gpio_chip *chip,
-				unsigned offset, int value);
-
+	/*
+	 * shadowed data register to be able to clear/set output pins in
+	 * open drain mode safely
+	 */
+	u32 data;
 	struct irq_domain *irq;
 	unsigned int irqn;
+	const void *of_dev_id_data;
 };
 
-/* The GPIO Input Buffer Enable register(GPIO_IBE) is used to
- * control the input enable of each individual GPIO port.
- * When an individual GPIO port’s direction is set to
- * input (GPIO_GPDIR[DRn=0]), the associated input enable must be
- * set (GPIOxGPIE[IEn]=1) to propagate the port value to the GPIO
- * Data Register.
- */
-static int ls1028a_gpio_dir_in_init(struct gpio_chip *gc)
+static inline u32 mpc8xxx_gpio2mask(unsigned int gpio)
 {
-	unsigned long flags;
-	struct mpc8xxx_gpio_chip *mpc8xxx_gc = gpiochip_get_data(gc);
-
-	spin_lock_irqsave(&gc->bgpio_lock, flags);
-
-	gc->write_reg(mpc8xxx_gc->regs + GPIO_IBE, 0xffffffff);
-
-	spin_unlock_irqrestore(&gc->bgpio_lock, flags);
-
-	return 0;
+	return 1u << (MPC8XXX_GPIO_PINS - 1 - gpio);
 }
 
-/*
- * This hardware has a big endian bit assignment such that GPIO line 0 is
- * connected to bit 31, line 1 to bit 30 ... line 31 to bit 0.
- * This inline helper give the right bitmask for a certain line.
- */
-static inline u32 mpc_pin2mask(unsigned int offset)
+static inline struct mpc8xxx_gpio_chip *
+to_mpc8xxx_gpio_chip(struct of_mm_gpio_chip *mm)
 {
-	return BIT(31 - offset);
+	return container_of(mm, struct mpc8xxx_gpio_chip, mm_gc);
+}
+
+static void mpc8xxx_gpio_save_regs(struct of_mm_gpio_chip *mm)
+{
+	struct mpc8xxx_gpio_chip *mpc8xxx_gc = to_mpc8xxx_gpio_chip(mm);
+
+	mpc8xxx_gc->data = in_be32(mm->regs + GPIO_DAT);
 }
 
 /* Workaround GPIO 1 errata on MPC8572/MPC8536. The status of GPIOs
@@ -85,41 +70,123 @@ static inline u32 mpc_pin2mask(unsigned int offset)
 static int mpc8572_gpio_get(struct gpio_chip *gc, unsigned int gpio)
 {
 	u32 val;
-	struct mpc8xxx_gpio_chip *mpc8xxx_gc = gpiochip_get_data(gc);
+	struct of_mm_gpio_chip *mm = to_of_mm_gpio_chip(gc);
+	struct mpc8xxx_gpio_chip *mpc8xxx_gc = to_mpc8xxx_gpio_chip(mm);
 	u32 out_mask, out_shadow;
 
-	out_mask = gc->read_reg(mpc8xxx_gc->regs + GPIO_DIR);
-	val = gc->read_reg(mpc8xxx_gc->regs + GPIO_DAT) & ~out_mask;
-	out_shadow = gc->bgpio_data & out_mask;
+	out_mask = in_be32(mm->regs + GPIO_DIR);
 
-	return !!((val | out_shadow) & mpc_pin2mask(gpio));
+	val = in_be32(mm->regs + GPIO_DAT) & ~out_mask;
+	out_shadow = mpc8xxx_gc->data & out_mask;
+
+	return (val | out_shadow) & mpc8xxx_gpio2mask(gpio);
 }
 
-static int mpc5121_gpio_dir_out(struct gpio_chip *gc,
-				unsigned int gpio, int val)
+static int mpc8xxx_gpio_get(struct gpio_chip *gc, unsigned int gpio)
 {
-	struct mpc8xxx_gpio_chip *mpc8xxx_gc = gpiochip_get_data(gc);
+	struct of_mm_gpio_chip *mm = to_of_mm_gpio_chip(gc);
+
+	return in_be32(mm->regs + GPIO_DAT) & mpc8xxx_gpio2mask(gpio);
+}
+
+static void mpc8xxx_gpio_set(struct gpio_chip *gc, unsigned int gpio, int val)
+{
+	struct of_mm_gpio_chip *mm = to_of_mm_gpio_chip(gc);
+	struct mpc8xxx_gpio_chip *mpc8xxx_gc = to_mpc8xxx_gpio_chip(mm);
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
+
+	if (val)
+		mpc8xxx_gc->data |= mpc8xxx_gpio2mask(gpio);
+	else
+		mpc8xxx_gc->data &= ~mpc8xxx_gpio2mask(gpio);
+
+	out_be32(mm->regs + GPIO_DAT, mpc8xxx_gc->data);
+
+	raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
+}
+
+static void mpc8xxx_gpio_set_multiple(struct gpio_chip *gc,
+				      unsigned long *mask, unsigned long *bits)
+{
+	struct of_mm_gpio_chip *mm = to_of_mm_gpio_chip(gc);
+	struct mpc8xxx_gpio_chip *mpc8xxx_gc = to_mpc8xxx_gpio_chip(mm);
+	unsigned long flags;
+	int i;
+
+	raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
+
+	for (i = 0; i < gc->ngpio; i++) {
+		if (*mask == 0)
+			break;
+		if (__test_and_clear_bit(i, mask)) {
+			if (test_bit(i, bits))
+				mpc8xxx_gc->data |= mpc8xxx_gpio2mask(i);
+			else
+				mpc8xxx_gc->data &= ~mpc8xxx_gpio2mask(i);
+		}
+	}
+
+	out_be32(mm->regs + GPIO_DAT, mpc8xxx_gc->data);
+
+	raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
+}
+
+static int mpc8xxx_gpio_dir_in(struct gpio_chip *gc, unsigned int gpio)
+{
+	struct of_mm_gpio_chip *mm = to_of_mm_gpio_chip(gc);
+	struct mpc8xxx_gpio_chip *mpc8xxx_gc = to_mpc8xxx_gpio_chip(mm);
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
+
+	clrbits32(mm->regs + GPIO_DIR, mpc8xxx_gpio2mask(gpio));
+
+	raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
+
+	return 0;
+}
+
+static int mpc8xxx_gpio_dir_out(struct gpio_chip *gc, unsigned int gpio, int val)
+{
+	struct of_mm_gpio_chip *mm = to_of_mm_gpio_chip(gc);
+	struct mpc8xxx_gpio_chip *mpc8xxx_gc = to_mpc8xxx_gpio_chip(mm);
+	unsigned long flags;
+
+	mpc8xxx_gpio_set(gc, gpio, val);
+
+	raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
+
+	setbits32(mm->regs + GPIO_DIR, mpc8xxx_gpio2mask(gpio));
+
+	raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
+
+	return 0;
+}
+
+static int mpc5121_gpio_dir_out(struct gpio_chip *gc, unsigned int gpio, int val)
+{
 	/* GPIO 28..31 are input only on MPC5121 */
 	if (gpio >= 28)
 		return -EINVAL;
 
-	return mpc8xxx_gc->direction_output(gc, gpio, val);
+	return mpc8xxx_gpio_dir_out(gc, gpio, val);
 }
 
-static int mpc5125_gpio_dir_out(struct gpio_chip *gc,
-				unsigned int gpio, int val)
+static int mpc5125_gpio_dir_out(struct gpio_chip *gc, unsigned int gpio, int val)
 {
-	struct mpc8xxx_gpio_chip *mpc8xxx_gc = gpiochip_get_data(gc);
 	/* GPIO 0..3 are input only on MPC5125 */
 	if (gpio <= 3)
 		return -EINVAL;
 
-	return mpc8xxx_gc->direction_output(gc, gpio, val);
+	return mpc8xxx_gpio_dir_out(gc, gpio, val);
 }
 
 static int mpc8xxx_gpio_to_irq(struct gpio_chip *gc, unsigned offset)
 {
-	struct mpc8xxx_gpio_chip *mpc8xxx_gc = gpiochip_get_data(gc);
+	struct of_mm_gpio_chip *mm = to_of_mm_gpio_chip(gc);
+	struct mpc8xxx_gpio_chip *mpc8xxx_gc = to_mpc8xxx_gpio_chip(mm);
 
 	if (mpc8xxx_gc->irq && offset < MPC8XXX_GPIO_PINS)
 		return irq_create_mapping(mpc8xxx_gc->irq, offset);
@@ -131,11 +198,10 @@ static void mpc8xxx_gpio_irq_cascade(struct irq_desc *desc)
 {
 	struct mpc8xxx_gpio_chip *mpc8xxx_gc = irq_desc_get_handler_data(desc);
 	struct irq_chip *chip = irq_desc_get_chip(desc);
-	struct gpio_chip *gc = &mpc8xxx_gc->gc;
+	struct of_mm_gpio_chip *mm = &mpc8xxx_gc->mm_gc;
 	unsigned int mask;
 
-	mask = gc->read_reg(mpc8xxx_gc->regs + GPIO_IER)
-		& gc->read_reg(mpc8xxx_gc->regs + GPIO_IMR);
+	mask = in_be32(mm->regs + GPIO_IER) & in_be32(mm->regs + GPIO_IMR);
 	if (mask)
 		generic_handle_irq(irq_linear_revmap(mpc8xxx_gc->irq,
 						     32 - ffs(mask)));
@@ -146,14 +212,12 @@ static void mpc8xxx_gpio_irq_cascade(struct irq_desc *desc)
 static void mpc8xxx_irq_unmask(struct irq_data *d)
 {
 	struct mpc8xxx_gpio_chip *mpc8xxx_gc = irq_data_get_irq_chip_data(d);
-	struct gpio_chip *gc = &mpc8xxx_gc->gc;
+	struct of_mm_gpio_chip *mm = &mpc8xxx_gc->mm_gc;
 	unsigned long flags;
 
 	raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
 
-	gc->write_reg(mpc8xxx_gc->regs + GPIO_IMR,
-		gc->read_reg(mpc8xxx_gc->regs + GPIO_IMR)
-		| mpc_pin2mask(irqd_to_hwirq(d)));
+	setbits32(mm->regs + GPIO_IMR, mpc8xxx_gpio2mask(irqd_to_hwirq(d)));
 
 	raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
 }
@@ -161,14 +225,12 @@ static void mpc8xxx_irq_unmask(struct irq_data *d)
 static void mpc8xxx_irq_mask(struct irq_data *d)
 {
 	struct mpc8xxx_gpio_chip *mpc8xxx_gc = irq_data_get_irq_chip_data(d);
-	struct gpio_chip *gc = &mpc8xxx_gc->gc;
+	struct of_mm_gpio_chip *mm = &mpc8xxx_gc->mm_gc;
 	unsigned long flags;
 
 	raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
 
-	gc->write_reg(mpc8xxx_gc->regs + GPIO_IMR,
-		gc->read_reg(mpc8xxx_gc->regs + GPIO_IMR)
-		& ~mpc_pin2mask(irqd_to_hwirq(d)));
+	clrbits32(mm->regs + GPIO_IMR, mpc8xxx_gpio2mask(irqd_to_hwirq(d)));
 
 	raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
 }
@@ -176,33 +238,29 @@ static void mpc8xxx_irq_mask(struct irq_data *d)
 static void mpc8xxx_irq_ack(struct irq_data *d)
 {
 	struct mpc8xxx_gpio_chip *mpc8xxx_gc = irq_data_get_irq_chip_data(d);
-	struct gpio_chip *gc = &mpc8xxx_gc->gc;
+	struct of_mm_gpio_chip *mm = &mpc8xxx_gc->mm_gc;
 
-	gc->write_reg(mpc8xxx_gc->regs + GPIO_IER,
-		      mpc_pin2mask(irqd_to_hwirq(d)));
+	out_be32(mm->regs + GPIO_IER, mpc8xxx_gpio2mask(irqd_to_hwirq(d)));
 }
 
 static int mpc8xxx_irq_set_type(struct irq_data *d, unsigned int flow_type)
 {
 	struct mpc8xxx_gpio_chip *mpc8xxx_gc = irq_data_get_irq_chip_data(d);
-	struct gpio_chip *gc = &mpc8xxx_gc->gc;
+	struct of_mm_gpio_chip *mm = &mpc8xxx_gc->mm_gc;
 	unsigned long flags;
 
 	switch (flow_type) {
 	case IRQ_TYPE_EDGE_FALLING:
-	case IRQ_TYPE_LEVEL_LOW:
 		raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
-		gc->write_reg(mpc8xxx_gc->regs + GPIO_ICR,
-			gc->read_reg(mpc8xxx_gc->regs + GPIO_ICR)
-			| mpc_pin2mask(irqd_to_hwirq(d)));
+		setbits32(mm->regs + GPIO_ICR,
+			  mpc8xxx_gpio2mask(irqd_to_hwirq(d)));
 		raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
 		break;
 
 	case IRQ_TYPE_EDGE_BOTH:
 		raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
-		gc->write_reg(mpc8xxx_gc->regs + GPIO_ICR,
-			gc->read_reg(mpc8xxx_gc->regs + GPIO_ICR)
-			& ~mpc_pin2mask(irqd_to_hwirq(d)));
+		clrbits32(mm->regs + GPIO_ICR,
+			  mpc8xxx_gpio2mask(irqd_to_hwirq(d)));
 		raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
 		break;
 
@@ -216,17 +274,17 @@ static int mpc8xxx_irq_set_type(struct irq_data *d, unsigned int flow_type)
 static int mpc512x_irq_set_type(struct irq_data *d, unsigned int flow_type)
 {
 	struct mpc8xxx_gpio_chip *mpc8xxx_gc = irq_data_get_irq_chip_data(d);
-	struct gpio_chip *gc = &mpc8xxx_gc->gc;
+	struct of_mm_gpio_chip *mm = &mpc8xxx_gc->mm_gc;
 	unsigned long gpio = irqd_to_hwirq(d);
 	void __iomem *reg;
 	unsigned int shift;
 	unsigned long flags;
 
 	if (gpio < 16) {
-		reg = mpc8xxx_gc->regs + GPIO_ICR;
+		reg = mm->regs + GPIO_ICR;
 		shift = (15 - gpio) * 2;
 	} else {
-		reg = mpc8xxx_gc->regs + GPIO_ICR2;
+		reg = mm->regs + GPIO_ICR2;
 		shift = (15 - (gpio % 16)) * 2;
 	}
 
@@ -234,22 +292,20 @@ static int mpc512x_irq_set_type(struct irq_data *d, unsigned int flow_type)
 	case IRQ_TYPE_EDGE_FALLING:
 	case IRQ_TYPE_LEVEL_LOW:
 		raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
-		gc->write_reg(reg, (gc->read_reg(reg) & ~(3 << shift))
-			| (2 << shift));
+		clrsetbits_be32(reg, 3 << shift, 2 << shift);
 		raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
 		break;
 
 	case IRQ_TYPE_EDGE_RISING:
 	case IRQ_TYPE_LEVEL_HIGH:
 		raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
-		gc->write_reg(reg, (gc->read_reg(reg) & ~(3 << shift))
-			| (1 << shift));
+		clrsetbits_be32(reg, 3 << shift, 1 << shift);
 		raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
 		break;
 
 	case IRQ_TYPE_EDGE_BOTH:
 		raw_spin_lock_irqsave(&mpc8xxx_gc->lock, flags);
-		gc->write_reg(reg, (gc->read_reg(reg) & ~(3 << shift)));
+		clrbits32(reg, 3 << shift);
 		raw_spin_unlock_irqrestore(&mpc8xxx_gc->lock, flags);
 		break;
 
@@ -273,7 +329,7 @@ static int mpc8xxx_gpio_irq_map(struct irq_domain *h, unsigned int irq,
 				irq_hw_number_t hwirq)
 {
 	irq_set_chip_data(irq, h->host_data);
-	irq_set_chip_and_handler(irq, &mpc8xxx_irq_chip, handle_edge_irq);
+	irq_set_chip_and_handler(irq, &mpc8xxx_irq_chip, handle_level_irq);
 
 	return 0;
 }
@@ -284,7 +340,6 @@ static const struct irq_domain_ops mpc8xxx_gpio_irq_ops = {
 };
 
 struct mpc8xxx_gpio_devtype {
-	int (*gpio_dir_in_init)(struct gpio_chip *chip);
 	int (*gpio_dir_out)(struct gpio_chip *, unsigned int, int);
 	int (*gpio_get)(struct gpio_chip *, unsigned int);
 	int (*irq_set_type)(struct irq_data *, unsigned int);
@@ -293,10 +348,6 @@ struct mpc8xxx_gpio_devtype {
 static const struct mpc8xxx_gpio_devtype mpc512x_gpio_devtype = {
 	.gpio_dir_out = mpc5121_gpio_dir_out,
 	.irq_set_type = mpc512x_irq_set_type,
-};
-
-static const struct mpc8xxx_gpio_devtype ls1028a_gpio_devtype = {
-	.gpio_dir_in_init = ls1028a_gpio_dir_in_init,
 };
 
 static const struct mpc8xxx_gpio_devtype mpc5125_gpio_devtype = {
@@ -309,6 +360,8 @@ static const struct mpc8xxx_gpio_devtype mpc8572_gpio_devtype = {
 };
 
 static const struct mpc8xxx_gpio_devtype mpc8xxx_gpio_devtype_default = {
+	.gpio_dir_out = mpc8xxx_gpio_dir_out,
+	.gpio_get = mpc8xxx_gpio_get,
 	.irq_set_type = mpc8xxx_irq_set_type,
 };
 
@@ -319,8 +372,6 @@ static const struct of_device_id mpc8xxx_gpio_ids[] = {
 	{ .compatible = "fsl,mpc5121-gpio", .data = &mpc512x_gpio_devtype, },
 	{ .compatible = "fsl,mpc5125-gpio", .data = &mpc5125_gpio_devtype, },
 	{ .compatible = "fsl,pq3-gpio",     },
-	{ .compatible = "fsl,ls1028a-gpio", .data = &ls1028a_gpio_devtype, },
-	{ .compatible = "fsl,ls1088a-gpio", .data = &ls1028a_gpio_devtype, },
 	{ .compatible = "fsl,qoriq-gpio",   },
 	{}
 };
@@ -329,7 +380,9 @@ static int mpc8xxx_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
 	struct mpc8xxx_gpio_chip *mpc8xxx_gc;
-	struct gpio_chip	*gc;
+	struct of_mm_gpio_chip *mm_gc;
+	struct gpio_chip *gc;
+	const struct of_device_id *id;
 	const struct mpc8xxx_gpio_devtype *devtype =
 		of_device_get_match_data(&pdev->dev);
 	int ret;
@@ -342,35 +395,12 @@ static int mpc8xxx_probe(struct platform_device *pdev)
 
 	raw_spin_lock_init(&mpc8xxx_gc->lock);
 
-	mpc8xxx_gc->regs = of_iomap(np, 0);
-	if (!mpc8xxx_gc->regs)
-		return -ENOMEM;
+	mm_gc = &mpc8xxx_gc->mm_gc;
+	gc = &mm_gc->gc;
 
-	gc = &mpc8xxx_gc->gc;
-	gc->parent = &pdev->dev;
-
-	if (of_property_read_bool(np, "little-endian")) {
-		ret = bgpio_init(gc, &pdev->dev, 4,
-				 mpc8xxx_gc->regs + GPIO_DAT,
-				 NULL, NULL,
-				 mpc8xxx_gc->regs + GPIO_DIR, NULL,
-				 BGPIOF_BIG_ENDIAN);
-		if (ret)
-			goto err;
-		dev_dbg(&pdev->dev, "GPIO registers are LITTLE endian\n");
-	} else {
-		ret = bgpio_init(gc, &pdev->dev, 4,
-				 mpc8xxx_gc->regs + GPIO_DAT,
-				 NULL, NULL,
-				 mpc8xxx_gc->regs + GPIO_DIR, NULL,
-				 BGPIOF_BIG_ENDIAN
-				 | BGPIOF_BIG_ENDIAN_BYTE_ORDER);
-		if (ret)
-			goto err;
-		dev_dbg(&pdev->dev, "GPIO registers are BIG endian\n");
-	}
-
-	mpc8xxx_gc->direction_output = gc->direction_output;
+	mm_gc->save_regs = mpc8xxx_gpio_save_regs;
+	gc->ngpio = MPC8XXX_GPIO_PINS;
+	gc->direction_input = mpc8xxx_gpio_dir_in;
 
 	if (!devtype)
 		devtype = &mpc8xxx_gpio_devtype_default;
@@ -379,28 +409,20 @@ static int mpc8xxx_probe(struct platform_device *pdev)
 	 * It's assumed that only a single type of gpio controller is available
 	 * on the current machine, so overwriting global data is fine.
 	 */
-	if (devtype->irq_set_type)
-		mpc8xxx_irq_chip.irq_set_type = devtype->irq_set_type;
+	mpc8xxx_irq_chip.irq_set_type = devtype->irq_set_type;
 
-	if (devtype->gpio_dir_out)
-		gc->direction_output = devtype->gpio_dir_out;
-	if (devtype->gpio_get)
-		gc->get = devtype->gpio_get;
-
+	gc->direction_output = devtype->gpio_dir_out ?: mpc8xxx_gpio_dir_out;
+	gc->get = devtype->gpio_get ?: mpc8xxx_gpio_get;
+	gc->set = mpc8xxx_gpio_set;
+	gc->set_multiple = mpc8xxx_gpio_set_multiple;
 	gc->to_irq = mpc8xxx_gpio_to_irq;
 
-	if (of_device_is_compatible(np, "fsl,qoriq-gpio"))
-		gc->write_reg(mpc8xxx_gc->regs + GPIO_IBE, 0xffffffff);
-
-	ret = gpiochip_add_data(gc, mpc8xxx_gc);
-	if (ret) {
-		pr_err("%pOF: GPIO chip registration failed with status %d\n",
-		       np, ret);
-		goto err;
-	}
+	ret = of_mm_gpiochip_add(np, mm_gc);
+	if (ret)
+		return ret;
 
 	mpc8xxx_gc->irqn = irq_of_parse_and_map(np, 0);
-	if (!mpc8xxx_gc->irqn)
+	if (mpc8xxx_gc->irqn == NO_IRQ)
 		return 0;
 
 	mpc8xxx_gc->irq = irq_domain_add_linear(np, MPC8XXX_GPIO_PINS,
@@ -408,19 +430,18 @@ static int mpc8xxx_probe(struct platform_device *pdev)
 	if (!mpc8xxx_gc->irq)
 		return 0;
 
+	id = of_match_node(mpc8xxx_gpio_ids, np);
+	if (id)
+		mpc8xxx_gc->of_dev_id_data = id->data;
+
 	/* ack and mask all irqs */
-	gc->write_reg(mpc8xxx_gc->regs + GPIO_IER, 0xffffffff);
-	gc->write_reg(mpc8xxx_gc->regs + GPIO_IMR, 0);
-	/* enable input buffer  */
-	if (devtype->gpio_dir_in_init)
-		devtype->gpio_dir_in_init(gc);
+	out_be32(mm_gc->regs + GPIO_IER, 0xffffffff);
+	out_be32(mm_gc->regs + GPIO_IMR, 0);
 
 	irq_set_chained_handler_and_data(mpc8xxx_gc->irqn,
 					 mpc8xxx_gpio_irq_cascade, mpc8xxx_gc);
+
 	return 0;
-err:
-	iounmap(mpc8xxx_gc->regs);
-	return ret;
 }
 
 static int mpc8xxx_remove(struct platform_device *pdev)
@@ -432,8 +453,7 @@ static int mpc8xxx_remove(struct platform_device *pdev)
 		irq_domain_remove(mpc8xxx_gc->irq);
 	}
 
-	gpiochip_remove(&mpc8xxx_gc->gc);
-	iounmap(mpc8xxx_gc->regs);
+	of_mm_gpiochip_remove(&mpc8xxx_gc->mm_gc);
 
 	return 0;
 }

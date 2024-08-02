@@ -117,9 +117,6 @@
 
 #define IMXFB_LSCR1_DEFAULT 0x00120300
 
-#define LCDC_LAUSCR	0x80
-#define LAUSCR_AUS_MODE	(1<<31)
-
 /* Used fb-mode. Can be set on kernel command line, therefore file-static. */
 static const char *fb_mode;
 
@@ -161,7 +158,6 @@ struct imxfb_info {
 	dma_addr_t		dbar2;
 
 	u_int			pcr;
-	u_int			lauscr;
 	u_int			pwmr;
 	u_int			lscr1;
 	u_int			dmacr;
@@ -426,11 +422,6 @@ static int imxfb_check_var(struct fb_var_screeninfo *var, struct fb_info *info)
 	pcr |= imxfb_mode->pcr & ~(0x3f | (7 << 25));
 
 	fbi->pcr = pcr;
-	/*
-	 * The LCDC AUS Mode Control Register does not exist on imx1.
-	 */
-	if (!is_imx1_fb(fbi) && imxfb_mode->aus_mode)
-		fbi->lauscr = LAUSCR_AUS_MODE;
 
 	/*
 	 * Copy the RGB parameters for this display
@@ -482,12 +473,11 @@ static int imxfb_set_par(struct fb_info *info)
 	return 0;
 }
 
-static int imxfb_enable_controller(struct imxfb_info *fbi)
+static void imxfb_enable_controller(struct imxfb_info *fbi)
 {
-	int ret;
 
 	if (fbi->enabled)
-		return 0;
+		return;
 
 	pr_debug("Enabling LCD controller\n");
 
@@ -506,29 +496,10 @@ static int imxfb_enable_controller(struct imxfb_info *fbi)
 	 */
 	writel(RMCR_LCDC_EN_MX1, fbi->regs + LCDC_RMCR);
 
-	ret = clk_prepare_enable(fbi->clk_ipg);
-	if (ret)
-		goto err_enable_ipg;
-
-	ret = clk_prepare_enable(fbi->clk_ahb);
-	if (ret)
-		goto err_enable_ahb;
-
-	ret = clk_prepare_enable(fbi->clk_per);
-	if (ret)
-		goto err_enable_per;
-
+	clk_prepare_enable(fbi->clk_ipg);
+	clk_prepare_enable(fbi->clk_ahb);
+	clk_prepare_enable(fbi->clk_per);
 	fbi->enabled = true;
-	return 0;
-
-err_enable_per:
-	clk_disable_unprepare(fbi->clk_ahb);
-err_enable_ahb:
-	clk_disable_unprepare(fbi->clk_ipg);
-err_enable_ipg:
-	writel(0, fbi->regs + LCDC_RMCR);
-
-	return ret;
 }
 
 static void imxfb_disable_controller(struct imxfb_info *fbi)
@@ -539,8 +510,8 @@ static void imxfb_disable_controller(struct imxfb_info *fbi)
 	pr_debug("Disabling LCD controller\n");
 
 	clk_disable_unprepare(fbi->clk_per);
-	clk_disable_unprepare(fbi->clk_ahb);
 	clk_disable_unprepare(fbi->clk_ipg);
+	clk_disable_unprepare(fbi->clk_ahb);
 	fbi->enabled = false;
 
 	writel(0, fbi->regs + LCDC_RMCR);
@@ -561,7 +532,8 @@ static int imxfb_blank(int blank, struct fb_info *info)
 		break;
 
 	case FB_BLANK_UNBLANK:
-		return imxfb_enable_controller(fbi);
+		imxfb_enable_controller(fbi);
+		break;
 	}
 	return 0;
 }
@@ -601,10 +573,10 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 	if (var->hsync_len < 1    || var->hsync_len > 64)
 		printk(KERN_ERR "%s: invalid hsync_len %d\n",
 			info->fix.id, var->hsync_len);
-	if (var->left_margin < 3  || var->left_margin > 255)
+	if (var->left_margin > 255)
 		printk(KERN_ERR "%s: invalid left_margin %d\n",
 			info->fix.id, var->left_margin);
-	if (var->right_margin < 1 || var->right_margin > 255)
+	if (var->right_margin > 255)
 		printk(KERN_ERR "%s: invalid right_margin %d\n",
 			info->fix.id, var->right_margin);
 	if (var->yres < 1 || var->yres > ymax_mask)
@@ -647,9 +619,6 @@ static int imxfb_activate_var(struct fb_var_screeninfo *var, struct fb_info *inf
 	if (fbi->dmacr)
 		writel(fbi->dmacr, fbi->regs + LCDC_DMACR);
 
-	if (fbi->lauscr)
-		writel(fbi->lauscr, fbi->regs + LCDC_LAUSCR);
-
 	return 0;
 }
 
@@ -662,7 +631,7 @@ static int imxfb_init_fbinfo(struct platform_device *pdev)
 
 	pr_debug("%s\n",__func__);
 
-	info->pseudo_palette = kmalloc_array(16, sizeof(u32), GFP_KERNEL);
+	info->pseudo_palette = kmalloc(sizeof(u32) * 16, GFP_KERNEL);
 	if (!info->pseudo_palette)
 		return -ENOMEM;
 
@@ -746,11 +715,6 @@ static int imxfb_of_read_mode(struct device *dev, struct device_node *np,
 	imxfb_mode->bpp = bpp;
 	imxfb_mode->pcr = pcr;
 
-	/*
-	 * fsl,aus-mode is optional
-	 */
-	imxfb_mode->aus_mode = of_property_read_bool(np, "fsl,aus-mode");
-
 	return 0;
 }
 
@@ -794,11 +758,10 @@ static int imxfb_lcd_get_power(struct lcd_device *lcddev)
 {
 	struct imxfb_info *fbi = dev_get_drvdata(&lcddev->dev);
 
-	if (!IS_ERR(fbi->lcd_pwr) &&
-	    !regulator_is_enabled(fbi->lcd_pwr))
-		return FB_BLANK_POWERDOWN;
+	if (!IS_ERR(fbi->lcd_pwr))
+		return regulator_is_enabled(fbi->lcd_pwr);
 
-	return FB_BLANK_UNBLANK;
+	return 1;
 }
 
 static int imxfb_lcd_set_power(struct lcd_device *lcddev, int power)
@@ -806,7 +769,7 @@ static int imxfb_lcd_set_power(struct lcd_device *lcddev, int power)
 	struct imxfb_info *fbi = dev_get_drvdata(&lcddev->dev);
 
 	if (!IS_ERR(fbi->lcd_pwr)) {
-		if (power == FB_BLANK_UNBLANK)
+		if (power)
 			return regulator_enable(fbi->lcd_pwr);
 		else
 			return regulator_disable(fbi->lcd_pwr);
@@ -939,21 +902,6 @@ static int imxfb_probe(struct platform_device *pdev)
 		goto failed_getclock;
 	}
 
-	/*
-	 * The LCDC controller does not have an enable bit. The
-	 * controller starts directly when the clocks are enabled.
-	 * If the clocks are enabled when the controller is not yet
-	 * programmed with proper register values (enabled at the
-	 * bootloader, for example) then it just goes into some undefined
-	 * state.
-	 * To avoid this issue, let's enable and disable LCDC IPG clock
-	 * so that we force some kind of 'reset' to the LCDC block.
-	 */
-	ret = clk_prepare_enable(fbi->clk_ipg);
-	if (ret)
-		goto failed_getclock;
-	clk_disable_unprepare(fbi->clk_ipg);
-
 	fbi->clk_ahb = devm_clk_get(&pdev->dev, "ahb");
 	if (IS_ERR(fbi->clk_ahb)) {
 		ret = PTR_ERR(fbi->clk_ahb);
@@ -974,10 +922,11 @@ static int imxfb_probe(struct platform_device *pdev)
 	}
 
 	fbi->map_size = PAGE_ALIGN(info->fix.smem_len);
-	info->screen_buffer = dma_alloc_wc(&pdev->dev, fbi->map_size,
-					   &fbi->map_dma, GFP_KERNEL);
-	if (!info->screen_buffer) {
-		dev_err(&pdev->dev, "Failed to allocate video RAM\n");
+	info->screen_base = dma_alloc_writecombine(&pdev->dev, fbi->map_size,
+						   &fbi->map_dma, GFP_KERNEL);
+
+	if (!info->screen_base) {
+		dev_err(&pdev->dev, "Failed to allocate video RAM: %d\n", ret);
 		ret = -ENOMEM;
 		goto failed_map;
 	}
@@ -1001,11 +950,7 @@ static int imxfb_probe(struct platform_device *pdev)
 	 */
 	imxfb_check_var(&info->var, info);
 
-	/*
-	 * For modes > 8bpp, the color map is bypassed.
-	 * Therefore, 256 entries are enough.
-	 */
-	ret = fb_alloc_cmap(&info->cmap, 256, 0);
+	ret = fb_alloc_cmap(&info->cmap, 1 << info->var.bits_per_pixel, 0);
 	if (ret < 0)
 		goto failed_cmap;
 
@@ -1045,8 +990,8 @@ failed_cmap:
 	if (pdata && pdata->exit)
 		pdata->exit(fbi->pdev);
 failed_platform_init:
-	dma_free_wc(&pdev->dev, fbi->map_size, info->screen_buffer,
-		    fbi->map_dma);
+	dma_free_writecombine(&pdev->dev, fbi->map_size, info->screen_base,
+			      fbi->map_dma);
 failed_map:
 	iounmap(fbi->regs);
 failed_ioremap:
@@ -1072,16 +1017,20 @@ static int imxfb_remove(struct platform_device *pdev)
 	imxfb_disable_controller(fbi);
 
 	unregister_framebuffer(info);
-	fb_dealloc_cmap(&info->cmap);
+
 	pdata = dev_get_platdata(&pdev->dev);
 	if (pdata && pdata->exit)
 		pdata->exit(fbi->pdev);
-	dma_free_wc(&pdev->dev, fbi->map_size, info->screen_buffer,
-		    fbi->map_dma);
-	iounmap(fbi->regs);
-	release_mem_region(res->start, resource_size(res));
+
+	fb_dealloc_cmap(&info->cmap);
 	kfree(info->pseudo_palette);
 	framebuffer_release(info);
+
+	dma_free_writecombine(&pdev->dev, fbi->map_size, info->screen_base,
+			      fbi->map_dma);
+
+	iounmap(fbi->regs);
+	release_mem_region(res->start, resource_size(res));
 
 	return 0;
 }

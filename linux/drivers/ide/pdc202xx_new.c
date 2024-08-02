@@ -1,6 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Promise TX2/TX4/TX2000/133 IDE driver
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version
+ *  2 of the License, or (at your option) any later version.
  *
  *  Split from:
  *  linux/drivers/ide/pdc202xx.c	Version 0.35	Mar. 30, 2002
@@ -24,6 +28,7 @@
 
 #ifdef CONFIG_PPC_PMAC
 #include <asm/prom.h>
+#include <asm/pci-bridge.h>
 #endif
 
 #define DRV_NAME "pdc202xx_new"

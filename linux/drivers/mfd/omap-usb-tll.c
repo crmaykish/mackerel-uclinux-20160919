@@ -1,10 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /**
  * omap-usb-tll.c - The USB TLL driver for OMAP EHCI & OHCI
  *
  * Copyright (C) 2012-2013 Texas Instruments Incorporated - http://www.ti.com
  * Author: Keshava Munegowda <keshava_mgowda@ti.com>
  * Author: Roger Quadros <rogerq@ti.com>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2  of
+ * the License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -18,8 +29,6 @@
 #include <linux/pm_runtime.h>
 #include <linux/platform_data/usb-omap.h>
 #include <linux/of.h>
-
-#include "omap-usb.h"
 
 #define USBTLL_DRIVER_NAME	"usbhs_tll"
 
@@ -97,9 +106,9 @@
 					 (x) != OMAP_EHCI_PORT_MODE_PHY)
 
 struct usbtll_omap {
-	void __iomem	*base;
-	int		nch;		/* num. of channels */
-	struct clk	*ch_clk[0];	/* must be the last member */
+	int					nch;	/* num. of channels */
+	struct clk				**ch_clk;
+	void __iomem				*base;
 };
 
 /*-------------------------------------------------------------------------*/
@@ -120,12 +129,12 @@ static inline u32 usbtll_read(void __iomem *base, u32 reg)
 	return readl_relaxed(base + reg);
 }
 
-static inline void usbtll_writeb(void __iomem *base, u32 reg, u8 val)
+static inline void usbtll_writeb(void __iomem *base, u8 reg, u8 val)
 {
 	writeb_relaxed(val, base + reg);
 }
 
-static inline u8 usbtll_readb(void __iomem *base, u32 reg)
+static inline u8 usbtll_readb(void __iomem *base, u8 reg)
 {
 	return readb_relaxed(base + reg);
 }
@@ -205,49 +214,53 @@ static int usbtll_omap_probe(struct platform_device *pdev)
 	struct device				*dev =  &pdev->dev;
 	struct resource				*res;
 	struct usbtll_omap			*tll;
-	void __iomem				*base;
-	int					i, nch, ver;
+	int					ret = 0;
+	int					i, ver;
 
 	dev_dbg(dev, "starting TI HSUSB TLL Controller\n");
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	base = devm_ioremap_resource(dev, res);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
-
-	pm_runtime_enable(dev);
-	pm_runtime_get_sync(dev);
-
-	ver = usbtll_read(base, OMAP_USBTLL_REVISION);
-	switch (ver) {
-	case OMAP_USBTLL_REV1:
-	case OMAP_USBTLL_REV4:
-		nch = OMAP_TLL_CHANNEL_COUNT;
-		break;
-	case OMAP_USBTLL_REV2:
-	case OMAP_USBTLL_REV3:
-		nch = OMAP_REV2_TLL_CHANNEL_COUNT;
-		break;
-	default:
-		nch = OMAP_TLL_CHANNEL_COUNT;
-		dev_dbg(dev, "rev 0x%x not recognized, assuming %d channels\n",
-			ver, nch);
-		break;
-	}
-
-	tll = devm_kzalloc(dev, sizeof(*tll) + sizeof(tll->ch_clk[nch]),
-			   GFP_KERNEL);
+	tll = devm_kzalloc(dev, sizeof(struct usbtll_omap), GFP_KERNEL);
 	if (!tll) {
-		pm_runtime_put_sync(dev);
-		pm_runtime_disable(dev);
+		dev_err(dev, "Memory allocation failed\n");
 		return -ENOMEM;
 	}
 
-	tll->base = base;
-	tll->nch = nch;
-	platform_set_drvdata(pdev, tll);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	tll->base = devm_ioremap_resource(dev, res);
+	if (IS_ERR(tll->base))
+		return PTR_ERR(tll->base);
 
-	for (i = 0; i < nch; i++) {
+	platform_set_drvdata(pdev, tll);
+	pm_runtime_enable(dev);
+	pm_runtime_get_sync(dev);
+
+	ver =  usbtll_read(tll->base, OMAP_USBTLL_REVISION);
+	switch (ver) {
+	case OMAP_USBTLL_REV1:
+	case OMAP_USBTLL_REV4:
+		tll->nch = OMAP_TLL_CHANNEL_COUNT;
+		break;
+	case OMAP_USBTLL_REV2:
+	case OMAP_USBTLL_REV3:
+		tll->nch = OMAP_REV2_TLL_CHANNEL_COUNT;
+		break;
+	default:
+		tll->nch = OMAP_TLL_CHANNEL_COUNT;
+		dev_dbg(dev,
+		 "USB TLL Rev : 0x%x not recognized, assuming %d channels\n",
+			ver, tll->nch);
+		break;
+	}
+
+	tll->ch_clk = devm_kzalloc(dev, sizeof(struct clk *) * tll->nch,
+						GFP_KERNEL);
+	if (!tll->ch_clk) {
+		ret = -ENOMEM;
+		dev_err(dev, "Couldn't allocate memory for channel clocks\n");
+		goto err_clk_alloc;
+	}
+
+	for (i = 0; i < tll->nch; i++) {
 		char clkname[] = "usb_tll_hs_usb_chx_clk";
 
 		snprintf(clkname, sizeof(clkname),
@@ -256,8 +269,6 @@ static int usbtll_omap_probe(struct platform_device *pdev)
 
 		if (IS_ERR(tll->ch_clk[i]))
 			dev_dbg(dev, "can't get clock : %s\n", clkname);
-		else
-			clk_prepare(tll->ch_clk[i]);
 	}
 
 	pm_runtime_put_sync(dev);
@@ -267,6 +278,12 @@ static int usbtll_omap_probe(struct platform_device *pdev)
 	spin_unlock(&tll_lock);
 
 	return 0;
+
+err_clk_alloc:
+	pm_runtime_put_sync(dev);
+	pm_runtime_disable(dev);
+
+	return ret;
 }
 
 /**
@@ -284,12 +301,9 @@ static int usbtll_omap_remove(struct platform_device *pdev)
 	tll_dev = NULL;
 	spin_unlock(&tll_lock);
 
-	for (i = 0; i < tll->nch; i++) {
-		if (!IS_ERR(tll->ch_clk[i])) {
-			clk_unprepare(tll->ch_clk[i]);
+	for (i = 0; i < tll->nch; i++)
+		if (!IS_ERR(tll->ch_clk[i]))
 			clk_put(tll->ch_clk[i]);
-		}
-	}
 
 	pm_runtime_disable(&pdev->dev);
 	return 0;
@@ -352,13 +366,12 @@ int omap_tll_init(struct usbhs_omap_platform_data *pdata)
 			} else if (pdata->port_mode[i] ==
 					OMAP_EHCI_PORT_MODE_TLL) {
 				/*
-				 * Disable UTMI AutoIdle, BitStuffing
-				 * and use SDR Mode. Enable ULPI AutoIdle.
+				 * Disable AutoIdle, BitStuffing
+				 * and use SDR Mode
 				 */
 				reg &= ~(OMAP_TLL_CHANNEL_CONF_UTMIAUTOIDLE
+					| OMAP_TLL_CHANNEL_CONF_ULPINOBITSTUFF
 					| OMAP_TLL_CHANNEL_CONF_ULPIDDRMODE);
-				reg |= OMAP_TLL_CHANNEL_CONF_ULPINOBITSTUFF;
-				reg |= OMAP_TLL_CHANNEL_CONF_ULPI_ULPIAUTOIDLE;
 			} else if (pdata->port_mode[i] ==
 					OMAP_EHCI_PORT_MODE_HSIC) {
 				/*
@@ -407,7 +420,7 @@ int omap_tll_enable(struct usbhs_omap_platform_data *pdata)
 			if (IS_ERR(tll->ch_clk[i]))
 				continue;
 
-			r = clk_enable(tll->ch_clk[i]);
+			r = clk_prepare_enable(tll->ch_clk[i]);
 			if (r) {
 				dev_err(tll_dev,
 				 "Error enabling ch %d clock: %d\n", i, r);
@@ -435,7 +448,7 @@ int omap_tll_disable(struct usbhs_omap_platform_data *pdata)
 	for (i = 0; i < tll->nch; i++) {
 		if (omap_usb_mode_needs_tll(pdata->port_mode[i])) {
 			if (!IS_ERR(tll->ch_clk[i]))
-				clk_disable(tll->ch_clk[i]);
+				clk_disable_unprepare(tll->ch_clk[i]);
 		}
 	}
 
@@ -448,6 +461,7 @@ EXPORT_SYMBOL_GPL(omap_tll_disable);
 
 MODULE_AUTHOR("Keshava Munegowda <keshava_mgowda@ti.com>");
 MODULE_AUTHOR("Roger Quadros <rogerq@ti.com>");
+MODULE_ALIAS("platform:" USBHS_DRIVER_NAME);
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("usb tll driver for TI OMAP EHCI and OHCI controllers");
 

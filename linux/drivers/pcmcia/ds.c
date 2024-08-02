@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ds.c -- 16-bit PCMCIA core support
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * The initial developer of the original code is David A. Hinds
  * <dahinds@users.sourceforge.net>.  Portions created by David A. Hinds
@@ -64,7 +67,7 @@ static void pcmcia_check_driver(struct pcmcia_driver *p_drv)
 			       "be 0x%x\n", p_drv->name, did->prod_id[i],
 			       did->prod_id_hash[i], hash);
 			printk(KERN_DEBUG "pcmcia: see "
-				"Documentation/pcmcia/devicetable.rst for "
+				"Documentation/pcmcia/devicetable.txt for "
 				"details\n");
 		}
 		did++;
@@ -92,7 +95,7 @@ struct pcmcia_dynid {
  * and causes the driver to probe for all devices again.
  */
 static ssize_t
-new_id_store(struct device_driver *driver, const char *buf, size_t count)
+pcmcia_store_new_id(struct device_driver *driver, const char *buf, size_t count)
 {
 	struct pcmcia_dynid *dynid;
 	struct pcmcia_driver *pdrv = to_pcmcia_drv(driver);
@@ -130,7 +133,7 @@ new_id_store(struct device_driver *driver, const char *buf, size_t count)
 		return retval;
 	return count;
 }
-static DRIVER_ATTR_WO(new_id);
+static DRIVER_ATTR(new_id, S_IWUSR, NULL, pcmcia_store_new_id);
 
 static void
 pcmcia_free_dynids(struct pcmcia_driver *drv)
@@ -518,6 +521,9 @@ static struct pcmcia_device *pcmcia_device_add(struct pcmcia_socket *s,
 	/* by default don't allow DMA */
 	p_dev->dma_mask = DMA_MASK_NONE;
 	p_dev->dev.dma_mask = &p_dev->dma_mask;
+	dev_set_name(&p_dev->dev, "%d.%d", p_dev->socket->sock, p_dev->device_no);
+	if (!dev_name(&p_dev->dev))
+		goto err_free;
 	p_dev->devname = kasprintf(GFP_KERNEL, "pcmcia%s", dev_name(&p_dev->dev));
 	if (!p_dev->devname)
 		goto err_free;
@@ -575,15 +581,8 @@ static struct pcmcia_device *pcmcia_device_add(struct pcmcia_socket *s,
 
 	pcmcia_device_query(p_dev);
 
-	dev_set_name(&p_dev->dev, "%d.%d", p_dev->socket->sock, p_dev->device_no);
-	if (device_register(&p_dev->dev)) {
-		mutex_lock(&s->ops_mutex);
-		list_del(&p_dev->socket_device_list);
-		s->device_count--;
-		mutex_unlock(&s->ops_mutex);
-		put_device(&p_dev->dev);
-		return NULL;
-	}
+	if (device_register(&p_dev->dev))
+		goto err_unreg;
 
 	return p_dev;
 
@@ -978,7 +977,7 @@ static int pcmcia_bus_uevent(struct device *dev, struct kobj_uevent_env *env)
 
 /************************ runtime PM support ***************************/
 
-static int pcmcia_dev_suspend(struct device *dev);
+static int pcmcia_dev_suspend(struct device *dev, pm_message_t state);
 static int pcmcia_dev_resume(struct device *dev);
 
 static int runtime_suspend(struct device *dev)
@@ -986,7 +985,7 @@ static int runtime_suspend(struct device *dev)
 	int rc;
 
 	device_lock(dev);
-	rc = pcmcia_dev_suspend(dev);
+	rc = pcmcia_dev_suspend(dev, PMSG_SUSPEND);
 	device_unlock(dev);
 	return rc;
 }
@@ -1136,7 +1135,7 @@ ATTRIBUTE_GROUPS(pcmcia_dev);
 
 /* PM support, also needed for reset */
 
-static int pcmcia_dev_suspend(struct device *dev)
+static int pcmcia_dev_suspend(struct device *dev, pm_message_t state)
 {
 	struct pcmcia_device *p_dev = to_pcmcia_dev(dev);
 	struct pcmcia_driver *p_drv = NULL;
@@ -1411,9 +1410,6 @@ static struct class_interface pcmcia_bus_interface __refdata = {
 	.remove_dev = &pcmcia_bus_remove_socket,
 };
 
-static const struct dev_pm_ops pcmcia_bus_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pcmcia_dev_suspend, pcmcia_dev_resume)
-};
 
 struct bus_type pcmcia_bus_type = {
 	.name = "pcmcia",
@@ -1422,7 +1418,8 @@ struct bus_type pcmcia_bus_type = {
 	.dev_groups = pcmcia_dev_groups,
 	.probe = pcmcia_device_probe,
 	.remove = pcmcia_device_remove,
-	.pm = &pcmcia_bus_pm_ops,
+	.suspend = pcmcia_dev_suspend,
+	.resume = pcmcia_dev_resume,
 };
 
 

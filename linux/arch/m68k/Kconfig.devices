@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 if MMU
 
 config ARCH_MAY_HAVE_PC_FDC
@@ -19,7 +18,6 @@ config HEARTBEAT
 # We have a dedicated heartbeat LED. :-)
 config PROC_HARDWARE
 	bool "/proc/hardware support"
-	depends on PROC_FS
 	help
 	  Say Y here to support the /proc/hardware file, which gives you
 	  access to information about the machine you're running on,

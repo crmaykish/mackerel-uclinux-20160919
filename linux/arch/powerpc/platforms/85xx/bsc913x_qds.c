@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * BSC913xQDS Board Setup
  *
@@ -7,13 +6,17 @@
  *   Priyanka Jain <Priyanka.Jain@freescale.com>
  *
  * Copyright 2014 Freescale Semiconductor Inc.
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #include <linux/of_platform.h>
 #include <linux/pci.h>
 #include <asm/mpic.h>
 #include <sysdev/fsl_soc.h>
-#include <sysdev/fsl_pci.h>
 #include <asm/udbg.h>
 
 #include "mpc85xx.h"
@@ -43,12 +46,10 @@ static void __init bsc913x_qds_setup_arch(void)
 	mpc85xx_smp_init();
 #endif
 
-	fsl_pci_assign_primary();
-
 	pr_info("bsc913x board from Freescale Semiconductor\n");
 }
 
-machine_arch_initcall(bsc9132_qds, mpc85xx_common_publish_devices);
+machine_device_initcall(bsc9132_qds, mpc85xx_common_publish_devices);
 
 /*
  * Called very early, device-tree isn't unflattened
@@ -56,7 +57,9 @@ machine_arch_initcall(bsc9132_qds, mpc85xx_common_publish_devices);
 
 static int __init bsc9132_qds_probe(void)
 {
-	return of_machine_is_compatible("fsl,bsc9132qds");
+	unsigned long root = of_get_flat_dt_root();
+
+	return of_flat_dt_is_compatible(root, "fsl,bsc9132qds");
 }
 
 define_machine(bsc9132_qds) {
@@ -64,10 +67,8 @@ define_machine(bsc9132_qds) {
 	.probe			= bsc9132_qds_probe,
 	.setup_arch		= bsc913x_qds_setup_arch,
 	.init_IRQ		= bsc913x_qds_pic_init,
-#ifdef CONFIG_PCI
-	.pcibios_fixup_bus	= fsl_pcibios_fixup_bus,
-#endif
 	.get_irq		= mpic_get_irq,
+	.restart		= fsl_rstcr_restart,
 	.calibrate_decr		= generic_calibrate_decr,
 	.progress		= udbg_progress,
 };

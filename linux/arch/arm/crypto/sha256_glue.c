@@ -1,13 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Glue code for the SHA256 Secure Hash Algorithm assembly implementation
  * using optimized ARM assembler and NEON instructions.
  *
- * Copyright Â© 2015 Google Inc.
+ * Copyright © 2015 Google Inc.
  *
  * This file is based on sha256_ssse3_glue.c:
  *   Copyright (C) 2013 Intel Corporation
  *   Author: Tim Chen <tim.c.chen@linux.intel.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
+ *
  */
 
 #include <crypto/internal/hash.h>
@@ -25,8 +30,8 @@
 
 #include "sha256_glue.h"
 
-asmlinkage void sha256_block_data_order(struct sha256_state *state,
-					const u8 *data, int num_blks);
+asmlinkage void sha256_block_data_order(u32 *digest, const void *data,
+					unsigned int num_blks);
 
 int crypto_sha256_arm_update(struct shash_desc *desc, const u8 *data,
 			     unsigned int len)
@@ -34,21 +39,24 @@ int crypto_sha256_arm_update(struct shash_desc *desc, const u8 *data,
 	/* make sure casting to sha256_block_fn() is safe */
 	BUILD_BUG_ON(offsetof(struct sha256_state, state) != 0);
 
-	return sha256_base_do_update(desc, data, len, sha256_block_data_order);
+	return sha256_base_do_update(desc, data, len,
+				(sha256_block_fn *)sha256_block_data_order);
 }
 EXPORT_SYMBOL(crypto_sha256_arm_update);
 
-static int crypto_sha256_arm_final(struct shash_desc *desc, u8 *out)
+static int sha256_final(struct shash_desc *desc, u8 *out)
 {
-	sha256_base_do_finalize(desc, sha256_block_data_order);
+	sha256_base_do_finalize(desc,
+				(sha256_block_fn *)sha256_block_data_order);
 	return sha256_base_finish(desc, out);
 }
 
 int crypto_sha256_arm_finup(struct shash_desc *desc, const u8 *data,
 			    unsigned int len, u8 *out)
 {
-	sha256_base_do_update(desc, data, len, sha256_block_data_order);
-	return crypto_sha256_arm_final(desc, out);
+	sha256_base_do_update(desc, data, len,
+			      (sha256_block_fn *)sha256_block_data_order);
+	return sha256_final(desc, out);
 }
 EXPORT_SYMBOL(crypto_sha256_arm_finup);
 
@@ -56,13 +64,14 @@ static struct shash_alg algs[] = { {
 	.digestsize	=	SHA256_DIGEST_SIZE,
 	.init		=	sha256_base_init,
 	.update		=	crypto_sha256_arm_update,
-	.final		=	crypto_sha256_arm_final,
+	.final		=	sha256_final,
 	.finup		=	crypto_sha256_arm_finup,
 	.descsize	=	sizeof(struct sha256_state),
 	.base		=	{
 		.cra_name	=	"sha256",
 		.cra_driver_name =	"sha256-asm",
 		.cra_priority	=	150,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -70,13 +79,14 @@ static struct shash_alg algs[] = { {
 	.digestsize	=	SHA224_DIGEST_SIZE,
 	.init		=	sha224_base_init,
 	.update		=	crypto_sha256_arm_update,
-	.final		=	crypto_sha256_arm_final,
+	.final		=	sha256_final,
 	.finup		=	crypto_sha256_arm_finup,
 	.descsize	=	sizeof(struct sha256_state),
 	.base		=	{
 		.cra_name	=	"sha224",
 		.cra_driver_name =	"sha224-asm",
 		.cra_priority	=	150,
+		.cra_flags	=	CRYPTO_ALG_TYPE_SHASH,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}

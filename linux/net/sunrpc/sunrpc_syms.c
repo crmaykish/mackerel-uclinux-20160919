@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/net/sunrpc/sunrpc_syms.c
  *
@@ -23,10 +22,9 @@
 #include <linux/sunrpc/rpc_pipe_fs.h>
 #include <linux/sunrpc/xprtsock.h>
 
-#include "sunrpc.h"
 #include "netns.h"
 
-unsigned int sunrpc_net_id;
+int sunrpc_net_id;
 EXPORT_SYMBOL_GPL(sunrpc_net_id);
 
 static __net_init int sunrpc_init_net(struct net *net)
@@ -67,13 +65,10 @@ err_proc:
 
 static __net_exit void sunrpc_exit_net(struct net *net)
 {
-	struct sunrpc_net *sn = net_generic(net, sunrpc_net_id);
-
 	rpc_pipefs_exit_net(net);
 	unix_gid_cache_destroy(net);
 	ip_map_cache_destroy(net);
 	rpc_proc_exit(net);
-	WARN_ON_ONCE(!list_empty(&sn->all_clients));
 }
 
 static struct pernet_operations sunrpc_net_ops = {
@@ -124,7 +119,6 @@ out:
 static void __exit
 cleanup_sunrpc(void)
 {
-	rpc_cleanup_clids();
 	rpcauth_remove_module();
 	cleanup_socket_xprt();
 	svc_cleanup_xprt_sock();
@@ -132,7 +126,6 @@ cleanup_sunrpc(void)
 	unregister_rpc_pipefs();
 	rpc_destroy_mempool();
 	unregister_pernet_subsys(&sunrpc_net_ops);
-	auth_domain_cleanup();
 #if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
 	rpc_unregister_sysctl();
 #endif

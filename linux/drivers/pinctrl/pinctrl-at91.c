@@ -1,13 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * at91 pinctrl driver based on at91 pinmux core
  *
  * Copyright (C) 2011-2012 Jean-Christophe PLAGNIOL-VILLARD <plagnioj@jcrosoft.com>
+ *
+ * Under GPLv2 only
  */
 
 #include <linux/clk.h>
 #include <linux/err.h>
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/of_address.h>
@@ -15,7 +17,7 @@
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/pinctrl/machine.h>
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinctrl.h>
@@ -43,6 +45,8 @@ struct at91_gpio_chip {
 	struct at91_pinctrl_mux_ops *ops;	/* ops */
 };
 
+#define to_at91_gpio_chip(c) container_of(c, struct at91_gpio_chip, chip)
+
 static struct at91_gpio_chip *gpio_chips[MAX_GPIO_BANKS];
 
 static int gpio_banks;
@@ -55,12 +59,6 @@ static int gpio_banks;
 #define DRIVE_STRENGTH_SHIFT	5
 #define DRIVE_STRENGTH_MASK		0x3
 #define DRIVE_STRENGTH   (DRIVE_STRENGTH_MASK << DRIVE_STRENGTH_SHIFT)
-#define OUTPUT		(1 << 7)
-#define OUTPUT_VAL_SHIFT	8
-#define OUTPUT_VAL	(0x1 << OUTPUT_VAL_SHIFT)
-#define SLEWRATE_SHIFT	9
-#define SLEWRATE_MASK	0x1
-#define SLEWRATE	(SLEWRATE_MASK << SLEWRATE_SHIFT)
 #define DEBOUNCE	(1 << 16)
 #define DEBOUNCE_VAL_SHIFT	17
 #define DEBOUNCE_VAL	(0x3fff << DEBOUNCE_VAL_SHIFT)
@@ -74,22 +72,10 @@ static int gpio_banks;
  * DRIVE_STRENGTH_DEFAULT is just a placeholder to avoid changing the drive
  * strength when there is no dt config for it.
  */
-enum drive_strength_bit {
-	DRIVE_STRENGTH_BIT_DEF,
-	DRIVE_STRENGTH_BIT_LOW,
-	DRIVE_STRENGTH_BIT_MED,
-	DRIVE_STRENGTH_BIT_HI,
-};
-
-#define DRIVE_STRENGTH_BIT_MSK(name)	(DRIVE_STRENGTH_BIT_##name << \
-					 DRIVE_STRENGTH_SHIFT)
-
-enum slewrate_bit {
-	SLEWRATE_BIT_DIS,
-	SLEWRATE_BIT_ENA,
-};
-
-#define SLEWRATE_BIT_MSK(name)		(SLEWRATE_BIT_##name << SLEWRATE_SHIFT)
+#define DRIVE_STRENGTH_DEFAULT		(0 << DRIVE_STRENGTH_SHIFT)
+#define DRIVE_STRENGTH_LOW          (1 << DRIVE_STRENGTH_SHIFT)
+#define DRIVE_STRENGTH_MED          (2 << DRIVE_STRENGTH_SHIFT)
+#define DRIVE_STRENGTH_HI           (3 << DRIVE_STRENGTH_SHIFT)
 
 /**
  * struct at91_pmx_func - describes AT91 pinmux functions
@@ -180,8 +166,6 @@ struct at91_pinctrl_mux_ops {
 	unsigned (*get_drivestrength)(void __iomem *pio, unsigned pin);
 	void (*set_drivestrength)(void __iomem *pio, unsigned pin,
 					u32 strength);
-	unsigned (*get_slewrate)(void __iomem *pio, unsigned pin);
-	void (*set_slewrate)(void __iomem *pio, unsigned pin, u32 slewrate);
 	/* irq */
 	int (*irq_type)(struct irq_data *d, unsigned type);
 };
@@ -207,7 +191,7 @@ struct at91_pinctrl {
 	struct at91_pinctrl_mux_ops *ops;
 };
 
-static inline const struct at91_pin_group *at91_pinctrl_find_group_by_name(
+static const inline struct at91_pin_group *at91_pinctrl_find_group_by_name(
 				const struct at91_pinctrl *info,
 				const char *name)
 {
@@ -279,14 +263,13 @@ static int at91_dt_node_to_map(struct pinctrl_dev *pctldev,
 	 */
 	grp = at91_pinctrl_find_group_by_name(info, np->name);
 	if (!grp) {
-		dev_err(info->dev, "unable to find group for node %pOFn\n",
-			np);
+		dev_err(info->dev, "unable to find group for node %s\n",
+			np->name);
 		return -EINVAL;
 	}
 
 	map_num += grp->npins;
-	new_map = devm_kcalloc(pctldev->dev, map_num, sizeof(*new_map),
-			       GFP_KERNEL);
+	new_map = devm_kzalloc(pctldev->dev, sizeof(*new_map) * map_num, GFP_KERNEL);
 	if (!new_map)
 		return -ENOMEM;
 
@@ -393,19 +376,6 @@ static void at91_mux_set_pullup(void __iomem *pio, unsigned mask, bool on)
 		writel_relaxed(mask, pio + PIO_PPDDR);
 
 	writel_relaxed(mask, pio + (on ? PIO_PUER : PIO_PUDR));
-}
-
-static bool at91_mux_get_output(void __iomem *pio, unsigned int pin, bool *val)
-{
-	*val = (readl_relaxed(pio + PIO_ODSR) >> pin) & 0x1;
-	return (readl_relaxed(pio + PIO_OSR) >> pin) & 0x1;
-}
-
-static void at91_mux_set_output(void __iomem *pio, unsigned int mask,
-				bool is_on, bool val)
-{
-	writel_relaxed(mask, pio + (val ? PIO_SODR : PIO_CODR));
-	writel_relaxed(mask, pio + (is_on ? PIO_OER : PIO_ODR));
 }
 
 static unsigned at91_mux_get_multidrive(void __iomem *pio, unsigned pin)
@@ -567,7 +537,7 @@ static unsigned at91_mux_sama5d3_get_drivestrength(void __iomem *pio,
 	/* SAMA5 strength is 1:1 with our defines,
 	 * except 0 is equivalent to low per datasheet */
 	if (!tmp)
-		tmp = DRIVE_STRENGTH_BIT_MSK(LOW);
+		tmp = DRIVE_STRENGTH_LOW;
 
 	return tmp;
 }
@@ -580,30 +550,9 @@ static unsigned at91_mux_sam9x5_get_drivestrength(void __iomem *pio,
 
 	/* strength is inverse in SAM9x5s hardware with the pinctrl defines
 	 * hardware: 0 = hi, 1 = med, 2 = low, 3 = rsvd */
-	tmp = DRIVE_STRENGTH_BIT_MSK(HI) - tmp;
+	tmp = DRIVE_STRENGTH_HI - tmp;
 
 	return tmp;
-}
-
-static unsigned at91_mux_sam9x60_get_drivestrength(void __iomem *pio,
-						   unsigned pin)
-{
-	unsigned tmp = readl_relaxed(pio + SAM9X60_PIO_DRIVER1);
-
-	if (tmp & BIT(pin))
-		return DRIVE_STRENGTH_BIT_HI;
-
-	return DRIVE_STRENGTH_BIT_LOW;
-}
-
-static unsigned at91_mux_sam9x60_get_slewrate(void __iomem *pio, unsigned pin)
-{
-	unsigned tmp = readl_relaxed(pio + SAM9X60_PIO_SLEWR);
-
-	if ((tmp & BIT(pin)))
-		return SLEWRATE_BIT_ENA;
-
-	return SLEWRATE_BIT_DIS;
 }
 
 static void set_drive_strength(void __iomem *reg, unsigned pin, u32 strength)
@@ -637,49 +586,10 @@ static void at91_mux_sam9x5_set_drivestrength(void __iomem *pio, unsigned pin,
 
 	/* strength is inverse on SAM9x5s with our defines
 	 * 0 = hi, 1 = med, 2 = low, 3 = rsvd */
-	setting = DRIVE_STRENGTH_BIT_MSK(HI) - setting;
+	setting = DRIVE_STRENGTH_HI - setting;
 
 	set_drive_strength(pio + at91sam9x5_get_drive_register(pin), pin,
 				setting);
-}
-
-static void at91_mux_sam9x60_set_drivestrength(void __iomem *pio, unsigned pin,
-					       u32 setting)
-{
-	unsigned int tmp;
-
-	if (setting <= DRIVE_STRENGTH_BIT_DEF ||
-	    setting == DRIVE_STRENGTH_BIT_MED ||
-	    setting > DRIVE_STRENGTH_BIT_HI)
-		return;
-
-	tmp = readl_relaxed(pio + SAM9X60_PIO_DRIVER1);
-
-	/* Strength is 0: low, 1: hi */
-	if (setting == DRIVE_STRENGTH_BIT_LOW)
-		tmp &= ~BIT(pin);
-	else
-		tmp |= BIT(pin);
-
-	writel_relaxed(tmp, pio + SAM9X60_PIO_DRIVER1);
-}
-
-static void at91_mux_sam9x60_set_slewrate(void __iomem *pio, unsigned pin,
-					  u32 setting)
-{
-	unsigned int tmp;
-
-	if (setting < SLEWRATE_BIT_DIS || setting > SLEWRATE_BIT_ENA)
-		return;
-
-	tmp = readl_relaxed(pio + SAM9X60_PIO_SLEWR);
-
-	if (setting == SLEWRATE_BIT_DIS)
-		tmp &= ~BIT(pin);
-	else
-		tmp |= BIT(pin);
-
-	writel_relaxed(tmp, pio + SAM9X60_PIO_SLEWR);
 }
 
 static struct at91_pinctrl_mux_ops at91rm9200_ops = {
@@ -708,28 +618,6 @@ static struct at91_pinctrl_mux_ops at91sam9x5_ops = {
 	.get_drivestrength = at91_mux_sam9x5_get_drivestrength,
 	.set_drivestrength = at91_mux_sam9x5_set_drivestrength,
 	.irq_type	= alt_gpio_irq_type,
-};
-
-static const struct at91_pinctrl_mux_ops sam9x60_ops = {
-	.get_periph	= at91_mux_pio3_get_periph,
-	.mux_A_periph	= at91_mux_pio3_set_A_periph,
-	.mux_B_periph	= at91_mux_pio3_set_B_periph,
-	.mux_C_periph	= at91_mux_pio3_set_C_periph,
-	.mux_D_periph	= at91_mux_pio3_set_D_periph,
-	.get_deglitch	= at91_mux_pio3_get_deglitch,
-	.set_deglitch	= at91_mux_pio3_set_deglitch,
-	.get_debounce	= at91_mux_pio3_get_debounce,
-	.set_debounce	= at91_mux_pio3_set_debounce,
-	.get_pulldown	= at91_mux_pio3_get_pulldown,
-	.set_pulldown	= at91_mux_pio3_set_pulldown,
-	.get_schmitt_trig = at91_mux_pio3_get_schmitt_trig,
-	.disable_schmitt_trig = at91_mux_pio3_disable_schmitt_trig,
-	.get_drivestrength = at91_mux_sam9x60_get_drivestrength,
-	.set_drivestrength = at91_mux_sam9x60_set_drivestrength,
-	.get_slewrate   = at91_mux_sam9x60_get_slewrate,
-	.set_slewrate   = at91_mux_sam9x60_set_slewrate,
-	.irq_type	= alt_gpio_irq_type,
-
 };
 
 static struct at91_pinctrl_mux_ops sama5d3_ops = {
@@ -923,7 +811,7 @@ static int at91_gpio_request_enable(struct pinctrl_dev *pctldev,
 		return -EINVAL;
 	}
 	chip = range->gc;
-	at91_chip = gpiochip_get_data(chip);
+	at91_chip = container_of(chip, struct at91_gpio_chip, chip);
 
 	dev_dbg(npct->dev, "enable pin %u as GPIO\n", offset);
 
@@ -963,7 +851,6 @@ static int at91_pinconf_get(struct pinctrl_dev *pctldev,
 	void __iomem *pio;
 	unsigned pin;
 	int div;
-	bool out;
 
 	*config = 0;
 	dev_dbg(info->dev, "%s:%d, pin_id=%d", __func__, __LINE__, pin_id);
@@ -991,10 +878,6 @@ static int at91_pinconf_get(struct pinctrl_dev *pctldev,
 	if (info->ops->get_drivestrength)
 		*config |= (info->ops->get_drivestrength(pio, pin)
 				<< DRIVE_STRENGTH_SHIFT);
-	if (info->ops->get_slewrate)
-		*config |= (info->ops->get_slewrate(pio, pin) << SLEWRATE_SHIFT);
-	if (at91_mux_get_output(pio, pin, &out))
-		*config |= OUTPUT | (out << OUTPUT_VAL_SHIFT);
 
 	return 0;
 }
@@ -1027,8 +910,6 @@ static int at91_pinconf_set(struct pinctrl_dev *pctldev,
 		if (config & PULL_UP && config & PULL_DOWN)
 			return -EINVAL;
 
-		at91_mux_set_output(pio, mask, config & OUTPUT,
-				    (config & OUTPUT_VAL) >> OUTPUT_VAL_SHIFT);
 		at91_mux_set_pullup(pio, mask, config & PULL_UP);
 		at91_mux_set_multidrive(pio, mask, config & MULTI_DRIVE);
 		if (info->ops->set_deglitch)
@@ -1044,9 +925,6 @@ static int at91_pinconf_set(struct pinctrl_dev *pctldev,
 			info->ops->set_drivestrength(pio, pin,
 				(config & DRIVE_STRENGTH)
 					>> DRIVE_STRENGTH_SHIFT);
-		if (info->ops->set_slewrate)
-			info->ops->set_slewrate(pio, pin,
-				(config & SLEWRATE) >> SLEWRATE_SHIFT);
 
 	} /* for each config */
 
@@ -1062,11 +940,11 @@ static int at91_pinconf_set(struct pinctrl_dev *pctldev,
 	}					\
 } while (0)
 
-#define DBG_SHOW_FLAG_MASKED(mask, flag, name) do { \
+#define DBG_SHOW_FLAG_MASKED(mask,flag) do {	\
 	if ((config & mask) == flag) {		\
 		if (num_conf)			\
 			seq_puts(s, "|");	\
-		seq_puts(s, #name);		\
+		seq_puts(s, #flag);		\
 		num_conf++;			\
 	}					\
 } while (0)
@@ -1084,13 +962,9 @@ static void at91_pinconf_dbg_show(struct pinctrl_dev *pctldev,
 	DBG_SHOW_FLAG(PULL_DOWN);
 	DBG_SHOW_FLAG(DIS_SCHMIT);
 	DBG_SHOW_FLAG(DEGLITCH);
-	DBG_SHOW_FLAG_MASKED(DRIVE_STRENGTH, DRIVE_STRENGTH_BIT_MSK(LOW),
-			     DRIVE_STRENGTH_LOW);
-	DBG_SHOW_FLAG_MASKED(DRIVE_STRENGTH, DRIVE_STRENGTH_BIT_MSK(MED),
-			     DRIVE_STRENGTH_MED);
-	DBG_SHOW_FLAG_MASKED(DRIVE_STRENGTH, DRIVE_STRENGTH_BIT_MSK(HI),
-			     DRIVE_STRENGTH_HI);
-	DBG_SHOW_FLAG(SLEWRATE);
+	DBG_SHOW_FLAG_MASKED(DRIVE_STRENGTH, DRIVE_STRENGTH_LOW);
+	DBG_SHOW_FLAG_MASKED(DRIVE_STRENGTH, DRIVE_STRENGTH_MED);
+	DBG_SHOW_FLAG_MASKED(DRIVE_STRENGTH, DRIVE_STRENGTH_HI);
 	DBG_SHOW_FLAG(DEBOUNCE);
 	if (config & DEBOUNCE) {
 		val = config >> DEBOUNCE_VAL_SHIFT;
@@ -1157,10 +1031,11 @@ static int at91_pinctrl_mux_mask(struct at91_pinctrl *info,
 	}
 	info->nmux = size / gpio_banks;
 
-	info->mux_mask = devm_kcalloc(info->dev, size, sizeof(u32),
-				      GFP_KERNEL);
-	if (!info->mux_mask)
+	info->mux_mask = devm_kzalloc(info->dev, sizeof(u32) * size, GFP_KERNEL);
+	if (!info->mux_mask) {
+		dev_err(info->dev, "could not alloc mux_mask\n");
 		return -ENOMEM;
+	}
 
 	ret = of_property_read_u32_array(np, "atmel,mux-mask",
 					  info->mux_mask, size);
@@ -1178,7 +1053,7 @@ static int at91_pinctrl_parse_groups(struct device_node *np,
 	const __be32 *list;
 	int i, j;
 
-	dev_dbg(info->dev, "group(%d): %pOFn\n", index, np);
+	dev_dbg(info->dev, "group(%d): %s\n", index, np->name);
 
 	/* Initialise group */
 	grp->name = np->name;
@@ -1196,12 +1071,10 @@ static int at91_pinctrl_parse_groups(struct device_node *np,
 	}
 
 	grp->npins = size / 4;
-	pin = grp->pins_conf = devm_kcalloc(info->dev,
-					    grp->npins,
-					    sizeof(struct at91_pmx_pin),
-					    GFP_KERNEL);
-	grp->pins = devm_kcalloc(info->dev, grp->npins, sizeof(unsigned int),
-				 GFP_KERNEL);
+	pin = grp->pins_conf = devm_kzalloc(info->dev, grp->npins * sizeof(struct at91_pmx_pin),
+				GFP_KERNEL);
+	grp->pins = devm_kzalloc(info->dev, grp->npins * sizeof(unsigned int),
+				GFP_KERNEL);
 	if (!grp->pins_conf || !grp->pins)
 		return -ENOMEM;
 
@@ -1229,7 +1102,7 @@ static int at91_pinctrl_parse_functions(struct device_node *np,
 	static u32 grp_index;
 	u32 i = 0;
 
-	dev_dbg(info->dev, "parse function(%d): %pOFn\n", index, np);
+	dev_dbg(info->dev, "parse function(%d): %s\n", index, np->name);
 
 	func = &info->functions[index];
 
@@ -1240,8 +1113,8 @@ static int at91_pinctrl_parse_functions(struct device_node *np,
 		dev_err(info->dev, "no groups defined\n");
 		return -EINVAL;
 	}
-	func->groups = devm_kcalloc(info->dev,
-			func->ngroups, sizeof(char *), GFP_KERNEL);
+	func->groups = devm_kzalloc(info->dev,
+			func->ngroups * sizeof(char *), GFP_KERNEL);
 	if (!func->groups)
 		return -ENOMEM;
 
@@ -1262,7 +1135,6 @@ static const struct of_device_id at91_pinctrl_of_match[] = {
 	{ .compatible = "atmel,sama5d3-pinctrl", .data = &sama5d3_ops },
 	{ .compatible = "atmel,at91sam9x5-pinctrl", .data = &at91sam9x5_ops },
 	{ .compatible = "atmel,at91rm9200-pinctrl", .data = &at91rm9200_ops },
-	{ .compatible = "microchip,sam9x60-pinctrl", .data = &sam9x60_ops },
 	{ /* sentinel */ }
 };
 
@@ -1304,16 +1176,12 @@ static int at91_pinctrl_probe_dt(struct platform_device *pdev,
 
 	dev_dbg(&pdev->dev, "nfunctions = %d\n", info->nfunctions);
 	dev_dbg(&pdev->dev, "ngroups = %d\n", info->ngroups);
-	info->functions = devm_kcalloc(&pdev->dev,
-					info->nfunctions,
-					sizeof(struct at91_pmx_func),
+	info->functions = devm_kzalloc(&pdev->dev, info->nfunctions * sizeof(struct at91_pmx_func),
 					GFP_KERNEL);
 	if (!info->functions)
 		return -ENOMEM;
 
-	info->groups = devm_kcalloc(&pdev->dev,
-					info->ngroups,
-					sizeof(struct at91_pin_group),
+	info->groups = devm_kzalloc(&pdev->dev, info->ngroups * sizeof(struct at91_pin_group),
 					GFP_KERNEL);
 	if (!info->groups)
 		return -ENOMEM;
@@ -1372,9 +1240,7 @@ static int at91_pinctrl_probe(struct platform_device *pdev)
 	at91_pinctrl_desc.name = dev_name(&pdev->dev);
 	at91_pinctrl_desc.npins = gpio_banks * MAX_NB_GPIO_PER_BANK;
 	at91_pinctrl_desc.pins = pdesc =
-		devm_kcalloc(&pdev->dev,
-			     at91_pinctrl_desc.npins, sizeof(*pdesc),
-			     GFP_KERNEL);
+		devm_kzalloc(&pdev->dev, sizeof(*pdesc) * at91_pinctrl_desc.npins, GFP_KERNEL);
 
 	if (!at91_pinctrl_desc.pins)
 		return -ENOMEM;
@@ -1388,8 +1254,7 @@ static int at91_pinctrl_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, info);
-	info->pctl = devm_pinctrl_register(&pdev->dev, &at91_pinctrl_desc,
-					   info);
+	info->pctl = pinctrl_register(&at91_pinctrl_desc, &pdev->dev, info);
 
 	if (IS_ERR(info->pctl)) {
 		dev_err(&pdev->dev, "could not register AT91 pinctrl driver\n");
@@ -1406,9 +1271,18 @@ static int at91_pinctrl_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int at91_pinctrl_remove(struct platform_device *pdev)
+{
+	struct at91_pinctrl *info = platform_get_drvdata(pdev);
+
+	pinctrl_unregister(info->pctl);
+
+	return 0;
+}
+
 static int at91_gpio_get_direction(struct gpio_chip *chip, unsigned offset)
 {
-	struct at91_gpio_chip *at91_gpio = gpiochip_get_data(chip);
+	struct at91_gpio_chip *at91_gpio = to_at91_gpio_chip(chip);
 	void __iomem *pio = at91_gpio->regbase;
 	unsigned mask = 1 << offset;
 	u32 osr;
@@ -1419,7 +1293,7 @@ static int at91_gpio_get_direction(struct gpio_chip *chip, unsigned offset)
 
 static int at91_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
-	struct at91_gpio_chip *at91_gpio = gpiochip_get_data(chip);
+	struct at91_gpio_chip *at91_gpio = to_at91_gpio_chip(chip);
 	void __iomem *pio = at91_gpio->regbase;
 	unsigned mask = 1 << offset;
 
@@ -1429,7 +1303,7 @@ static int at91_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 
 static int at91_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
-	struct at91_gpio_chip *at91_gpio = gpiochip_get_data(chip);
+	struct at91_gpio_chip *at91_gpio = to_at91_gpio_chip(chip);
 	void __iomem *pio = at91_gpio->regbase;
 	unsigned mask = 1 << offset;
 	u32 pdsr;
@@ -1441,7 +1315,7 @@ static int at91_gpio_get(struct gpio_chip *chip, unsigned offset)
 static void at91_gpio_set(struct gpio_chip *chip, unsigned offset,
 				int val)
 {
-	struct at91_gpio_chip *at91_gpio = gpiochip_get_data(chip);
+	struct at91_gpio_chip *at91_gpio = to_at91_gpio_chip(chip);
 	void __iomem *pio = at91_gpio->regbase;
 	unsigned mask = 1 << offset;
 
@@ -1451,7 +1325,7 @@ static void at91_gpio_set(struct gpio_chip *chip, unsigned offset,
 static void at91_gpio_set_multiple(struct gpio_chip *chip,
 				      unsigned long *mask, unsigned long *bits)
 {
-	struct at91_gpio_chip *at91_gpio = gpiochip_get_data(chip);
+	struct at91_gpio_chip *at91_gpio = to_at91_gpio_chip(chip);
 	void __iomem *pio = at91_gpio->regbase;
 
 #define BITS_MASK(bits) (((bits) == 32) ? ~0U : (BIT(bits) - 1))
@@ -1466,7 +1340,7 @@ static void at91_gpio_set_multiple(struct gpio_chip *chip,
 static int at91_gpio_direction_output(struct gpio_chip *chip, unsigned offset,
 				int val)
 {
-	struct at91_gpio_chip *at91_gpio = gpiochip_get_data(chip);
+	struct at91_gpio_chip *at91_gpio = to_at91_gpio_chip(chip);
 	void __iomem *pio = at91_gpio->regbase;
 	unsigned mask = 1 << offset;
 
@@ -1481,7 +1355,7 @@ static void at91_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 {
 	enum at91_mux mode;
 	int i;
-	struct at91_gpio_chip *at91_gpio = gpiochip_get_data(chip);
+	struct at91_gpio_chip *at91_gpio = to_at91_gpio_chip(chip);
 	void __iomem *pio = at91_gpio->regbase;
 
 	for (i = 0; i < chip->ngpio; i++) {
@@ -1595,7 +1469,7 @@ static int alt_gpio_irq_type(struct irq_data *d, unsigned type)
 		return 0;
 	case IRQ_TYPE_NONE:
 	default:
-		pr_warn("AT91: No type for GPIO irq offset %d\n", d->irq);
+		pr_warn("AT91: No type for irq %d\n", gpio_to_irq(d->irq));
 		return -EINVAL;
 	}
 
@@ -1682,11 +1556,23 @@ void at91_pinctrl_gpio_resume(void)
 #define gpio_irq_set_wake	NULL
 #endif /* CONFIG_PM */
 
+static struct irq_chip gpio_irqchip = {
+	.name		= "GPIO",
+	.irq_ack	= gpio_irq_ack,
+	.irq_disable	= gpio_irq_mask,
+	.irq_mask	= gpio_irq_mask,
+	.irq_unmask	= gpio_irq_unmask,
+	/* .irq_set_type is set dynamically */
+	.irq_set_wake	= gpio_irq_set_wake,
+};
+
 static void gpio_irq_handler(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	struct gpio_chip *gpio_chip = irq_desc_get_handler_data(desc);
-	struct at91_gpio_chip *at91_gpio = gpiochip_get_data(gpio_chip);
+	struct at91_gpio_chip *at91_gpio = container_of(gpio_chip,
+					   struct at91_gpio_chip, chip);
+
 	void __iomem	*pio = at91_gpio->regbase;
 	unsigned long	isr;
 	int		n;
@@ -1709,7 +1595,7 @@ static void gpio_irq_handler(struct irq_desc *desc)
 
 		for_each_set_bit(n, &isr, BITS_PER_LONG) {
 			generic_handle_irq(irq_find_mapping(
-					   gpio_chip->irq.domain, n));
+					   gpio_chip->irqdomain, n));
 		}
 	}
 	chained_irq_exit(chip, desc);
@@ -1722,22 +1608,12 @@ static int at91_gpio_of_irq_setup(struct platform_device *pdev,
 	struct gpio_chip	*gpiochip_prev = NULL;
 	struct at91_gpio_chip   *prev = NULL;
 	struct irq_data		*d = irq_get_irq_data(at91_gpio->pioc_virq);
-	struct irq_chip		*gpio_irqchip;
 	int ret, i;
-
-	gpio_irqchip = devm_kzalloc(&pdev->dev, sizeof(*gpio_irqchip), GFP_KERNEL);
-	if (!gpio_irqchip)
-		return -ENOMEM;
 
 	at91_gpio->pioc_hwirq = irqd_to_hwirq(d);
 
-	gpio_irqchip->name = "GPIO";
-	gpio_irqchip->irq_ack = gpio_irq_ack;
-	gpio_irqchip->irq_disable = gpio_irq_mask;
-	gpio_irqchip->irq_mask = gpio_irq_mask;
-	gpio_irqchip->irq_unmask = gpio_irq_unmask;
-	gpio_irqchip->irq_set_wake = gpio_irq_set_wake,
-	gpio_irqchip->irq_set_type = at91_gpio->ops->irq_type;
+	/* Setup proper .irq_set_type function */
+	gpio_irqchip.irq_set_type = at91_gpio->ops->irq_type;
 
 	/* Disable irqs of this PIO controller */
 	writel_relaxed(~0, at91_gpio->regbase + PIO_IDR);
@@ -1748,10 +1624,10 @@ static int at91_gpio_of_irq_setup(struct platform_device *pdev,
 	 * interrupt.
 	 */
 	ret = gpiochip_irqchip_add(&at91_gpio->chip,
-				   gpio_irqchip,
+				   &gpio_irqchip,
 				   0,
 				   handle_edge_irq,
-				   IRQ_TYPE_NONE);
+				   IRQ_TYPE_EDGE_BOTH);
 	if (ret) {
 		dev_err(&pdev->dev, "at91_gpio.%d: Couldn't add irqchip to gpiochip.\n",
 			at91_gpio->pioc_idx);
@@ -1766,13 +1642,13 @@ static int at91_gpio_of_irq_setup(struct platform_device *pdev,
 	if (!gpiochip_prev) {
 		/* Then register the chain on the parent IRQ */
 		gpiochip_set_chained_irqchip(&at91_gpio->chip,
-					     gpio_irqchip,
+					     &gpio_irqchip,
 					     at91_gpio->pioc_virq,
 					     gpio_irq_handler);
 		return 0;
 	}
 
-	prev = gpiochip_get_data(gpiochip_prev);
+	prev = container_of(gpiochip_prev, struct at91_gpio_chip, chip);
 
 	/* we can only have 2 banks before */
 	for (i = 0; i < 2; i++) {
@@ -1788,7 +1664,7 @@ static int at91_gpio_of_irq_setup(struct platform_device *pdev,
 }
 
 /* This structure is replicated for each GPIO block allocated at probe time */
-static const struct gpio_chip at91_gpio_template = {
+static struct gpio_chip at91_gpio_template = {
 	.request		= gpiochip_generic_request,
 	.free			= gpiochip_generic_free,
 	.get_direction		= at91_gpio_get_direction,
@@ -1805,7 +1681,6 @@ static const struct gpio_chip at91_gpio_template = {
 static const struct of_device_id at91_gpio_of_match[] = {
 	{ .compatible = "atmel,at91sam9x5-gpio", .data = &at91sam9x5_ops, },
 	{ .compatible = "atmel,at91rm9200-gpio", .data = &at91rm9200_ops },
-	{ .compatible = "microchip,sam9x60-gpio", .data = &sam9x60_ops },
 	{ /* sentinel */ }
 };
 
@@ -1859,9 +1734,14 @@ static int at91_gpio_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-	ret = clk_prepare_enable(at91_chip->clock);
+	ret = clk_prepare(at91_chip->clock);
+	if (ret)
+		goto clk_prepare_err;
+
+	/* enable PIO controller's clock */
+	ret = clk_enable(at91_chip->clock);
 	if (ret) {
-		dev_err(&pdev->dev, "failed to prepare and enable clock, ignoring.\n");
+		dev_err(&pdev->dev, "failed to enable clock, ignoring.\n");
 		goto clk_enable_err;
 	}
 
@@ -1870,7 +1750,7 @@ static int at91_gpio_probe(struct platform_device *pdev)
 	chip = &at91_chip->chip;
 	chip->of_node = np;
 	chip->label = dev_name(&pdev->dev);
-	chip->parent = &pdev->dev;
+	chip->dev = &pdev->dev;
 	chip->owner = THIS_MODULE;
 	chip->base = alias_idx * MAX_NB_GPIO_PER_BANK;
 
@@ -1882,7 +1762,7 @@ static int at91_gpio_probe(struct platform_device *pdev)
 			chip->ngpio = ngpio;
 	}
 
-	names = devm_kcalloc(&pdev->dev, chip->ngpio, sizeof(char *),
+	names = devm_kzalloc(&pdev->dev, sizeof(char *) * chip->ngpio,
 			     GFP_KERNEL);
 
 	if (!names) {
@@ -1891,7 +1771,7 @@ static int at91_gpio_probe(struct platform_device *pdev)
 	}
 
 	for (i = 0; i < chip->ngpio; i++)
-		names[i] = devm_kasprintf(&pdev->dev, GFP_KERNEL, "pio%c%d", alias_idx + 'A', i);
+		names[i] = kasprintf(GFP_KERNEL, "pio%c%d", alias_idx + 'A', i);
 
 	chip->names = (const char *const *)names;
 
@@ -1903,7 +1783,7 @@ static int at91_gpio_probe(struct platform_device *pdev)
 	range->npins = chip->ngpio;
 	range->gc = chip;
 
-	ret = gpiochip_add_data(chip, at91_chip);
+	ret = gpiochip_add(chip);
 	if (ret)
 		goto gpiochip_add_err;
 
@@ -1921,8 +1801,10 @@ static int at91_gpio_probe(struct platform_device *pdev)
 irq_setup_err:
 	gpiochip_remove(chip);
 gpiochip_add_err:
+	clk_disable(at91_chip->clock);
 clk_enable_err:
-	clk_disable_unprepare(at91_chip->clock);
+	clk_unprepare(at91_chip->clock);
+clk_prepare_err:
 err:
 	dev_err(&pdev->dev, "Failure %i for GPIO %i\n", ret, alias_idx);
 
@@ -1943,15 +1825,26 @@ static struct platform_driver at91_pinctrl_driver = {
 		.of_match_table = at91_pinctrl_of_match,
 	},
 	.probe = at91_pinctrl_probe,
-};
-
-static struct platform_driver * const drivers[] = {
-	&at91_gpio_driver,
-	&at91_pinctrl_driver,
+	.remove = at91_pinctrl_remove,
 };
 
 static int __init at91_pinctrl_init(void)
 {
-	return platform_register_drivers(drivers, ARRAY_SIZE(drivers));
+	int ret;
+
+	ret = platform_driver_register(&at91_gpio_driver);
+	if (ret)
+		return ret;
+	return platform_driver_register(&at91_pinctrl_driver);
 }
 arch_initcall(at91_pinctrl_init);
+
+static void __exit at91_pinctrl_exit(void)
+{
+	platform_driver_unregister(&at91_pinctrl_driver);
+}
+
+module_exit(at91_pinctrl_exit);
+MODULE_AUTHOR("Jean-Christophe PLAGNIOL-VILLARD <plagnioj@jcrosoft.com>");
+MODULE_DESCRIPTION("Atmel AT91 pinctrl driver");
+MODULE_LICENSE("GPL v2");

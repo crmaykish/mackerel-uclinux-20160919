@@ -1,8 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * CAN driver for esd CAN-USB/2 and CAN-USB/Micro
  *
  * Copyright (C) 2010-2012 Matthias Fuchs <matthias.fuchs@esd.eu>, esd gmbh
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published
+ * by the Free Software Foundation; version 2 of the License.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #include <linux/signal.h>
 #include <linux/slab.h>
@@ -195,8 +207,6 @@ struct esd_usb2 {
 	int net_count;
 	u32 version;
 	int rxinitdone;
-	void *rxbuf[MAX_RX_URBS];
-	dma_addr_t rxbuf_dma[MAX_RX_URBS];
 };
 
 struct esd_usb2_net_priv {
@@ -224,12 +234,8 @@ static void esd_usb2_rx_event(struct esd_usb2_net_priv *priv,
 	if (id == ESD_EV_CAN_ERROR_EXT) {
 		u8 state = msg->msg.rx.data[0];
 		u8 ecc = msg->msg.rx.data[1];
-		u8 rxerr = msg->msg.rx.data[2];
-		u8 txerr = msg->msg.rx.data[3];
-
-		netdev_dbg(priv->netdev,
-			   "CAN_ERR_EV_EXT: dlc=%#02x state=%02x ecc=%02x rec=%02x tec=%02x\n",
-			   msg->msg.rx.dlc, state, ecc, rxerr, txerr);
+		u8 txerr = msg->msg.rx.data[2];
+		u8 rxerr = msg->msg.rx.data[3];
 
 		skb = alloc_can_err_skb(priv->netdev, &cf);
 		if (skb == NULL) {
@@ -257,8 +263,6 @@ static void esd_usb2_rx_event(struct esd_usb2_net_priv *priv,
 				break;
 			default:
 				priv->can.state = CAN_STATE_ERROR_ACTIVE;
-				txerr = 0;
-				rxerr = 0;
 				break;
 			}
 		} else {
@@ -278,15 +282,13 @@ static void esd_usb2_rx_event(struct esd_usb2_net_priv *priv,
 				cf->data[2] |= CAN_ERR_PROT_STUFF;
 				break;
 			default:
+				cf->data[3] = ecc & SJA1000_ECC_SEG;
 				break;
 			}
 
 			/* Error occurred during transmission? */
 			if (!(ecc & SJA1000_ECC_DIR))
 				cf->data[2] |= CAN_ERR_PROT_TX;
-
-			/* Bit stream position in CAN frame as the error was detected */
-			cf->data[3] = ecc & SJA1000_ECC_SEG;
 
 			if (priv->can.state == CAN_STATE_ERROR_WARNING ||
 			    priv->can.state == CAN_STATE_ERROR_PASSIVE) {
@@ -331,7 +333,7 @@ static void esd_usb2_rx_can_msg(struct esd_usb2_net_priv *priv,
 		}
 
 		cf->can_id = id & ESD_IDMASK;
-		cf->can_dlc = get_can_dlc(msg->msg.rx.dlc & ~ESD_RTR);
+		cf->can_dlc = get_can_dlc(msg->msg.rx.dlc);
 
 		if (id & ESD_EXTID)
 			cf->can_id |= CAN_EFF_FLAG;
@@ -391,8 +393,6 @@ static void esd_usb2_read_bulk_callback(struct urb *urb)
 		break;
 
 	case -ENOENT:
-	case -EPIPE:
-	case -EPROTO:
 	case -ESHUTDOWN:
 		return;
 
@@ -480,7 +480,7 @@ static void esd_usb2_write_bulk_callback(struct urb *urb)
 	if (urb->status)
 		netdev_info(netdev, "Tx URB aborted (%d)\n", urb->status);
 
-	netif_trans_update(netdev);
+	netdev->trans_start = jiffies;
 }
 
 static ssize_t show_firmware(struct device *d,
@@ -494,7 +494,7 @@ static ssize_t show_firmware(struct device *d,
 		       (dev->version >> 8) & 0xf,
 		       dev->version & 0xff);
 }
-static DEVICE_ATTR(firmware, 0444, show_firmware, NULL);
+static DEVICE_ATTR(firmware, S_IRUGO, show_firmware, NULL);
 
 static ssize_t show_hardware(struct device *d,
 			     struct device_attribute *attr, char *buf)
@@ -507,7 +507,7 @@ static ssize_t show_hardware(struct device *d,
 		       (dev->version >> 24) & 0xf,
 		       (dev->version >> 16) & 0xff);
 }
-static DEVICE_ATTR(hardware, 0444, show_hardware, NULL);
+static DEVICE_ATTR(hardware, S_IRUGO, show_hardware, NULL);
 
 static ssize_t show_nets(struct device *d,
 			 struct device_attribute *attr, char *buf)
@@ -517,7 +517,7 @@ static ssize_t show_nets(struct device *d,
 
 	return sprintf(buf, "%d", dev->net_count);
 }
-static DEVICE_ATTR(nets, 0444, show_nets, NULL);
+static DEVICE_ATTR(nets, S_IRUGO, show_nets, NULL);
 
 static int esd_usb2_send_msg(struct esd_usb2 *dev, struct esd_usb2_msg *msg)
 {
@@ -554,25 +554,24 @@ static int esd_usb2_setup_rx_urbs(struct esd_usb2 *dev)
 	for (i = 0; i < MAX_RX_URBS; i++) {
 		struct urb *urb = NULL;
 		u8 *buf = NULL;
-		dma_addr_t buf_dma;
 
 		/* create a URB, and a buffer for it */
 		urb = usb_alloc_urb(0, GFP_KERNEL);
 		if (!urb) {
+			dev_warn(dev->udev->dev.parent,
+				 "No memory left for URBs\n");
 			err = -ENOMEM;
 			break;
 		}
 
 		buf = usb_alloc_coherent(dev->udev, RX_BUFFER_SIZE, GFP_KERNEL,
-					 &buf_dma);
+					 &urb->transfer_dma);
 		if (!buf) {
 			dev_warn(dev->udev->dev.parent,
 				 "No memory left for USB buffer\n");
 			err = -ENOMEM;
 			goto freeurb;
 		}
-
-		urb->transfer_dma = buf_dma;
 
 		usb_fill_bulk_urb(urb, dev->udev,
 				  usb_rcvbulkpipe(dev->udev, 1),
@@ -586,11 +585,7 @@ static int esd_usb2_setup_rx_urbs(struct esd_usb2 *dev)
 			usb_unanchor_urb(urb);
 			usb_free_coherent(dev->udev, RX_BUFFER_SIZE, buf,
 					  urb->transfer_dma);
-			goto freeurb;
 		}
-
-		dev->rxbuf[i] = buf;
-		dev->rxbuf_dma[i] = buf_dma;
 
 freeurb:
 		/* Drop reference, USB core will take care of freeing it */
@@ -679,11 +674,6 @@ static void unlink_all_urbs(struct esd_usb2 *dev)
 	int i, j;
 
 	usb_kill_anchored_urbs(&dev->rx_submitted);
-
-	for (i = 0; i < MAX_RX_URBS; ++i)
-		usb_free_coherent(dev->udev, RX_BUFFER_SIZE,
-				  dev->rxbuf[i], dev->rxbuf_dma[i]);
-
 	for (i = 0; i < dev->net_count; i++) {
 		priv = dev->nets[i];
 		if (priv) {
@@ -740,6 +730,7 @@ static netdev_tx_t esd_usb2_start_xmit(struct sk_buff *skb,
 	/* create a URB, and a buffer for it, and copy the data to the URB */
 	urb = usb_alloc_urb(0, GFP_ATOMIC);
 	if (!urb) {
+		netdev_err(netdev, "No memory left for URBs\n");
 		stats->tx_dropped++;
 		dev_kfree_skb(skb);
 		goto nourbmem;
@@ -829,7 +820,7 @@ static netdev_tx_t esd_usb2_start_xmit(struct sk_buff *skb,
 		goto releasebuf;
 	}
 
-	netif_trans_update(netdev);
+	netdev->trans_start = jiffies;
 
 	/*
 	 * Release our reference to this URB, the USB core will eventually free

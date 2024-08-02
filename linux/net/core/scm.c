@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* scm.c - Socket level control messages processing.
  *
  * Author:	Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
  *              Alignment and value checking mods by Craig Metz
+ *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
  */
 
 #include <linux/module.h>
@@ -10,7 +14,6 @@
 #include <linux/capability.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
-#include <linux/sched/user.h>
 #include <linux/mm.h>
 #include <linux/kernel.h>
 #include <linux/stat.h>
@@ -25,10 +28,8 @@
 #include <linux/pid.h>
 #include <linux/nsproxy.h>
 #include <linux/slab.h>
-#include <linux/errqueue.h>
-#include <linux/io_uring.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include <net/protocol.h>
 #include <linux/skbuff.h>
@@ -70,7 +71,7 @@ static int scm_fp_copy(struct cmsghdr *cmsg, struct scm_fp_list **fplp)
 	struct file **fpp;
 	int i, num;
 
-	num = (cmsg->cmsg_len - sizeof(struct cmsghdr))/sizeof(int);
+	num = (cmsg->cmsg_len - CMSG_ALIGN(sizeof(struct cmsghdr)))/sizeof(int);
 
 	if (num <= 0)
 		return 0;
@@ -86,7 +87,6 @@ static int scm_fp_copy(struct cmsghdr *cmsg, struct scm_fp_list **fplp)
 		*fplp = fpl;
 		fpl->count = 0;
 		fpl->max = SCM_MAX_FD;
-		fpl->user = NULL;
 	}
 	fpp = &fpl->fp[fpl->count];
 
@@ -104,18 +104,9 @@ static int scm_fp_copy(struct cmsghdr *cmsg, struct scm_fp_list **fplp)
 
 		if (fd < 0 || !(file = fget_raw(fd)))
 			return -EBADF;
-		/* don't allow io_uring files */
-		if (io_is_uring_fops(file)) {
-			fput(file);
-			return -EINVAL;
-		}
 		*fpp++ = file;
 		fpl->count++;
 	}
-
-	if (!fpl->user)
-		fpl->user = get_uid(current_user());
-
 	return num;
 }
 
@@ -128,7 +119,6 @@ void __scm_destroy(struct scm_cookie *scm)
 		scm->fp = NULL;
 		for (i=fpl->count-1; i>=0; i--)
 			fput(fpl->fp[i]);
-		free_uid(fpl->user);
 		kfree(fpl);
 	}
 }
@@ -255,32 +245,6 @@ out:
 }
 EXPORT_SYMBOL(put_cmsg);
 
-void put_cmsg_scm_timestamping64(struct msghdr *msg, struct scm_timestamping_internal *tss_internal)
-{
-	struct scm_timestamping64 tss;
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(tss.ts); i++) {
-		tss.ts[i].tv_sec = tss_internal->ts[i].tv_sec;
-		tss.ts[i].tv_nsec = tss_internal->ts[i].tv_nsec;
-	}
-
-	put_cmsg(msg, SOL_SOCKET, SO_TIMESTAMPING_NEW, sizeof(tss), &tss);
-}
-EXPORT_SYMBOL(put_cmsg_scm_timestamping64);
-
-void put_cmsg_scm_timestamping(struct msghdr *msg, struct scm_timestamping_internal *tss_internal)
-{
-	struct scm_timestamping tss;
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(tss.ts); i++)
-		tss.ts[i] = timespec64_to_timespec(tss_internal->ts[i]);
-
-	put_cmsg(msg, SOL_SOCKET, SO_TIMESTAMPING_OLD, sizeof(tss), &tss);
-}
-EXPORT_SYMBOL(put_cmsg_scm_timestamping);
-
 void scm_detach_fds(struct msghdr *msg, struct scm_cookie *scm)
 {
 	struct cmsghdr __user *cm
@@ -325,8 +289,8 @@ void scm_detach_fds(struct msghdr *msg, struct scm_cookie *scm)
 		/* Bump the usage count and install the file. */
 		sock = sock_from_file(fp[i], &err);
 		if (sock) {
-			sock_update_netprioidx(&sock->sk->sk_cgrp_data);
-			sock_update_classid(&sock->sk->sk_cgrp_data);
+			sock_update_netprioidx(sock->sk);
+			sock_update_classid(sock->sk);
 		}
 		fd_install(new_fd, get_file(fp[i]));
 	}
@@ -372,7 +336,6 @@ struct scm_fp_list *scm_fp_dup(struct scm_fp_list *fpl)
 		for (i = 0; i < fpl->count; i++)
 			get_file(fpl->fp[i]);
 		new_fpl->max = new_fpl->count;
-		new_fpl->user = get_uid(fpl->user);
 	}
 	return new_fpl;
 }

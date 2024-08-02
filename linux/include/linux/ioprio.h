@@ -1,14 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef IOPRIO_H
 #define IOPRIO_H
 
 #include <linux/sched.h>
-#include <linux/sched/rt.h>
 #include <linux/iocontext.h>
 
 /*
  * Gives us 8 prio classes with 13-bits of data for each class
  */
+#define IOPRIO_BITS		(16)
 #define IOPRIO_CLASS_SHIFT	(13)
 #define IOPRIO_PRIO_MASK	((1UL << IOPRIO_CLASS_SHIFT) - 1)
 
@@ -64,23 +63,10 @@ static inline int task_nice_ioclass(struct task_struct *task)
 {
 	if (task->policy == SCHED_IDLE)
 		return IOPRIO_CLASS_IDLE;
-	else if (task_is_realtime(task))
+	else if (task->policy == SCHED_FIFO || task->policy == SCHED_RR)
 		return IOPRIO_CLASS_RT;
 	else
 		return IOPRIO_CLASS_BE;
-}
-
-/*
- * If the calling process has set an I/O priority, use that. Otherwise, return
- * the default I/O priority.
- */
-static inline int get_current_ioprio(void)
-{
-	struct io_context *ioc = current->io_context;
-
-	if (ioc)
-		return ioc->ioprio;
-	return IOPRIO_PRIO_VALUE(IOPRIO_CLASS_NONE, 0);
 }
 
 /*
@@ -89,14 +75,5 @@ static inline int get_current_ioprio(void)
 extern int ioprio_best(unsigned short aprio, unsigned short bprio);
 
 extern int set_task_ioprio(struct task_struct *task, int ioprio);
-
-#ifdef CONFIG_BLOCK
-extern int ioprio_check_cap(int ioprio);
-#else
-static inline int ioprio_check_cap(int ioprio)
-{
-	return -ENOTBLK;
-}
-#endif /* CONFIG_BLOCK */
 
 #endif

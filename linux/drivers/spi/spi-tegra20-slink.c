@@ -1,8 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * SPI driver for Nvidia's Tegra20/Tegra30 SLINK Controller.
  *
  * Copyright (c) 2012, NVIDIA CORPORATION.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/clk.h>
@@ -265,10 +276,10 @@ static unsigned tegra_slink_calculate_curr_xfer_param(
 	tspi->bytes_per_word = DIV_ROUND_UP(bits_per_word, 8);
 
 	if (bits_per_word == 8 || bits_per_word == 16) {
-		tspi->is_packed = true;
+		tspi->is_packed = 1;
 		tspi->words_per_32bit = 32/bits_per_word;
 	} else {
-		tspi->is_packed = false;
+		tspi->is_packed = 0;
 		tspi->words_per_32bit = 1;
 	}
 	tspi->packed_size = tegra_slink_get_packed_size(tspi, t);
@@ -706,6 +717,9 @@ static int tegra_slink_start_transfer_one(struct spi_device *spi,
 	command2 = tspi->command2_reg;
 	command2 &= ~(SLINK_RXEN | SLINK_TXEN);
 
+	tegra_slink_writel(tspi, command, SLINK_COMMAND);
+	tspi->command_reg = command;
+
 	tspi->cur_direction = 0;
 	if (t->rx_buf) {
 		command2 |= SLINK_RXEN;
@@ -715,17 +729,8 @@ static int tegra_slink_start_transfer_one(struct spi_device *spi,
 		command2 |= SLINK_TXEN;
 		tspi->cur_direction |= DATA_DIR_TX;
 	}
-
-	/*
-	 * Writing to the command2 register bevore the command register prevents
-	 * a spike in chip_select line 0. This selects the chip_select line
-	 * before changing the chip_select value.
-	 */
 	tegra_slink_writel(tspi, command2, SLINK_COMMAND2);
 	tspi->command2_reg = command2;
-
-	tegra_slink_writel(tspi, command, SLINK_COMMAND);
-	tspi->command_reg = command;
 
 	if (total_fifo_words > SLINK_FIFO_DEPTH)
 		ret = tegra_slink_start_dma_based_transfer(tspi, t);
@@ -756,7 +761,6 @@ static int tegra_slink_setup(struct spi_device *spi)
 
 	ret = pm_runtime_get_sync(tspi->dev);
 	if (ret < 0) {
-		pm_runtime_put_noidle(tspi->dev);
 		dev_err(tspi->dev, "pm runtime failed, e = %d\n", ret);
 		return ret;
 	}
@@ -820,7 +824,7 @@ static int tegra_slink_transfer_one(struct spi_master *master,
 					  SLINK_DMA_TIMEOUT);
 	if (WARN_ON(ret == 0)) {
 		dev_err(tspi->dev,
-			"spi transfer timeout, err %d\n", ret);
+			"spi trasfer timeout, err %d\n", ret);
 		return -EIO;
 	}
 
@@ -1011,8 +1015,14 @@ static int tegra_slink_probe(struct platform_device *pdev)
 	struct resource		*r;
 	int ret, spi_irq;
 	const struct tegra_slink_chip_data *cdata = NULL;
+	const struct of_device_id *match;
 
-	cdata = of_device_get_match_data(&pdev->dev);
+	match = of_match_device(tegra_slink_of_match, &pdev->dev);
+	if (!match) {
+		dev_err(&pdev->dev, "Error: No device match found\n");
+		return -ENODEV;
+	}
+	cdata = match->data;
 
 	master = spi_alloc_master(&pdev->dev, sizeof(*tspi));
 	if (!master) {
@@ -1053,24 +1063,6 @@ static int tegra_slink_probe(struct platform_device *pdev)
 		goto exit_free_master;
 	}
 
-	/* disabled clock may cause interrupt storm upon request */
-	tspi->clk = devm_clk_get(&pdev->dev, NULL);
-	if (IS_ERR(tspi->clk)) {
-		ret = PTR_ERR(tspi->clk);
-		dev_err(&pdev->dev, "Can not get clock %d\n", ret);
-		goto exit_free_master;
-	}
-	ret = clk_prepare(tspi->clk);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "Clock prepare failed %d\n", ret);
-		goto exit_free_master;
-	}
-	ret = clk_enable(tspi->clk);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "Clock enable failed %d\n", ret);
-		goto exit_clk_unprepare;
-	}
-
 	spi_irq = platform_get_irq(pdev, 0);
 	tspi->irq = spi_irq;
 	ret = request_threaded_irq(tspi->irq, tegra_slink_isr,
@@ -1079,10 +1071,17 @@ static int tegra_slink_probe(struct platform_device *pdev)
 	if (ret < 0) {
 		dev_err(&pdev->dev, "Failed to register ISR for IRQ %d\n",
 					tspi->irq);
-		goto exit_clk_disable;
+		goto exit_free_master;
 	}
 
-	tspi->rst = devm_reset_control_get_exclusive(&pdev->dev, "spi");
+	tspi->clk = devm_clk_get(&pdev->dev, NULL);
+	if (IS_ERR(tspi->clk)) {
+		dev_err(&pdev->dev, "can not get clock\n");
+		ret = PTR_ERR(tspi->clk);
+		goto exit_free_irq;
+	}
+
+	tspi->rst = devm_reset_control_get(&pdev->dev, "spi");
 	if (IS_ERR(tspi->rst)) {
 		dev_err(&pdev->dev, "can not get reset\n");
 		ret = PTR_ERR(tspi->rst);
@@ -1139,10 +1138,6 @@ exit_rx_dma_free:
 	tegra_slink_deinit_dma_param(tspi, true);
 exit_free_irq:
 	free_irq(spi_irq, tspi);
-exit_clk_disable:
-	clk_disable(tspi->clk);
-exit_clk_unprepare:
-	clk_unprepare(tspi->clk);
 exit_free_master:
 	spi_master_put(master);
 	return ret;
@@ -1154,9 +1149,6 @@ static int tegra_slink_remove(struct platform_device *pdev)
 	struct tegra_slink_data	*tspi = spi_master_get_devdata(master);
 
 	free_irq(tspi->irq, tspi);
-
-	clk_disable(tspi->clk);
-	clk_unprepare(tspi->clk);
 
 	if (tspi->tx_dma_chan)
 		tegra_slink_deinit_dma_param(tspi, false);
@@ -1187,7 +1179,6 @@ static int tegra_slink_resume(struct device *dev)
 
 	ret = pm_runtime_get_sync(dev);
 	if (ret < 0) {
-		pm_runtime_put_noidle(dev);
 		dev_err(dev, "pm runtime failed, e = %d\n", ret);
 		return ret;
 	}
@@ -1199,7 +1190,7 @@ static int tegra_slink_resume(struct device *dev)
 }
 #endif
 
-static int __maybe_unused tegra_slink_runtime_suspend(struct device *dev)
+static int tegra_slink_runtime_suspend(struct device *dev)
 {
 	struct spi_master *master = dev_get_drvdata(dev);
 	struct tegra_slink_data *tspi = spi_master_get_devdata(master);
@@ -1211,7 +1202,7 @@ static int __maybe_unused tegra_slink_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused tegra_slink_runtime_resume(struct device *dev)
+static int tegra_slink_runtime_resume(struct device *dev)
 {
 	struct spi_master *master = dev_get_drvdata(dev);
 	struct tegra_slink_data *tspi = spi_master_get_devdata(master);

@@ -1,5 +1,27 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright(c) 2009-2012  Realtek Corporation.*/
+/******************************************************************************
+ *
+ * Copyright(c) 2009-2012  Realtek Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * The full GNU General Public License is included in this distribution in the
+ * file called LICENSE.
+ *
+ * Contact Information:
+ * wlanfae <wlanfae@realtek.com>
+ * Realtek Corporation, No. 2, Innovation Road II, Hsinchu Science Park,
+ * Hsinchu 300, Taiwan.
+ *
+ * Larry Finger <Larry.Finger@lwfinger.net>
+ *
+ *****************************************************************************/
 
 #include "../wifi.h"
 #include "../efuse.h"
@@ -119,11 +141,9 @@ void rtl8723e_get_hw_reg(struct ieee80211_hw *hw, u8 variable, u8 *val)
 
 			break;
 		}
-	case HAL_DEF_WOWLAN:
-		break;
 	default:
 		RT_TRACE(rtlpriv, COMP_ERR, DBG_LOUD,
-			 "switch case %#x not processed\n", variable);
+			 "switch case not process\n");
 		break;
 	}
 }
@@ -346,8 +366,7 @@ void rtl8723e_set_hw_reg(struct ieee80211_hw *hw, u8 variable, u8 *val)
 					break;
 				default:
 					RT_TRACE(rtlpriv, COMP_ERR, DBG_LOUD,
-						 "switch case %#x not processed\n",
-						 e_aci);
+						 "switch case not process\n");
 					break;
 				}
 			}
@@ -527,7 +546,7 @@ void rtl8723e_set_hw_reg(struct ieee80211_hw *hw, u8 variable, u8 *val)
 		}
 	default:
 		RT_TRACE(rtlpriv, COMP_ERR, DBG_LOUD,
-			 "switch case %#x not processed\n", variable);
+			 "switch case not process\n");
 		break;
 	}
 }
@@ -548,8 +567,9 @@ static bool _rtl8723e_llt_write(struct ieee80211_hw *hw, u32 address, u32 data)
 			break;
 
 		if (count > POLLING_LLT_THRESHOLD) {
-			pr_err("Failed to polling write LLT done at address %d!\n",
-			       address);
+			RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
+				 "Failed to polling write LLT done at address %d!\n",
+				 address);
 			status = false;
 			break;
 		}
@@ -642,8 +662,9 @@ static bool _rtl8723e_llt_table_init(struct ieee80211_hw *hw)
 static void _rtl8723e_gen_refresh_led_state(struct ieee80211_hw *hw)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
+	struct rtl_pci_priv *pcipriv = rtl_pcipriv(hw);
 	struct rtl_ps_ctl *ppsc = rtl_psc(rtl_priv(hw));
-	struct rtl_led *pled0 = &rtlpriv->ledctl.sw_led0;
+	struct rtl_led *pled0 = &pcipriv->ledctl.sw_led0;
 
 	if (rtlpriv->rtlhal.up_first_time)
 		return;
@@ -676,7 +697,7 @@ static bool _rtl8712e_init_mac(struct ieee80211_hw *hw)
 
 	/* HW Power on sequence */
 	if (!rtl_hal_pwrseqcmdparsing(rtlpriv, PWR_CUT_ALL_MSK, PWR_FAB_ALL_MSK,
-		PWR_INTF_PCI_MSK, RTL8723_NIC_ENABLE_FLOW))
+		PWR_INTF_PCI_MSK, Rtl8723_NIC_ENABLE_FLOW))
 		return false;
 
 	bytetmp = rtl_read_byte(rtlpriv, REG_PCIE_CTRL_REG+2);
@@ -777,9 +798,11 @@ static void _rtl8723e_hw_configure(struct ieee80211_hw *hw)
 	struct rtl_pci *rtlpci = rtl_pcidev(rtl_pcipriv(hw));
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	u8 reg_bw_opmode;
-	u32 reg_prsr;
+	u32 reg_ratr, reg_prsr;
 
 	reg_bw_opmode = BW_OPMODE_20MHZ;
+	reg_ratr = RATE_ALL_CCK | RATE_ALL_OFDM_AG |
+	    RATE_ALL_OFDM_1SS | RATE_ALL_OFDM_2SS;
 	reg_prsr = RATE_ALL_CCK | RATE_ALL_OFDM_AG;
 
 	rtl_write_byte(rtlpriv, REG_INIRTS_RATE_SEL, 0x8);
@@ -935,7 +958,7 @@ int rtl8723e_hw_init(struct ieee80211_hw *hw)
 	rtlpriv->intf_ops->disable_aspm(hw);
 	rtstatus = _rtl8712e_init_mac(hw);
 	if (rtstatus != true) {
-		pr_err("Init MAC failed\n");
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG, "Init MAC failed\n");
 		err = 1;
 		goto exit;
 	}
@@ -966,7 +989,7 @@ int rtl8723e_hw_init(struct ieee80211_hw *hw)
 	if (IS_VENDOR_UMC_A_CUT(rtlhal->version)) {
 		rtl_set_rfreg(hw, RF90_PATH_A, RF_RX_G1, MASKDWORD, 0x30255);
 		rtl_set_rfreg(hw, RF90_PATH_A, RF_RX_G2, MASKDWORD, 0x50a00);
-	} else if (IS_81XXC_VENDOR_UMC_B_CUT(rtlhal->version)) {
+	} else if (IS_81xxC_VENDOR_UMC_B_CUT(rtlhal->version)) {
 		rtl_set_rfreg(hw, RF90_PATH_A, 0x0C, MASKDWORD, 0x894AE);
 		rtl_set_rfreg(hw, RF90_PATH_A, 0x0A, MASKDWORD, 0x1AF31);
 		rtl_set_rfreg(hw, RF90_PATH_A, RF_IPA, MASKDWORD, 0x8F425);
@@ -1081,7 +1104,8 @@ static enum version_8723e _rtl8723e_read_chip_version(struct ieee80211_hw *hw)
 			 "Chip Version ID: VERSION_NORMAL_UMC_CHIP_8723_1T1R_B_CUT.\n");
 		break;
 	default:
-		pr_err("Chip Version ID: Unknown. Bug?\n");
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
+			 "Chip Version ID: Unknown. Bug?\n");
 		break;
 	}
 
@@ -1130,7 +1154,8 @@ static int _rtl8723e_set_media_status(struct ieee80211_hw *hw,
 			"Set Network type to AP!\n");
 		break;
 	default:
-		pr_err("Network type %d not support!\n", type);
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
+			"Network type %d not support!\n", type);
 		return 1;
 		break;
 	}
@@ -1228,7 +1253,7 @@ void rtl8723e_set_qos(struct ieee80211_hw *hw, int aci)
 		rtl_write_dword(rtlpriv, REG_EDCA_VO_PARAM, 0x2f3222);
 		break;
 	default:
-		WARN_ONCE(true, "rtl8723ae: invalid aci: %d !\n", aci);
+		RT_ASSERT(false, "invalid aci: %d !\n", aci);
 		break;
 	}
 }
@@ -1262,7 +1287,7 @@ static void _rtl8723e_poweroff_adapter(struct ieee80211_hw *hw)
 	/* Combo (PCIe + USB) Card and PCIe-MF Card */
 	/* 1. Run LPS WL RFOFF flow */
 	rtl_hal_pwrseqcmdparsing(rtlpriv, PWR_CUT_ALL_MSK, PWR_FAB_ALL_MSK,
-				 PWR_INTF_PCI_MSK, RTL8723_NIC_LPS_ENTER_FLOW);
+				 PWR_INTF_PCI_MSK, Rtl8723_NIC_LPS_ENTER_FLOW);
 
 	/* 2. 0x1F[7:0] = 0 */
 	/* turn off RF */
@@ -1282,7 +1307,7 @@ static void _rtl8723e_poweroff_adapter(struct ieee80211_hw *hw)
 
 	/* HW card disable configuration. */
 	rtl_hal_pwrseqcmdparsing(rtlpriv, PWR_CUT_ALL_MSK, PWR_FAB_ALL_MSK,
-		PWR_INTF_PCI_MSK, RTL8723_NIC_DISABLE_FLOW);
+		PWR_INTF_PCI_MSK, Rtl8723_NIC_DISABLE_FLOW);
 
 	/* Reset MCU IO Wrapper */
 	u1b_tmp = rtl_read_byte(rtlpriv, REG_RSV_CTRL + 1);
@@ -1316,13 +1341,13 @@ void rtl8723e_card_disable(struct ieee80211_hw *hw)
 }
 
 void rtl8723e_interrupt_recognized(struct ieee80211_hw *hw,
-				   struct rtl_int *intvec)
+				   u32 *p_inta, u32 *p_intb)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct rtl_pci *rtlpci = rtl_pcidev(rtl_pcipriv(hw));
 
-	intvec->inta = rtl_read_dword(rtlpriv, 0x3a0) & rtlpci->irq_mask[0];
-	rtl_write_dword(rtlpriv, 0x3a0, intvec->inta);
+	*p_inta = rtl_read_dword(rtlpriv, 0x3a0) & rtlpci->irq_mask[0];
+	rtl_write_dword(rtlpriv, 0x3a0, *p_inta);
 }
 
 void rtl8723e_set_beacon_related_registers(struct ieee80211_hw *hw)
@@ -1605,22 +1630,62 @@ static void _rtl8723e_read_adapter_info(struct ieee80211_hw *hw,
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct rtl_efuse *rtlefuse = rtl_efuse(rtl_priv(hw));
 	struct rtl_hal *rtlhal = rtl_hal(rtl_priv(hw));
-	int params[] = {RTL8190_EEPROM_ID, EEPROM_VID, EEPROM_DID,
-			EEPROM_SVID, EEPROM_SMID, EEPROM_MAC_ADDR,
-			EEPROM_CHANNELPLAN, EEPROM_VERSION, EEPROM_CUSTOMER_ID,
-			COUNTRY_CODE_WORLD_WIDE_13};
-	u8 *hwinfo;
+	u16 i, usvalue;
+	u8 hwinfo[HWSET_MAX_SIZE];
+	u16 eeprom_id;
 
 	if (b_pseudo_test) {
 		/* need add */
 		return;
 	}
-	hwinfo = kzalloc(HWSET_MAX_SIZE, GFP_KERNEL);
-	if (!hwinfo)
+	if (rtlefuse->epromtype == EEPROM_BOOT_EFUSE) {
+		rtl_efuse_shadow_map_update(hw);
+
+		memcpy(hwinfo, &rtlefuse->efuse_map[EFUSE_INIT_MAP][0],
+		       HWSET_MAX_SIZE);
+	} else if (rtlefuse->epromtype == EEPROM_93C46) {
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
+			 "RTL819X Not boot from eeprom, check it !!");
+	}
+
+	RT_PRINT_DATA(rtlpriv, COMP_INIT, DBG_DMESG, "MAP\n",
+		      hwinfo, HWSET_MAX_SIZE);
+
+	eeprom_id = *((u16 *)&hwinfo[0]);
+	if (eeprom_id != RTL8190_EEPROM_ID) {
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_WARNING,
+			 "EEPROM ID(%#x) is invalid!!\n", eeprom_id);
+		rtlefuse->autoload_failflag = true;
+	} else {
+		RT_TRACE(rtlpriv, COMP_INIT, DBG_LOUD, "Autoload OK\n");
+		rtlefuse->autoload_failflag = false;
+	}
+
+	if (rtlefuse->autoload_failflag)
 		return;
 
-	if (rtl_get_hwinfo(hw, rtlpriv, HWSET_MAX_SIZE, hwinfo, params))
-		goto exit;
+	rtlefuse->eeprom_vid = *(u16 *)&hwinfo[EEPROM_VID];
+	rtlefuse->eeprom_did = *(u16 *)&hwinfo[EEPROM_DID];
+	rtlefuse->eeprom_svid = *(u16 *)&hwinfo[EEPROM_SVID];
+	rtlefuse->eeprom_smid = *(u16 *)&hwinfo[EEPROM_SMID];
+	RT_TRACE(rtlpriv, COMP_INIT, DBG_LOUD,
+		 "EEPROMId = 0x%4x\n", eeprom_id);
+	RT_TRACE(rtlpriv, COMP_INIT, DBG_LOUD,
+		 "EEPROM VID = 0x%4x\n", rtlefuse->eeprom_vid);
+	RT_TRACE(rtlpriv, COMP_INIT, DBG_LOUD,
+		 "EEPROM DID = 0x%4x\n", rtlefuse->eeprom_did);
+	RT_TRACE(rtlpriv, COMP_INIT, DBG_LOUD,
+		 "EEPROM SVID = 0x%4x\n", rtlefuse->eeprom_svid);
+	RT_TRACE(rtlpriv, COMP_INIT, DBG_LOUD,
+		 "EEPROM SMID = 0x%4x\n", rtlefuse->eeprom_smid);
+
+	for (i = 0; i < 6; i += 2) {
+		usvalue = *(u16 *)&hwinfo[EEPROM_MAC_ADDR + i];
+		*((u16 *)(&rtlefuse->dev_addr[i])) = usvalue;
+	}
+
+	RT_TRACE(rtlpriv, COMP_INIT, DBG_DMESG,
+		 "dev_addr: %pM\n", rtlefuse->dev_addr);
 
 	_rtl8723e_read_txpower_info_from_hwpg(hw, rtlefuse->autoload_failflag,
 					      hwinfo);
@@ -1628,150 +1693,156 @@ static void _rtl8723e_read_adapter_info(struct ieee80211_hw *hw,
 	rtl8723e_read_bt_coexist_info_from_hwpg(hw,
 			rtlefuse->autoload_failflag, hwinfo);
 
-	if (rtlhal->oem_id != RT_CID_DEFAULT)
-		goto exit;
+	rtlefuse->eeprom_channelplan = hwinfo[EEPROM_CHANNELPLAN];
+	rtlefuse->eeprom_version = *(u16 *)&hwinfo[EEPROM_VERSION];
+	rtlefuse->txpwr_fromeprom = true;
+	rtlefuse->eeprom_oemid = hwinfo[EEPROM_CUSTOMER_ID];
 
-	switch (rtlefuse->eeprom_oemid) {
-	case EEPROM_CID_DEFAULT:
-		switch (rtlefuse->eeprom_did) {
-		case 0x8176:
-			switch (rtlefuse->eeprom_svid) {
-			case 0x10EC:
-				switch (rtlefuse->eeprom_smid) {
-				case 0x6151 ... 0x6152:
-				case 0x6154 ... 0x6155:
-				case 0x6177 ... 0x6180:
-				case 0x7151 ... 0x7152:
-				case 0x7154 ... 0x7155:
-				case 0x7177 ... 0x7180:
-				case 0x8151 ... 0x8152:
-				case 0x8154 ... 0x8155:
-				case 0x8181 ... 0x8182:
-				case 0x8184 ... 0x8185:
-				case 0x9151 ... 0x9152:
-				case 0x9154 ... 0x9155:
-				case 0x9181 ... 0x9182:
-				case 0x9184 ... 0x9185:
+	RT_TRACE(rtlpriv, COMP_INIT, DBG_LOUD,
+		 "EEPROM Customer ID: 0x%2x\n", rtlefuse->eeprom_oemid);
+
+	/* set channel paln to world wide 13 */
+	rtlefuse->channel_plan = COUNTRY_CODE_WORLD_WIDE_13;
+
+	if (rtlhal->oem_id == RT_CID_DEFAULT) {
+		switch (rtlefuse->eeprom_oemid) {
+		case EEPROM_CID_DEFAULT:
+			if (rtlefuse->eeprom_did == 0x8176) {
+				if (CHK_SVID_SMID(0x10EC, 0x6151) ||
+				    CHK_SVID_SMID(0x10EC, 0x6152) ||
+				    CHK_SVID_SMID(0x10EC, 0x6154) ||
+				    CHK_SVID_SMID(0x10EC, 0x6155) ||
+				    CHK_SVID_SMID(0x10EC, 0x6177) ||
+				    CHK_SVID_SMID(0x10EC, 0x6178) ||
+				    CHK_SVID_SMID(0x10EC, 0x6179) ||
+				    CHK_SVID_SMID(0x10EC, 0x6180) ||
+				    CHK_SVID_SMID(0x10EC, 0x7151) ||
+				    CHK_SVID_SMID(0x10EC, 0x7152) ||
+				    CHK_SVID_SMID(0x10EC, 0x7154) ||
+				    CHK_SVID_SMID(0x10EC, 0x7155) ||
+				    CHK_SVID_SMID(0x10EC, 0x7177) ||
+				    CHK_SVID_SMID(0x10EC, 0x7178) ||
+				    CHK_SVID_SMID(0x10EC, 0x7179) ||
+				    CHK_SVID_SMID(0x10EC, 0x7180) ||
+				    CHK_SVID_SMID(0x10EC, 0x8151) ||
+				    CHK_SVID_SMID(0x10EC, 0x8152) ||
+				    CHK_SVID_SMID(0x10EC, 0x8154) ||
+				    CHK_SVID_SMID(0x10EC, 0x8155) ||
+				    CHK_SVID_SMID(0x10EC, 0x8181) ||
+				    CHK_SVID_SMID(0x10EC, 0x8182) ||
+				    CHK_SVID_SMID(0x10EC, 0x8184) ||
+				    CHK_SVID_SMID(0x10EC, 0x8185) ||
+				    CHK_SVID_SMID(0x10EC, 0x9151) ||
+				    CHK_SVID_SMID(0x10EC, 0x9152) ||
+				    CHK_SVID_SMID(0x10EC, 0x9154) ||
+				    CHK_SVID_SMID(0x10EC, 0x9155) ||
+				    CHK_SVID_SMID(0x10EC, 0x9181) ||
+				    CHK_SVID_SMID(0x10EC, 0x9182) ||
+				    CHK_SVID_SMID(0x10EC, 0x9184) ||
+				    CHK_SVID_SMID(0x10EC, 0x9185))
 					rtlhal->oem_id = RT_CID_TOSHIBA;
-					break;
-				case 0x6191 ... 0x6193:
-				case 0x7191 ... 0x7193:
-				case 0x8191 ... 0x8193:
-				case 0x9191 ... 0x9193:
+				else if (rtlefuse->eeprom_svid == 0x1025)
+					rtlhal->oem_id = RT_CID_819X_ACER;
+				else if (CHK_SVID_SMID(0x10EC, 0x6191) ||
+					 CHK_SVID_SMID(0x10EC, 0x6192) ||
+					 CHK_SVID_SMID(0x10EC, 0x6193) ||
+					 CHK_SVID_SMID(0x10EC, 0x7191) ||
+					 CHK_SVID_SMID(0x10EC, 0x7192) ||
+					 CHK_SVID_SMID(0x10EC, 0x7193) ||
+					 CHK_SVID_SMID(0x10EC, 0x8191) ||
+					 CHK_SVID_SMID(0x10EC, 0x8192) ||
+					 CHK_SVID_SMID(0x10EC, 0x8193) ||
+					 CHK_SVID_SMID(0x10EC, 0x9191) ||
+					 CHK_SVID_SMID(0x10EC, 0x9192) ||
+					 CHK_SVID_SMID(0x10EC, 0x9193))
 					rtlhal->oem_id = RT_CID_819X_SAMSUNG;
-					break;
-				case 0x8197:
-				case 0x9196:
-					rtlhal->oem_id = RT_CID_819X_CLEVO;
-					break;
-				case 0x8203:
-					rtlhal->oem_id = RT_CID_819X_PRONETS;
-					break;
-				case 0x8195:
-				case 0x9195:
-				case 0x7194:
-				case 0x8200 ... 0x8202:
-				case 0x9200:
+				else if (CHK_SVID_SMID(0x10EC, 0x8195) ||
+					 CHK_SVID_SMID(0x10EC, 0x9195) ||
+					 CHK_SVID_SMID(0x10EC, 0x7194) ||
+					 CHK_SVID_SMID(0x10EC, 0x8200) ||
+					 CHK_SVID_SMID(0x10EC, 0x8201) ||
+					 CHK_SVID_SMID(0x10EC, 0x8202) ||
+					 CHK_SVID_SMID(0x10EC, 0x9200))
 					rtlhal->oem_id = RT_CID_819X_LENOVO;
-					break;
-				}
-				break;
-			case 0x1025:
-				rtlhal->oem_id = RT_CID_819X_ACER;
-				break;
-			case 0x1028:
-				switch (rtlefuse->eeprom_smid) {
-				case 0x8194:
-				case 0x8198:
-				case 0x9197 ... 0x9198:
+				else if (CHK_SVID_SMID(0x10EC, 0x8197) ||
+					 CHK_SVID_SMID(0x10EC, 0x9196))
+					rtlhal->oem_id = RT_CID_819X_CLEVO;
+				else if (CHK_SVID_SMID(0x1028, 0x8194) ||
+					 CHK_SVID_SMID(0x1028, 0x8198) ||
+					 CHK_SVID_SMID(0x1028, 0x9197) ||
+					 CHK_SVID_SMID(0x1028, 0x9198))
 					rtlhal->oem_id = RT_CID_819X_DELL;
-					break;
-				}
-				break;
-			case 0x103C:
-				switch (rtlefuse->eeprom_smid) {
-				case 0x1629:
+				else if (CHK_SVID_SMID(0x103C, 0x1629))
 					rtlhal->oem_id = RT_CID_819X_HP;
-				}
-				break;
-			case 0x1A32:
-				switch (rtlefuse->eeprom_smid) {
-				case 0x2315:
+				else if (CHK_SVID_SMID(0x1A32, 0x2315))
 					rtlhal->oem_id = RT_CID_819X_QMI;
-					break;
-				}
-				break;
-			case 0x1043:
-				switch (rtlefuse->eeprom_smid) {
-				case 0x84B5:
+				else if (CHK_SVID_SMID(0x10EC, 0x8203))
+					rtlhal->oem_id = RT_CID_819X_PRONETS;
+				else if (CHK_SVID_SMID(0x1043, 0x84B5))
 					rtlhal->oem_id =
-						RT_CID_819X_EDIMAX_ASUS;
-				}
-				break;
-			}
-			break;
-		case 0x8178:
-			switch (rtlefuse->eeprom_svid) {
-			case 0x10ec:
-				switch (rtlefuse->eeprom_smid) {
-				case 0x6181 ... 0x6182:
-				case 0x6184 ... 0x6185:
-				case 0x7181 ... 0x7182:
-				case 0x7184 ... 0x7185:
-				case 0x8181 ... 0x8182:
-				case 0x8184 ... 0x8185:
-				case 0x9181 ... 0x9182:
-				case 0x9184 ... 0x9185:
+						 RT_CID_819X_EDIMAX_ASUS;
+				else
+					rtlhal->oem_id = RT_CID_DEFAULT;
+			} else if (rtlefuse->eeprom_did == 0x8178) {
+				if (CHK_SVID_SMID(0x10EC, 0x6181) ||
+				    CHK_SVID_SMID(0x10EC, 0x6182) ||
+				    CHK_SVID_SMID(0x10EC, 0x6184) ||
+				    CHK_SVID_SMID(0x10EC, 0x6185) ||
+				    CHK_SVID_SMID(0x10EC, 0x7181) ||
+				    CHK_SVID_SMID(0x10EC, 0x7182) ||
+				    CHK_SVID_SMID(0x10EC, 0x7184) ||
+				    CHK_SVID_SMID(0x10EC, 0x7185) ||
+				    CHK_SVID_SMID(0x10EC, 0x8181) ||
+				    CHK_SVID_SMID(0x10EC, 0x8182) ||
+				    CHK_SVID_SMID(0x10EC, 0x8184) ||
+				    CHK_SVID_SMID(0x10EC, 0x8185) ||
+				    CHK_SVID_SMID(0x10EC, 0x9181) ||
+				    CHK_SVID_SMID(0x10EC, 0x9182) ||
+				    CHK_SVID_SMID(0x10EC, 0x9184) ||
+				    CHK_SVID_SMID(0x10EC, 0x9185))
 					rtlhal->oem_id = RT_CID_TOSHIBA;
-					break;
-				case 0x8186:
+				else if (rtlefuse->eeprom_svid == 0x1025)
+					rtlhal->oem_id = RT_CID_819X_ACER;
+				else if (CHK_SVID_SMID(0x10EC, 0x8186))
+					rtlhal->oem_id = RT_CID_819X_PRONETS;
+				else if (CHK_SVID_SMID(0x1043, 0x8486))
 					rtlhal->oem_id =
-						RT_CID_819X_PRONETS;
-					break;
-				}
-				break;
-			case 0x1025:
-				rtlhal->oem_id = RT_CID_819X_ACER;
-				break;
-			case 0x1043:
-				switch (rtlefuse->eeprom_smid) {
-				case 0x8486:
-					rtlhal->oem_id =
-					     RT_CID_819X_EDIMAX_ASUS;
-				}
-				break;
+						     RT_CID_819X_EDIMAX_ASUS;
+				else
+					rtlhal->oem_id = RT_CID_DEFAULT;
+			} else {
+				rtlhal->oem_id = RT_CID_DEFAULT;
 			}
 			break;
+		case EEPROM_CID_TOSHIBA:
+			rtlhal->oem_id = RT_CID_TOSHIBA;
+			break;
+		case EEPROM_CID_CCX:
+			rtlhal->oem_id = RT_CID_CCX;
+			break;
+		case EEPROM_CID_QMI:
+			rtlhal->oem_id = RT_CID_819X_QMI;
+			break;
+		case EEPROM_CID_WHQL:
+				break;
+		default:
+			rtlhal->oem_id = RT_CID_DEFAULT;
+			break;
+
 		}
-		break;
-	case EEPROM_CID_TOSHIBA:
-		rtlhal->oem_id = RT_CID_TOSHIBA;
-		break;
-	case EEPROM_CID_CCX:
-		rtlhal->oem_id = RT_CID_CCX;
-		break;
-	case EEPROM_CID_QMI:
-		rtlhal->oem_id = RT_CID_819X_QMI;
-		break;
-	case EEPROM_CID_WHQL:
-		break;
-	default:
-		rtlhal->oem_id = RT_CID_DEFAULT;
-		break;
 	}
-exit:
-	kfree(hwinfo);
 }
 
 static void _rtl8723e_hal_customized_behavior(struct ieee80211_hw *hw)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
+	struct rtl_pci_priv *pcipriv = rtl_pcipriv(hw);
 	struct rtl_hal *rtlhal = rtl_hal(rtl_priv(hw));
 
-	rtlpriv->ledctl.led_opendrain = true;
+	pcipriv->ledctl.led_opendrain = true;
 	switch (rtlhal->oem_id) {
 	case RT_CID_819X_HP:
-		rtlpriv->ledctl.led_opendrain = true;
+		pcipriv->ledctl.led_opendrain = true;
 		break;
 	case RT_CID_819X_LENOVO:
 	case RT_CID_DEFAULT:
@@ -1824,7 +1895,7 @@ void rtl8723e_read_eeprom_info(struct ieee80211_hw *hw)
 	} else {
 		rtlefuse->autoload_failflag = true;
 		_rtl8723e_read_adapter_info(hw, false);
-		pr_err("Autoload ERR!!\n");
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG, "Autoload ERR!!\n");
 	}
 	_rtl8723e_hal_customized_behavior(hw);
 }
@@ -1920,7 +1991,7 @@ static void rtl8723e_update_hal_rate_table(struct ieee80211_hw *hw,
 
 static void rtl8723e_update_hal_rate_mask(struct ieee80211_hw *hw,
 					  struct ieee80211_sta *sta,
-					  u8 rssi_level, bool update_bw)
+					  u8 rssi_level)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct rtl_phy *rtlphy = &(rtlpriv->phy);
@@ -2051,13 +2122,12 @@ static void rtl8723e_update_hal_rate_mask(struct ieee80211_hw *hw,
 }
 
 void rtl8723e_update_hal_rate_tbl(struct ieee80211_hw *hw,
-				  struct ieee80211_sta *sta, u8 rssi_level,
-				  bool update_bw)
+				  struct ieee80211_sta *sta, u8 rssi_level)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 
 	if (rtlpriv->dm.useramask)
-		rtl8723e_update_hal_rate_mask(hw, sta, rssi_level, update_bw);
+		rtl8723e_update_hal_rate_mask(hw, sta, rssi_level);
 	else
 		rtl8723e_update_hal_rate_table(hw, sta);
 }
@@ -2081,7 +2151,7 @@ bool rtl8723e_gpio_radio_on_off_checking(struct ieee80211_hw *hw, u8 *valid)
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct rtl_ps_ctl *ppsc = rtl_psc(rtl_priv(hw));
 	struct rtl_phy *rtlphy = &(rtlpriv->phy);
-	enum rf_pwrstate e_rfpowerstate_toset;
+	enum rf_pwrstate e_rfpowerstate_toset, cur_rfstate;
 	u8 u1tmp;
 	bool b_actuallyset = false;
 
@@ -2099,6 +2169,8 @@ bool rtl8723e_gpio_radio_on_off_checking(struct ieee80211_hw *hw, u8 *valid)
 		ppsc->rfchange_inprogress = true;
 		spin_unlock(&rtlpriv->locks.rf_ps_lock);
 	}
+
+	cur_rfstate = ppsc->rfpwr_state;
 
 	rtl_write_byte(rtlpriv, REG_GPIO_IO_SEL_2,
 		       rtl_read_byte(rtlpriv, REG_GPIO_IO_SEL_2)&~(BIT(1)));
@@ -2199,7 +2271,7 @@ void rtl8723e_set_key(struct ieee80211_hw *hw, u32 key_index,
 			break;
 		default:
 			RT_TRACE(rtlpriv, COMP_ERR, DBG_LOUD,
-				 "switch case %#x not processed\n", enc_algo);
+				 "switch case not process\n");
 			enc_algo = CAM_TKIP;
 			break;
 		}
@@ -2216,7 +2288,9 @@ void rtl8723e_set_key(struct ieee80211_hw *hw, u32 key_index,
 					entry_id =
 					  rtl_cam_get_free_entry(hw, p_macaddr);
 					if (entry_id >=  TOTAL_CAM_ENTRY) {
-						pr_err("Can not find free hw security cam entry\n");
+						RT_TRACE(rtlpriv, COMP_SEC,
+							 DBG_EMERG,
+							 "Can not find free hw security cam entry\n");
 						return;
 					}
 				} else {
@@ -2240,7 +2314,7 @@ void rtl8723e_set_key(struct ieee80211_hw *hw, u32 key_index,
 				 "add one entry\n");
 			if (is_pairwise) {
 				RT_TRACE(rtlpriv, COMP_SEC, DBG_DMESG,
-					 "set Pairwise key\n");
+					 "set Pairwiase key\n");
 
 				rtl_cam_add_one_entry(hw, macaddr, key_index,
 						      entry_id, enc_algo,
@@ -2289,7 +2363,7 @@ static void rtl8723e_bt_var_init(struct ieee80211_hw *hw)
 		rtlpriv->btcoexist.eeprom_bt_radio_shared;
 
 	RT_TRACE(rtlpriv, COMP_BT_COEXIST, DBG_TRACE,
-		 "BT Coexistence = 0x%x\n",
+		 "BT Coexistance = 0x%x\n",
 		 rtlpriv->btcoexist.bt_coexistence);
 
 	if (rtlpriv->btcoexist.bt_coexistence) {

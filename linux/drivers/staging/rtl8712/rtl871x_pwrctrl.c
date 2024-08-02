@@ -1,9 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0
 /******************************************************************************
  * rtl871x_pwrctrl.c
  *
  * Copyright(c) 2007 - 2010 Realtek Corporation. All rights reserved.
  * Linux device driver for RTL8192SU
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
  *
  * Modifications for inclusion into the Linux staging tree are
  * Copyright(c) 2010 Larry Finger. All rights reserved.
@@ -32,7 +44,7 @@ void r8712_set_rpwm(struct _adapter *padapter, u8 val8)
 		if (pwrpriv->rpwm_retry == 0)
 			return;
 	}
-	if (padapter->driver_stopped || padapter->surprise_removed)
+	if (padapter->bDriverStopped || padapter->bSurpriseRemoved)
 		return;
 	rpwm = val8 | pwrpriv->tog;
 	switch (val8) {
@@ -40,8 +52,7 @@ void r8712_set_rpwm(struct _adapter *padapter, u8 val8)
 		pwrpriv->cpwm = val8;
 		break;
 	case PS_STATE_S2:/* only for USB normal powersave mode use,
-			  * temp mark some code.
-			  */
+			  * temp mark some code. */
 	case PS_STATE_S3:
 	case PS_STATE_S4:
 		pwrpriv->cpwm = val8;
@@ -92,14 +103,14 @@ void r8712_cpwm_int_hdl(struct _adapter *padapter,
 	if (pwrpriv->cpwm_tog == ((preportpwrstate->state) & 0x80))
 		return;
 	del_timer(&padapter->pwrctrlpriv.rpwm_check_timer);
-	mutex_lock(&pwrpriv->mutex_lock);
+	_enter_pwrlock(&pwrpriv->lock);
 	pwrpriv->cpwm = (preportpwrstate->state) & 0xf;
 	if (pwrpriv->cpwm >= PS_STATE_S2) {
 		if (pwrpriv->alives & CMD_ALIVE)
-			complete(&(pcmdpriv->cmd_queue_comp));
+			up(&(pcmdpriv->cmd_queue_sema));
 	}
 	pwrpriv->cpwm_tog = (preportpwrstate->state) & 0x80;
-	mutex_unlock(&pwrpriv->mutex_lock);
+	up(&pwrpriv->lock);
 }
 
 static inline void register_task_alive(struct pwrctrl_priv *pwrctrl, uint tag)
@@ -117,7 +128,7 @@ static void _rpwm_check_handler (struct _adapter *padapter)
 {
 	struct pwrctrl_priv *pwrpriv = &padapter->pwrctrlpriv;
 
-	if (padapter->driver_stopped || padapter->surprise_removed)
+	if (padapter->bDriverStopped || padapter->bSurpriseRemoved)
 		return;
 	if (pwrpriv->cpwm != pwrpriv->rpwm)
 		schedule_work(&pwrpriv->rpwm_workitem);
@@ -130,10 +141,10 @@ static void SetPSModeWorkItemCallback(struct work_struct *work)
 	struct _adapter *padapter = container_of(pwrpriv,
 				    struct _adapter, pwrctrlpriv);
 	if (!pwrpriv->bSleep) {
-		mutex_lock(&pwrpriv->mutex_lock);
+		_enter_pwrlock(&pwrpriv->lock);
 		if (pwrpriv->pwr_mode == PS_MODE_ACTIVE)
 			r8712_set_rpwm(padapter, PS_STATE_S4);
-		mutex_unlock(&pwrpriv->mutex_lock);
+		up(&pwrpriv->lock);
 	}
 }
 
@@ -144,18 +155,17 @@ static void rpwm_workitem_callback(struct work_struct *work)
 	struct _adapter *padapter = container_of(pwrpriv,
 				    struct _adapter, pwrctrlpriv);
 	if (pwrpriv->cpwm != pwrpriv->rpwm) {
-		mutex_lock(&pwrpriv->mutex_lock);
+		_enter_pwrlock(&pwrpriv->lock);
 		r8712_read8(padapter, SDIO_HCPWM);
 		pwrpriv->rpwm_retry = 1;
 		r8712_set_rpwm(padapter, pwrpriv->rpwm);
-		mutex_unlock(&pwrpriv->mutex_lock);
+		up(&pwrpriv->lock);
 	}
 }
 
-static void rpwm_check_handler (struct timer_list *t)
+static void rpwm_check_handler (unsigned long data)
 {
-	struct _adapter *adapter =
-		from_timer(adapter, t, pwrctrlpriv.rpwm_check_timer);
+	struct _adapter *adapter = (struct _adapter *)data;
 
 	_rpwm_check_handler(adapter);
 }
@@ -165,7 +175,7 @@ void r8712_init_pwrctrl_priv(struct _adapter *padapter)
 	struct pwrctrl_priv *pwrctrlpriv = &padapter->pwrctrlpriv;
 
 	memset((unsigned char *)pwrctrlpriv, 0, sizeof(struct pwrctrl_priv));
-	mutex_init(&pwrctrlpriv->mutex_lock);
+	sema_init(&pwrctrlpriv->lock, 1);
 	pwrctrlpriv->cpwm = PS_STATE_S4;
 	pwrctrlpriv->pwr_mode = PS_MODE_ACTIVE;
 	pwrctrlpriv->smart_ps = 0;
@@ -174,45 +184,52 @@ void r8712_init_pwrctrl_priv(struct _adapter *padapter)
 	r8712_write8(padapter, 0x1025FE58, 0);
 	INIT_WORK(&pwrctrlpriv->SetPSModeWorkItem, SetPSModeWorkItemCallback);
 	INIT_WORK(&pwrctrlpriv->rpwm_workitem, rpwm_workitem_callback);
-	timer_setup(&pwrctrlpriv->rpwm_check_timer, rpwm_check_handler, 0);
+	setup_timer(&pwrctrlpriv->rpwm_check_timer, rpwm_check_handler,
+		    (unsigned long)padapter);
 }
 
 /*
- * Caller: r8712_cmd_thread
- * Check if the fw_pwrstate is okay for issuing cmd.
- * If not (cpwm should be is less than P2 state), then the sub-routine
- * will raise the cpwm to be greater than or equal to P2.
- * Calling Context: Passive
- * Return Value:
- * 0:	    r8712_cmd_thread can issue cmds to firmware afterwards.
- * -EINVAL: r8712_cmd_thread can not do anything.
- */
-int r8712_register_cmd_alive(struct _adapter *padapter)
+Caller: r8712_cmd_thread
+
+Check if the fw_pwrstate is okay for issuing cmd.
+If not (cpwm should be is less than P2 state), then the sub-routine
+will raise the cpwm to be greater than or equal to P2.
+
+Calling Context: Passive
+
+Return Value:
+
+_SUCCESS: r8712_cmd_thread can issue cmds to firmware afterwards.
+_FAIL: r8712_cmd_thread can not do anything.
+*/
+sint r8712_register_cmd_alive(struct _adapter *padapter)
 {
-	int res = 0;
+	uint res = _SUCCESS;
 	struct pwrctrl_priv *pwrctrl = &padapter->pwrctrlpriv;
 
-	mutex_lock(&pwrctrl->mutex_lock);
+	_enter_pwrlock(&pwrctrl->lock);
 	register_task_alive(pwrctrl, CMD_ALIVE);
 	if (pwrctrl->cpwm < PS_STATE_S2) {
 		r8712_set_rpwm(padapter, PS_STATE_S3);
-		res = -EINVAL;
+		res = _FAIL;
 	}
-	mutex_unlock(&pwrctrl->mutex_lock);
+	up(&pwrctrl->lock);
 	return res;
 }
 
 /*
- * Caller: ISR
- * If ISR's txdone,
- * No more pkts for TX,
- * Then driver shall call this fun. to power down firmware again.
- */
+Caller: ISR
+
+If ISR's txdone,
+No more pkts for TX,
+Then driver shall call this fun. to power down firmware again.
+*/
+
 void r8712_unregister_cmd_alive(struct _adapter *padapter)
 {
 	struct pwrctrl_priv *pwrctrl = &padapter->pwrctrlpriv;
 
-	mutex_lock(&pwrctrl->mutex_lock);
+	_enter_pwrlock(&pwrctrl->lock);
 	unregister_task_alive(pwrctrl, CMD_ALIVE);
 	if ((pwrctrl->cpwm > PS_STATE_S2) &&
 	   (pwrctrl->pwr_mode > PS_MODE_ACTIVE)) {
@@ -222,13 +239,5 @@ void r8712_unregister_cmd_alive(struct _adapter *padapter)
 			r8712_set_rpwm(padapter, PS_STATE_S0);
 		}
 	}
-	mutex_unlock(&pwrctrl->mutex_lock);
-}
-
-void r8712_flush_rwctrl_works(struct _adapter *padapter)
-{
-	struct pwrctrl_priv *pwrctrl = &padapter->pwrctrlpriv;
-
-	flush_work(&pwrctrl->SetPSModeWorkItem);
-	flush_work(&pwrctrl->rpwm_workitem);
+	up(&pwrctrl->lock);
 }

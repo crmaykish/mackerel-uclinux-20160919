@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __NET_TC_NAT_H
 #define __NET_TC_NAT_H
 
@@ -6,7 +5,7 @@
 #include <net/act_api.h>
 
 struct tcf_nat {
-	struct tc_action common;
+	struct tcf_common common;
 
 	__be32 old_addr;
 	__be32 new_addr;
@@ -14,6 +13,9 @@ struct tcf_nat {
 	u32 flags;
 };
 
-#define to_tcf_nat(a) ((struct tcf_nat *)a)
+static inline struct tcf_nat *to_tcf_nat(struct tc_action *a)
+{
+	return container_of(a->priv, struct tcf_nat, common);
+}
 
 #endif /* __NET_TC_NAT_H */

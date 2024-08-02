@@ -772,10 +772,10 @@ void jffs2_clear_xattr_subsystem(struct jffs2_sb_info *c)
 }
 
 #define XREF_TMPHASH_SIZE	(128)
-int jffs2_build_xattr_subsystem(struct jffs2_sb_info *c)
+void jffs2_build_xattr_subsystem(struct jffs2_sb_info *c)
 {
 	struct jffs2_xattr_ref *ref, *_ref;
-	struct jffs2_xattr_ref **xref_tmphash;
+	struct jffs2_xattr_ref *xref_tmphash[XREF_TMPHASH_SIZE];
 	struct jffs2_xattr_datum *xd, *_xd;
 	struct jffs2_inode_cache *ic;
 	struct jffs2_raw_node_ref *raw;
@@ -784,12 +784,9 @@ int jffs2_build_xattr_subsystem(struct jffs2_sb_info *c)
 
 	BUG_ON(!(c->flags & JFFS2_SB_FLAG_BUILDING));
 
-	xref_tmphash = kcalloc(XREF_TMPHASH_SIZE,
-			       sizeof(struct jffs2_xattr_ref *), GFP_KERNEL);
-	if (!xref_tmphash)
-		return -ENOMEM;
-
 	/* Phase.1 : Merge same xref */
+	for (i=0; i < XREF_TMPHASH_SIZE; i++)
+		xref_tmphash[i] = NULL;
 	for (ref=c->xref_temp; ref; ref=_ref) {
 		struct jffs2_xattr_ref *tmp;
 
@@ -887,8 +884,6 @@ int jffs2_build_xattr_subsystem(struct jffs2_sb_info *c)
 		     "%u of xref (%u dead, %u orphan) found.\n",
 		     xdatum_count, xdatum_unchecked_count, xdatum_orphan_count,
 		     xref_count, xref_dead_count, xref_orphan_count);
-	kfree(xref_tmphash);
-	return 0;
 }
 
 struct jffs2_xattr_datum *jffs2_setup_xattr_datum(struct jffs2_sb_info *c,
@@ -972,8 +967,7 @@ ssize_t jffs2_listxattr(struct dentry *dentry, char *buffer, size_t size)
 	struct jffs2_xattr_ref *ref, **pref;
 	struct jffs2_xattr_datum *xd;
 	const struct xattr_handler *xhandle;
-	const char *prefix;
-	ssize_t prefix_len, len, rc;
+	ssize_t len, rc;
 	int retry = 0;
 
 	rc = check_xattr_ref_inode(c, ic);
@@ -1004,23 +998,18 @@ ssize_t jffs2_listxattr(struct dentry *dentry, char *buffer, size_t size)
 			}
 		}
 		xhandle = xprefix_to_handler(xd->xprefix);
-		if (!xhandle || (xhandle->list && !xhandle->list(dentry)))
+		if (!xhandle)
 			continue;
-		prefix = xhandle->prefix ?: xhandle->name;
-		prefix_len = strlen(prefix);
-		rc = prefix_len + xd->name_len + 1;
-
 		if (buffer) {
-			if (rc > size - len) {
-				rc = -ERANGE;
-				goto out;
-			}
-			memcpy(buffer, prefix, prefix_len);
-			buffer += prefix_len;
-			memcpy(buffer, xd->xname, xd->name_len);
-			buffer += xd->name_len;
-			*buffer++ = 0;
+			rc = xhandle->list(xhandle, dentry, buffer + len,
+					   size - len, xd->xname,
+					   xd->name_len);
+		} else {
+			rc = xhandle->list(xhandle, dentry, NULL, 0,
+					   xd->xname, xd->name_len);
 		}
+		if (rc < 0)
+			goto out;
 		len += rc;
 	}
 	rc = len;
@@ -1111,9 +1100,6 @@ int do_jffs2_setxattr(struct inode *inode, int xprefix, const char *xname,
 		return rc;
 
 	request = PAD(sizeof(struct jffs2_raw_xattr) + strlen(xname) + 1 + size);
-	if (request > c->sector_size - c->cleanmarker_size)
-		return -ERANGE;
-
 	rc = jffs2_reserve_space(c, request, &length,
 				 ALLOC_NORMAL, JFFS2_SUMMARY_XATTR_SIZE);
 	if (rc) {

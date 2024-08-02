@@ -1,6 +1,20 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2010-2011, The Linux Foundation. All rights reserved.
+ *
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
  */
 
 /*
@@ -25,7 +39,7 @@
  *   DJH 10/14/09 Version 1.3 added special loop for aligned case, was
  *                            overreading bloated codesize back up to 892
  *   DJH  4/20/10 Version 1.4 fixed Ldword_loop_epilog loop to prevent loads
- *                            occurring if only 1 left outstanding, fixes bug
+ *                            occuring if only 1 left outstanding, fixes bug
  *                            # 3888, corrected for all alignments. Peeled off
  *                            1 32byte chunk from kernel loop and extended 8byte
  *                            loop at end to solve all combinations and prevent

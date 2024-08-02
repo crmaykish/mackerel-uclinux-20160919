@@ -1,10 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0+
-//
-//  Copyright (C) 2000-2001 Deep Blue Solutions
-//  Copyright (C) 2002 Shane Nay (shane@minirl.com)
-//  Copyright (C) 2006-2007 Pavel Pisa (ppisa@pikron.com)
-//  Copyright (C) 2008 Juergen Beisert (kernel@pengutronix.de)
-//  Copyright (C) 2010 Freescale Semiconductor, Inc. All Rights Reserved.
+/*
+ *  Copyright (C) 2000-2001 Deep Blue Solutions
+ *  Copyright (C) 2002 Shane Nay (shane@minirl.com)
+ *  Copyright (C) 2006-2007 Pavel Pisa (ppisa@pikron.com)
+ *  Copyright (C) 2008 Juergen Beisert (kernel@pengutronix.de)
+ *  Copyright (C) 2010 Freescale Semiconductor, Inc. All Rights Reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+ * MA 02110-1301, USA.
+ */
 
 #include <linux/err.h>
 #include <linux/interrupt.h>
@@ -16,6 +30,8 @@
 #include <linux/of_irq.h>
 #include <linux/stmp_device.h>
 #include <linux/sched_clock.h>
+
+#include <asm/mach/time.h>
 
 /*
  * There are 2 versions of the timrot on Freescale MXS-based SoCs.
@@ -83,7 +99,7 @@ static void timrot_irq_acknowledge(void)
 		     HW_TIMROT_TIMCTRLn(0) + STMP_OFFSET_REG_CLR);
 }
 
-static u64 timrotv1_get_cycles(struct clocksource *cs)
+static cycle_t timrotv1_get_cycles(struct clocksource *cs)
 {
 	return ~((__raw_readl(mxs_timrot_base + HW_TIMROT_TIMCOUNTn(1))
 			& 0xffff0000) >> 16);
@@ -138,7 +154,10 @@ static void mxs_irq_clear(char *state)
 
 	/* Clear pending interrupt */
 	timrot_irq_acknowledge();
-	pr_debug("%s: changing mode to %s\n", __func__, state);
+
+#ifdef DEBUG
+	pr_info("%s: changing mode to %s\n", __func__, state)
+#endif /* DEBUG */
 }
 
 static int mxs_shutdown(struct clock_event_device *evt)
@@ -207,10 +226,10 @@ static int __init mxs_clocksource_init(struct clk *timer_clk)
 	return 0;
 }
 
-static int __init mxs_timer_init(struct device_node *np)
+static void __init mxs_timer_init(struct device_node *np)
 {
 	struct clk *timer_clk;
-	int irq, ret;
+	int irq;
 
 	mxs_timrot_base = of_iomap(np, 0);
 	WARN_ON(!mxs_timrot_base);
@@ -218,12 +237,10 @@ static int __init mxs_timer_init(struct device_node *np)
 	timer_clk = of_clk_get(np, 0);
 	if (IS_ERR(timer_clk)) {
 		pr_err("%s: failed to get clk\n", __func__);
-		return PTR_ERR(timer_clk);
+		return;
 	}
 
-	ret = clk_prepare_enable(timer_clk);
-	if (ret)
-		return ret;
+	clk_prepare_enable(timer_clk);
 
 	/*
 	 * Initialize timers to a known state
@@ -261,19 +278,11 @@ static int __init mxs_timer_init(struct device_node *np)
 			mxs_timrot_base + HW_TIMROT_FIXED_COUNTn(1));
 
 	/* init and register the timer to the framework */
-	ret = mxs_clocksource_init(timer_clk);
-	if (ret)
-		return ret;
-
-	ret = mxs_clockevent_init(timer_clk);
-	if (ret)
-		return ret;
+	mxs_clocksource_init(timer_clk);
+	mxs_clockevent_init(timer_clk);
 
 	/* Make irqs happen */
 	irq = irq_of_parse_and_map(np, 0);
-	if (irq <= 0)
-		return -EINVAL;
-
-	return setup_irq(irq, &mxs_timer_irq);
+	setup_irq(irq, &mxs_timer_irq);
 }
-TIMER_OF_DECLARE(mxs, "fsl,timrot", mxs_timer_init);
+CLOCKSOURCE_OF_DECLARE(mxs, "fsl,timrot", mxs_timer_init);

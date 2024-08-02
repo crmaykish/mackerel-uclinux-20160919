@@ -1,9 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0
-/*
+/******************************************************************************
  * Copyright(c) 2008 - 2010 Realtek Corporation. All rights reserved.
  *
- * Contact Information: wlanfae <wlanfae@realtek.com>
- */
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * The full GNU General Public License is included in this distribution in the
+ * file called LICENSE.
+ *
+ * Contact Information:
+ * wlanfae <wlanfae@realtek.com>
+******************************************************************************/
 #include "rtl_core.h"
 #include "rtl_dm.h"
 #include "r8192E_hw.h"
@@ -185,9 +193,10 @@ static void _rtl92e_dm_init_fsync(struct net_device *dev);
 static void _rtl92e_dm_deinit_fsync(struct net_device *dev);
 
 static	void _rtl92e_dm_check_txrateandretrycount(struct net_device *dev);
+static  void _rtl92e_dm_check_ac_dc_power(struct net_device *dev);
 static void _rtl92e_dm_check_fsync(struct net_device *dev);
 static void _rtl92e_dm_check_rf_ctrl_gpio(void *data);
-static void _rtl92e_dm_fsync_timer_callback(struct timer_list *t);
+static void _rtl92e_dm_fsync_timer_callback(unsigned long data);
 
 /*---------------------Define local function prototype-----------------------*/
 
@@ -237,6 +246,8 @@ void rtl92e_dm_watchdog(struct net_device *dev)
 	if (priv->being_init_adapter)
 		return;
 
+	_rtl92e_dm_check_ac_dc_power(dev);
+
 	_rtl92e_dm_check_txrateandretrycount(dev);
 	_rtl92e_dm_check_edca_turbo(dev);
 
@@ -253,6 +264,30 @@ void rtl92e_dm_watchdog(struct net_device *dev)
 	_rtl92e_dm_send_rssi_to_fw(dev);
 	_rtl92e_dm_cts_to_self(dev);
 }
+
+static void _rtl92e_dm_check_ac_dc_power(struct net_device *dev)
+{
+	struct r8192_priv *priv = rtllib_priv(dev);
+	static char *ac_dc_script = "/etc/acpi/wireless-rtl-ac-dc-power.sh";
+	char *argv[] = {ac_dc_script, DRV_NAME, NULL};
+	static char *envp[] = {"HOME=/",
+			"TERM=linux",
+			"PATH=/usr/bin:/bin",
+			 NULL};
+
+	if (priv->ResetProgress == RESET_TYPE_SILENT) {
+		RT_TRACE((COMP_INIT | COMP_POWER | COMP_RF),
+			 "GPIOChangeRFWorkItemCallBack(): Silent Reset!!!!!!!\n");
+		return;
+	}
+
+	if (priv->rtllib->state != RTLLIB_LINKED)
+		return;
+	call_usermodehelper(ac_dc_script, argv, envp, UMH_WAIT_PROC);
+
+	return;
+};
+
 
 void rtl92e_init_adaptive_rate(struct net_device *dev)
 {
@@ -307,7 +342,7 @@ static void _rtl92e_dm_check_rate_adaptive(struct net_device *dev)
 
 	if (!priv->up) {
 		RT_TRACE(COMP_RATE,
-			 "<---- %s: driver is going to unload\n", __func__);
+			 "<---- _rtl92e_dm_check_rate_adaptive(): driver is going to unload\n");
 		return;
 	}
 
@@ -591,7 +626,7 @@ static void _rtl92e_dm_tx_update_tssi_strong_signal(struct net_device *dev,
 static void _rtl92e_dm_tx_power_tracking_callback_tssi(struct net_device *dev)
 {
 	struct r8192_priv *priv = rtllib_priv(dev);
-	bool	viviflag = false;
+	bool	bHighpowerstate, viviflag = false;
 	struct dcmd_txcmd tx_cmd;
 	u8	powerlevelOFDM24G;
 	int	i = 0, j = 0, k = 0;
@@ -605,6 +640,7 @@ static void _rtl92e_dm_tx_power_tracking_callback_tssi(struct net_device *dev)
 	rtl92e_writeb(dev, Pw_Track_Flag, 0);
 	rtl92e_writeb(dev, FW_Busy_Flag, 0);
 	priv->rtllib->bdynamic_txpower_enable = false;
+	bHighpowerstate = priv->bDynamicTxHighPower;
 
 	powerlevelOFDM24G = (u8)(priv->Pwr_Track>>24);
 	RF_Type = priv->rf_type;
@@ -850,14 +886,11 @@ static void _rtl92e_dm_tx_power_tracking_cb_thermal(struct net_device *dev)
 		if (tmpCCK40Mindex >= CCK_Table_length)
 			tmpCCK40Mindex = CCK_Table_length-1;
 	} else {
-		tmpval = (u8)tmpRegA - priv->ThermalMeter[0];
-		if (tmpval >= 6) {
-			tmpOFDMindex = 0;
-			tmpCCK20Mindex = 0;
-		} else {
-			tmpOFDMindex = 6 - tmpval;
-			tmpCCK20Mindex = 6 - tmpval;
-		}
+		tmpval = ((u8)tmpRegA - priv->ThermalMeter[0]);
+		if (tmpval >= 6)
+			tmpOFDMindex = tmpCCK20Mindex = 0;
+		else
+			tmpOFDMindex = tmpCCK20Mindex = 6 - tmpval;
 		tmpCCK40Mindex = 0;
 	}
 	if (priv->CurrentChannelBW != HT_CHANNEL_WIDTH_20)
@@ -960,8 +993,9 @@ static void _rtl92e_dm_check_tx_power_tracking_tssi(struct net_device *dev)
 	tx_power_track_counter++;
 
 
-	if (tx_power_track_counter >= 180) {
-		schedule_delayed_work(&priv->txpower_tracking_wq, 0);
+	 if (tx_power_track_counter >= 180) {
+		queue_delayed_work_rsl(priv->priv_wq,
+				       &priv->txpower_tracking_wq, 0);
 		tx_power_track_counter = 0;
 	}
 
@@ -994,7 +1028,7 @@ static void _rtl92e_dm_check_tx_power_tracking_thermal(struct net_device *dev)
 		return;
 	}
 	netdev_info(dev, "===============>Schedule TxPowerTrackingWorkItem\n");
-	schedule_delayed_work(&priv->txpower_tracking_wq, 0);
+	queue_delayed_work_rsl(priv->priv_wq, &priv->txpower_tracking_wq, 0);
 	TM_Trigger = 0;
 
 }
@@ -1150,7 +1184,7 @@ void rtl92e_dm_restore_state(struct net_device *dev)
 
 	if (!priv->up) {
 		RT_TRACE(COMP_RATE,
-			 "<---- %s: driver is going to unload\n", __func__);
+			 "<---- rtl92e_dm_restore_state(): driver is going to unload\n");
 		return;
 	}
 
@@ -1297,7 +1331,7 @@ static void _rtl92e_dm_ctrl_initgain_byrssi(struct net_device *dev)
  *	When		Who		Remark
  *	03/04/2009	hpfan	Create Version 0.
  *
- ******************************************************************************/
+ *---------------------------------------------------------------------------*/
 
 static void _rtl92e_dm_ctrl_initgain_byrssi_driver(struct net_device *dev)
 {
@@ -1657,6 +1691,22 @@ static void _rtl92e_dm_check_edca_turbo(struct net_device *dev)
 	if (priv->rtllib->pHTInfo->IOTAction & HT_IOT_ACT_DISABLE_EDCA_TURBO)
 		goto dm_CheckEdcaTurbo_EXIT;
 
+	{
+		u8 *peername[11] = {
+			"unknown", "realtek_90", "realtek_92se", "broadcom",
+			"ralink", "atheros", "cisco", "marvell", "92u_softap",
+			"self_softap"
+		};
+		static int wb_tmp;
+
+		if (wb_tmp == 0) {
+			netdev_info(dev,
+				    "%s():iot peer is %s, bssid: %pM\n",
+				    __func__, peername[pHTInfo->IOTPeer],
+				    priv->rtllib->current_network.bssid);
+			wb_tmp = 1;
+		}
+	}
 	if (!priv->rtllib->bis_any_nonbepkts) {
 		curTxOkCnt = priv->stats.txbytesunicast - lastTxOkCnt;
 		curRxOkCnt = priv->stats.rxbytesunicast - lastRxOkCnt;
@@ -1773,6 +1823,10 @@ static void _rtl92e_dm_check_rf_ctrl_gpio(void *data)
 	u8 tmp1byte;
 	enum rt_rf_power_state eRfPowerStateToSet;
 	bool bActuallySet = false;
+	char *argv[3];
+	static char *RadioPowerPath = "/etc/acpi/events/RadioPower.sh";
+	static char *envp[] = {"HOME=/", "TERM=linux", "PATH=/usr/bin:/bin",
+			       NULL};
 
 	bActuallySet = false;
 
@@ -1804,6 +1858,14 @@ static void _rtl92e_dm_check_rf_ctrl_gpio(void *data)
 		mdelay(1000);
 		priv->bHwRfOffAction = 1;
 		rtl92e_set_rf_state(dev, eRfPowerStateToSet, RF_CHANGE_BY_HW);
+		if (priv->bHwRadioOff)
+			argv[1] = "RFOFF";
+		else
+			argv[1] = "RFON";
+
+		argv[0] = RadioPowerPath;
+		argv[2] = NULL;
+		call_usermodehelper(RadioPowerPath, argv, envp, UMH_WAIT_PROC);
 	}
 }
 
@@ -1813,7 +1875,7 @@ void rtl92e_dm_rf_pathcheck_wq(void *data)
 				  struct r8192_priv,
 				  rfpath_check_wq);
 	struct net_device *dev = priv->rtllib->dev;
-	u8 rfpath, i;
+	u8 rfpath = 0, i;
 
 	rfpath = rtl92e_readb(dev, 0xc04);
 
@@ -1861,7 +1923,7 @@ static void _rtl92e_dm_rx_path_sel_byrssi(struct net_device *dev)
 	u8 cck_default_Rx = 0x2;
 	u8 cck_optional_Rx = 0x3;
 	long tmp_cck_max_pwdb = 0, tmp_cck_min_pwdb = 0, tmp_cck_sec_pwdb = 0;
-	u8 cck_rx_ver2_max_index = 0;
+	u8 cck_rx_ver2_max_index = 0, cck_rx_ver2_min_index = 0;
 	u8 cck_rx_ver2_sec_index = 0;
 	u8 cur_rf_rssi;
 	long cur_cck_pwdb;
@@ -1944,6 +2006,7 @@ static void _rtl92e_dm_rx_path_sel_byrssi(struct net_device *dev)
 
 				if (rf_num == 1) {
 					cck_rx_ver2_max_index = i;
+					cck_rx_ver2_min_index = i;
 					cck_rx_ver2_sec_index = i;
 					tmp_cck_max_pwdb = cur_cck_pwdb;
 					tmp_cck_min_pwdb = cur_cck_pwdb;
@@ -1956,6 +2019,7 @@ static void _rtl92e_dm_rx_path_sel_byrssi(struct net_device *dev)
 						tmp_cck_sec_pwdb = cur_cck_pwdb;
 						tmp_cck_min_pwdb = cur_cck_pwdb;
 						cck_rx_ver2_sec_index = i;
+						cck_rx_ver2_min_index = i;
 					}
 				} else {
 					if (cur_cck_pwdb > tmp_cck_max_pwdb) {
@@ -1985,10 +2049,13 @@ static void _rtl92e_dm_rx_path_sel_byrssi(struct net_device *dev)
 						   (cur_cck_pwdb > tmp_cck_min_pwdb)) {
 						;
 					} else if (cur_cck_pwdb == tmp_cck_min_pwdb) {
-						if (tmp_cck_sec_pwdb == tmp_cck_min_pwdb)
+						if (tmp_cck_sec_pwdb == tmp_cck_min_pwdb) {
 							tmp_cck_min_pwdb = cur_cck_pwdb;
+							cck_rx_ver2_min_index = i;
+						}
 					} else if (cur_cck_pwdb < tmp_cck_min_pwdb) {
 						tmp_cck_min_pwdb = cur_cck_pwdb;
+						cck_rx_ver2_min_index = i;
 					}
 				}
 
@@ -2054,7 +2121,7 @@ static void _rtl92e_dm_check_rx_path_selection(struct net_device *dev)
 {
 	struct r8192_priv *priv = rtllib_priv(dev);
 
-	schedule_delayed_work(&priv->rfpath_check_wq, 0);
+	queue_delayed_work_rsl(priv->priv_wq, &priv->rfpath_check_wq, 0);
 }
 
 
@@ -2072,7 +2139,8 @@ static void _rtl92e_dm_init_fsync(struct net_device *dev)
 	priv->rtllib->fsync_state = Default_Fsync;
 	priv->framesyncMonitor = 1;
 
-	timer_setup(&priv->fsync_timer, _rtl92e_dm_fsync_timer_callback, 0);
+	setup_timer(&priv->fsync_timer, _rtl92e_dm_fsync_timer_callback,
+		    (unsigned long)dev);
 }
 
 
@@ -2083,10 +2151,10 @@ static void _rtl92e_dm_deinit_fsync(struct net_device *dev)
 	del_timer_sync(&priv->fsync_timer);
 }
 
-static void _rtl92e_dm_fsync_timer_callback(struct timer_list *t)
+static void _rtl92e_dm_fsync_timer_callback(unsigned long data)
 {
-	struct r8192_priv *priv = from_timer(priv, t, fsync_timer);
-	struct net_device *dev = priv->rtllib->dev;
+	struct net_device *dev = (struct net_device *)data;
+	struct r8192_priv *priv = rtllib_priv((struct net_device *)data);
 	u32 rate_index, rate_count = 0, rate_count_diff = 0;
 	bool		bSwitchFromCountDiff = false;
 	bool		bDoubleTimeInterval = false;

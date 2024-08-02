@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /* IEEE 802.11 SoftMAC layer
  * Copyright (c) 2005 Andrea Merello <andrea.merello@gmail.com>
  *
@@ -10,6 +9,8 @@
  *
  * PS wx handler mostly stolen from hostap, copyright who
  * own it's copyright ;-)
+ *
+ * released under the GPL
  */
 
 
@@ -33,7 +34,7 @@ int ieee80211_wx_set_freq(struct ieee80211_device *ieee, struct iw_request_info 
 	int ret;
 	struct iw_freq *fwrq = &wrqu->freq;
 
-	mutex_lock(&ieee->wx_mutex);
+	down(&ieee->wx_sem);
 
 	if (ieee->iw_mode == IW_MODE_INFRA) {
 		ret = -EOPNOTSUPP;
@@ -42,8 +43,8 @@ int ieee80211_wx_set_freq(struct ieee80211_device *ieee, struct iw_request_info 
 
 	/* if setting by freq convert to channel */
 	if (fwrq->e == 1) {
-		if ((fwrq->m >= (int)2.412e8 &&
-		     fwrq->m <= (int)2.487e8)) {
+		if ((fwrq->m >= (int) 2.412e8 &&
+		     fwrq->m <= (int) 2.487e8)) {
 			int f = fwrq->m / 100000;
 			int c = 0;
 
@@ -78,7 +79,7 @@ int ieee80211_wx_set_freq(struct ieee80211_device *ieee, struct iw_request_info 
 
 	ret = 0;
 out:
-	mutex_unlock(&ieee->wx_mutex);
+	up(&ieee->wx_sem);
 	return ret;
 }
 EXPORT_SYMBOL(ieee80211_wx_set_freq);
@@ -92,7 +93,7 @@ int ieee80211_wx_get_freq(struct ieee80211_device *ieee,
 	if (ieee->current_network.channel == 0)
 		return -1;
 	/* NM 0.7.0 will not accept channel any more. */
-	fwrq->m = ieee80211_wlan_frequencies[ieee->current_network.channel - 1] * 100000;
+	fwrq->m = ieee80211_wlan_frequencies[ieee->current_network.channel-1] * 100000;
 	fwrq->e = 1;
 	/* fwrq->m = ieee->current_network.channel; */
 	/* fwrq->e = 0; */
@@ -144,7 +145,7 @@ int ieee80211_wx_set_wap(struct ieee80211_device *ieee,
 
 	ieee->sync_scan_hurryup = 1;
 
-	mutex_lock(&ieee->wx_mutex);
+	down(&ieee->wx_sem);
 	/* use ifconfig hw ether */
 	if (ieee->iw_mode == IW_MODE_MASTER) {
 		ret = -1;
@@ -172,7 +173,7 @@ int ieee80211_wx_set_wap(struct ieee80211_device *ieee,
 	if (ifup)
 		ieee80211_start_protocol(ieee);
 out:
-	mutex_unlock(&ieee->wx_mutex);
+	up(&ieee->wx_sem);
 	return ret;
 }
 EXPORT_SYMBOL(ieee80211_wx_set_wap);
@@ -220,7 +221,7 @@ int ieee80211_wx_set_rate(struct ieee80211_device *ieee,
 
 	u32 target_rate = wrqu->bitrate.value;
 
-	ieee->rate = target_rate / 100000;
+	ieee->rate = target_rate/100000;
 	/* FIXME: we might want to limit rate also in management protocols. */
 	return 0;
 }
@@ -244,9 +245,9 @@ int ieee80211_wx_set_rts(struct ieee80211_device *ieee,
 			     struct iw_request_info *info,
 			     union iwreq_data *wrqu, char *extra)
 {
-	if (wrqu->rts.disabled || !wrqu->rts.fixed) {
+	if (wrqu->rts.disabled || !wrqu->rts.fixed)
 		ieee->rts = DEFAULT_RTS_THRESHOLD;
-	} else {
+	else {
 		if (wrqu->rts.value < MIN_RTS_THRESHOLD ||
 				wrqu->rts.value > MAX_RTS_THRESHOLD)
 			return -EINVAL;
@@ -273,7 +274,7 @@ int ieee80211_wx_set_mode(struct ieee80211_device *ieee, struct iw_request_info 
 
 	ieee->sync_scan_hurryup = 1;
 
-	mutex_lock(&ieee->wx_mutex);
+	down(&ieee->wx_sem);
 
 	if (wrqu->mode == ieee->iw_mode)
 		goto out;
@@ -292,7 +293,7 @@ int ieee80211_wx_set_mode(struct ieee80211_device *ieee, struct iw_request_info 
 	}
 
 out:
-	mutex_unlock(&ieee->wx_mutex);
+	up(&ieee->wx_sem);
 	return 0;
 }
 EXPORT_SYMBOL(ieee80211_wx_set_mode);
@@ -301,8 +302,8 @@ void ieee80211_wx_sync_scan_wq(struct work_struct *work)
 {
 	struct ieee80211_device *ieee = container_of(work, struct ieee80211_device, wx_sync_scan_wq);
 	short chan;
-	enum ht_extension_chan_offset chan_offset = 0;
-	enum ht_channel_width bandwidth = 0;
+	HT_EXTCHNL_OFFSET chan_offset = 0;
+	HT_CHANNEL_WIDTH bandwidth = 0;
 	int b40M = 0;
 
 	chan = ieee->current_network.channel;
@@ -319,7 +320,7 @@ void ieee80211_wx_sync_scan_wq(struct work_struct *work)
 	if (ieee->pHTInfo->bCurrentHTSupport && ieee->pHTInfo->bEnableHT && ieee->pHTInfo->bCurBW40MHz) {
 		b40M = 1;
 		chan_offset = ieee->pHTInfo->CurSTAExtChnlOffset;
-		bandwidth = (enum ht_channel_width)ieee->pHTInfo->bCurBW40MHz;
+		bandwidth = (HT_CHANNEL_WIDTH)ieee->pHTInfo->bCurBW40MHz;
 		printk("Scan in 40M, force to 20M first:%d, %d\n", chan_offset, bandwidth);
 		ieee->SetBWModeHandler(ieee->dev, HT_CHANNEL_WIDTH_20, HT_EXTCHNL_OFFSET_NO_EXT);
 		}
@@ -352,7 +353,7 @@ void ieee80211_wx_sync_scan_wq(struct work_struct *work)
 		ieee80211_start_send_beacons(ieee);
 
 	netif_carrier_on(ieee->dev);
-	mutex_unlock(&ieee->wx_mutex);
+	up(&ieee->wx_sem);
 
 }
 
@@ -361,7 +362,7 @@ int ieee80211_wx_set_scan(struct ieee80211_device *ieee, struct iw_request_info 
 {
 	int ret = 0;
 
-	mutex_lock(&ieee->wx_mutex);
+	down(&ieee->wx_sem);
 
 	if (ieee->iw_mode == IW_MODE_MONITOR || !(ieee->proto_started)) {
 		ret = -1;
@@ -375,7 +376,7 @@ int ieee80211_wx_set_scan(struct ieee80211_device *ieee, struct iw_request_info 
 	}
 
 out:
-	mutex_unlock(&ieee->wx_mutex);
+	up(&ieee->wx_sem);
 	return ret;
 }
 EXPORT_SYMBOL(ieee80211_wx_set_scan);
@@ -390,7 +391,7 @@ int ieee80211_wx_set_essid(struct ieee80211_device *ieee,
 	unsigned long flags;
 
 	ieee->sync_scan_hurryup = 1;
-	mutex_lock(&ieee->wx_mutex);
+	down(&ieee->wx_sem);
 
 	proto_started = ieee->proto_started;
 
@@ -415,9 +416,9 @@ int ieee80211_wx_set_essid(struct ieee80211_device *ieee,
 
 	if (wrqu->essid.flags && wrqu->essid.length) {
 		/* first flush current network.ssid */
-		len = ((wrqu->essid.length - 1) < IW_ESSID_MAX_SIZE) ? (wrqu->essid.length - 1) : IW_ESSID_MAX_SIZE;
-		strncpy(ieee->current_network.ssid, extra, len + 1);
-		ieee->current_network.ssid_len = len + 1;
+		len = ((wrqu->essid.length-1) < IW_ESSID_MAX_SIZE) ? (wrqu->essid.length-1) : IW_ESSID_MAX_SIZE;
+		strncpy(ieee->current_network.ssid, extra, len+1);
+		ieee->current_network.ssid_len = len+1;
 		ieee->ssid_set = 1;
 	} else {
 		ieee->ssid_set = 0;
@@ -429,7 +430,7 @@ int ieee80211_wx_set_essid(struct ieee80211_device *ieee,
 	if (proto_started)
 		ieee80211_start_protocol(ieee);
 out:
-	mutex_unlock(&ieee->wx_mutex);
+	up(&ieee->wx_sem);
 	return ret;
 }
 EXPORT_SYMBOL(ieee80211_wx_set_essid);
@@ -452,7 +453,7 @@ int ieee80211_wx_set_rawtx(struct ieee80211_device *ieee,
 	int enable = (parms[0] > 0);
 	short prev = ieee->raw_tx;
 
-	mutex_lock(&ieee->wx_mutex);
+	down(&ieee->wx_sem);
 
 	if (enable)
 		ieee->raw_tx = 1;
@@ -474,7 +475,7 @@ int ieee80211_wx_set_rawtx(struct ieee80211_device *ieee,
 			netif_carrier_off(ieee->dev);
 	}
 
-	mutex_unlock(&ieee->wx_mutex);
+	up(&ieee->wx_sem);
 
 	return 0;
 }
@@ -513,7 +514,7 @@ int ieee80211_wx_set_power(struct ieee80211_device *ieee,
 {
 	int ret = 0;
 
-	mutex_lock(&ieee->wx_mutex);
+	down(&ieee->wx_sem);
 
 	if (wrqu->power.disabled) {
 		ieee->ps = IEEE80211_PS_DISABLED;
@@ -552,7 +553,7 @@ int ieee80211_wx_set_power(struct ieee80211_device *ieee,
 
 	}
 exit:
-	mutex_unlock(&ieee->wx_mutex);
+	up(&ieee->wx_sem);
 	return ret;
 
 }
@@ -563,7 +564,7 @@ int ieee80211_wx_get_power(struct ieee80211_device *ieee,
 				 struct iw_request_info *info,
 				 union iwreq_data *wrqu, char *extra)
 {
-	mutex_lock(&ieee->wx_mutex);
+	down(&ieee->wx_sem);
 
 	if (ieee->ps == IEEE80211_PS_DISABLED) {
 		wrqu->power.disabled = 1;
@@ -591,7 +592,7 @@ int ieee80211_wx_get_power(struct ieee80211_device *ieee,
 		wrqu->power.flags |= IW_POWER_UNICAST_R;
 
 exit:
-	mutex_unlock(&ieee->wx_mutex);
+	up(&ieee->wx_sem);
 	return 0;
 
 }

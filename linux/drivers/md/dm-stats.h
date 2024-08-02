@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef DM_STATS_H
 #define DM_STATS_H
 
@@ -22,7 +21,7 @@ struct dm_stats_aux {
 	unsigned long long duration_ns;
 };
 
-int dm_stats_init(struct dm_stats *st);
+void dm_stats_init(struct dm_stats *st);
 void dm_stats_cleanup(struct dm_stats *st);
 
 struct mapped_device;

@@ -18,7 +18,6 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/cpu.h>
 #include <linux/cpufreq.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -27,9 +26,8 @@
 
 #include "arm_big_little.h"
 
-static int ve_spc_init_opp_table(const struct cpumask *cpumask)
+static int ve_spc_init_opp_table(struct device *cpu_dev)
 {
-	struct device *cpu_dev = get_cpu_device(cpumask_first(cpumask));
 	/*
 	 * platform specific SPC code must initialise the opp table
 	 * so just check if the OPP count is non-zero
@@ -42,7 +40,7 @@ static int ve_spc_get_transition_latency(struct device *cpu_dev)
 	return 1000000; /* 1 ms */
 }
 
-static const struct cpufreq_arm_bL_ops ve_spc_cpufreq_ops = {
+static struct cpufreq_arm_bL_ops ve_spc_cpufreq_ops = {
 	.name	= "vexpress-spc",
 	.get_transition_latency = ve_spc_get_transition_latency,
 	.init_opp_table = ve_spc_init_opp_table,

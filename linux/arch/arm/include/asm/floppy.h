@@ -1,8 +1,11 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  arch/arm/include/asm/floppy.h
  *
  *  Copyright (C) 1996-2000 Russell King
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  *  Note that we don't touch FLOPPY_DMA nor FLOPPY_IRQ here
  */
@@ -14,7 +17,7 @@
 
 #define fd_outb(val,port)			\
 	do {					\
-		if ((port) == (u32)FD_DOR)	\
+		if ((port) == FD_DOR)		\
 			fd_setdor((val));	\
 		else				\
 			outb((val),(port));	\

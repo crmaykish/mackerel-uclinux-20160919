@@ -1,17 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0
-#include <errno.h>
-#include <inttypes.h>
 #include "builtin.h"
 #include "perf.h"
 
-#include "util/evlist.h" // for struct evsel_str_handler
+#include "util/evlist.h"
 #include "util/evsel.h"
+#include "util/util.h"
+#include "util/cache.h"
 #include "util/symbol.h"
 #include "util/thread.h"
 #include "util/header.h"
 
-#include <subcmd/pager.h>
-#include <subcmd/parse-options.h>
+#include "util/parse-options.h"
 #include "util/trace-event.h"
 
 #include "util/debug.h"
@@ -28,9 +26,6 @@
 
 #include <linux/list.h>
 #include <linux/hash.h>
-#include <linux/kernel.h>
-#include <linux/zalloc.h>
-#include <linux/err.h>
 
 static struct perf_session *session;
 
@@ -348,16 +343,16 @@ alloc_failed:
 }
 
 struct trace_lock_handler {
-	int (*acquire_event)(struct evsel *evsel,
+	int (*acquire_event)(struct perf_evsel *evsel,
 			     struct perf_sample *sample);
 
-	int (*acquired_event)(struct evsel *evsel,
+	int (*acquired_event)(struct perf_evsel *evsel,
 			      struct perf_sample *sample);
 
-	int (*contended_event)(struct evsel *evsel,
+	int (*contended_event)(struct perf_evsel *evsel,
 			       struct perf_sample *sample);
 
-	int (*release_event)(struct evsel *evsel,
+	int (*release_event)(struct perf_evsel *evsel,
 			     struct perf_sample *sample);
 };
 
@@ -397,7 +392,7 @@ enum acquire_flags {
 	READ_LOCK = 2,
 };
 
-static int report_lock_acquire_event(struct evsel *evsel,
+static int report_lock_acquire_event(struct perf_evsel *evsel,
 				     struct perf_sample *sample)
 {
 	void *addr;
@@ -455,7 +450,7 @@ broken:
 		/* broken lock sequence, discard it */
 		ls->discard = 1;
 		bad_hist[BROKEN_ACQUIRE]++;
-		list_del_init(&seq->list);
+		list_del(&seq->list);
 		free(seq);
 		goto end;
 	default:
@@ -469,7 +464,7 @@ end:
 	return 0;
 }
 
-static int report_lock_acquired_event(struct evsel *evsel,
+static int report_lock_acquired_event(struct perf_evsel *evsel,
 				      struct perf_sample *sample)
 {
 	void *addr;
@@ -516,7 +511,7 @@ static int report_lock_acquired_event(struct evsel *evsel,
 		/* broken lock sequence, discard it */
 		ls->discard = 1;
 		bad_hist[BROKEN_ACQUIRED]++;
-		list_del_init(&seq->list);
+		list_del(&seq->list);
 		free(seq);
 		goto end;
 	default:
@@ -532,7 +527,7 @@ end:
 	return 0;
 }
 
-static int report_lock_contended_event(struct evsel *evsel,
+static int report_lock_contended_event(struct perf_evsel *evsel,
 				       struct perf_sample *sample)
 {
 	void *addr;
@@ -571,7 +566,7 @@ static int report_lock_contended_event(struct evsel *evsel,
 		/* broken lock sequence, discard it */
 		ls->discard = 1;
 		bad_hist[BROKEN_CONTENDED]++;
-		list_del_init(&seq->list);
+		list_del(&seq->list);
 		free(seq);
 		goto end;
 	default:
@@ -587,7 +582,7 @@ end:
 	return 0;
 }
 
-static int report_lock_release_event(struct evsel *evsel,
+static int report_lock_release_event(struct perf_evsel *evsel,
 				     struct perf_sample *sample)
 {
 	void *addr;
@@ -621,7 +616,7 @@ static int report_lock_release_event(struct evsel *evsel,
 	case SEQ_STATE_READ_ACQUIRED:
 		seq->read_count--;
 		BUG_ON(seq->read_count < 0);
-		if (seq->read_count) {
+		if (!seq->read_count) {
 			ls->nr_release++;
 			goto end;
 		}
@@ -640,7 +635,7 @@ static int report_lock_release_event(struct evsel *evsel,
 
 	ls->nr_release++;
 free_seq:
-	list_del_init(&seq->list);
+	list_del(&seq->list);
 	free(seq);
 end:
 	return 0;
@@ -657,7 +652,7 @@ static struct trace_lock_handler report_lock_ops  = {
 
 static struct trace_lock_handler *trace_handler;
 
-static int perf_evsel__process_lock_acquire(struct evsel *evsel,
+static int perf_evsel__process_lock_acquire(struct perf_evsel *evsel,
 					     struct perf_sample *sample)
 {
 	if (trace_handler->acquire_event)
@@ -665,7 +660,7 @@ static int perf_evsel__process_lock_acquire(struct evsel *evsel,
 	return 0;
 }
 
-static int perf_evsel__process_lock_acquired(struct evsel *evsel,
+static int perf_evsel__process_lock_acquired(struct perf_evsel *evsel,
 					      struct perf_sample *sample)
 {
 	if (trace_handler->acquired_event)
@@ -673,7 +668,7 @@ static int perf_evsel__process_lock_acquired(struct evsel *evsel,
 	return 0;
 }
 
-static int perf_evsel__process_lock_contended(struct evsel *evsel,
+static int perf_evsel__process_lock_contended(struct perf_evsel *evsel,
 					      struct perf_sample *sample)
 {
 	if (trace_handler->contended_event)
@@ -681,7 +676,7 @@ static int perf_evsel__process_lock_contended(struct evsel *evsel,
 	return 0;
 }
 
-static int perf_evsel__process_lock_release(struct evsel *evsel,
+static int perf_evsel__process_lock_release(struct perf_evsel *evsel,
 					    struct perf_sample *sample)
 {
 	if (trace_handler->release_event)
@@ -807,13 +802,13 @@ static int dump_info(void)
 	return rc;
 }
 
-typedef int (*tracepoint_handler)(struct evsel *evsel,
+typedef int (*tracepoint_handler)(struct perf_evsel *evsel,
 				  struct perf_sample *sample);
 
 static int process_sample_event(struct perf_tool *tool __maybe_unused,
 				union perf_event *event,
 				struct perf_sample *sample,
-				struct evsel *evsel,
+				struct perf_evsel *evsel,
 				struct machine *machine)
 {
 	int err = 0;
@@ -848,7 +843,7 @@ static void sort_result(void)
 	}
 }
 
-static const struct evsel_str_handler lock_tracepoints[] = {
+static const struct perf_evsel_str_handler lock_tracepoints[] = {
 	{ "lock:lock_acquire",	 perf_evsel__process_lock_acquire,   }, /* CONFIG_LOCKDEP */
 	{ "lock:lock_acquired",	 perf_evsel__process_lock_acquired,  }, /* CONFIG_LOCKDEP, CONFIG_LOCK_STAT */
 	{ "lock:lock_contended", perf_evsel__process_lock_contended, }, /* CONFIG_LOCKDEP, CONFIG_LOCK_STAT */
@@ -863,19 +858,18 @@ static int __cmd_report(bool display_info)
 	struct perf_tool eops = {
 		.sample		 = process_sample_event,
 		.comm		 = perf_event__process_comm,
-		.namespaces	 = perf_event__process_namespaces,
 		.ordered_events	 = true,
 	};
-	struct perf_data data = {
-		.path  = input_name,
-		.mode  = PERF_DATA_MODE_READ,
+	struct perf_data_file file = {
+		.path = input_name,
+		.mode = PERF_DATA_MODE_READ,
 		.force = force,
 	};
 
-	session = perf_session__new(&data, false, &eops);
-	if (IS_ERR(session)) {
+	session = perf_session__new(&file, false, &eops);
+	if (!session) {
 		pr_err("Initializing perf session failed\n");
-		return PTR_ERR(session);
+		return -1;
 	}
 
 	symbol__init(&session->header.env);
@@ -946,36 +940,34 @@ static int __cmd_record(int argc, const char **argv)
 
 	BUG_ON(i != rec_argc);
 
-	ret = cmd_record(i, rec_argv);
+	ret = cmd_record(i, rec_argv, NULL);
 	free(rec_argv);
 	return ret;
 }
 
-int cmd_lock(int argc, const char **argv)
+int cmd_lock(int argc, const char **argv, const char *prefix __maybe_unused)
 {
-	const struct option lock_options[] = {
-	OPT_STRING('i', "input", &input_name, "file", "input file name"),
-	OPT_INCR('v', "verbose", &verbose, "be more verbose (show symbol address, etc)"),
-	OPT_BOOLEAN('D', "dump-raw-trace", &dump_trace, "dump raw trace in ASCII"),
-	OPT_BOOLEAN('f', "force", &force, "don't complain, do it"),
-	OPT_END()
-	};
-
 	const struct option info_options[] = {
 	OPT_BOOLEAN('t', "threads", &info_threads,
 		    "dump thread list in perf.data"),
 	OPT_BOOLEAN('m', "map", &info_map,
 		    "map of lock instances (address:name table)"),
-	OPT_PARENT(lock_options)
+	OPT_BOOLEAN('f', "force", &force, "don't complain, do it"),
+	OPT_END()
 	};
-
+	const struct option lock_options[] = {
+	OPT_STRING('i', "input", &input_name, "file", "input file name"),
+	OPT_INCR('v', "verbose", &verbose, "be more verbose (show symbol address, etc)"),
+	OPT_BOOLEAN('D', "dump-raw-trace", &dump_trace, "dump raw trace in ASCII"),
+	OPT_END()
+	};
 	const struct option report_options[] = {
 	OPT_STRING('k', "key", &sort_key, "acquired",
 		    "key for sorting (acquired / contended / avg_wait / wait_total / wait_max / wait_min)"),
+	OPT_BOOLEAN('f', "force", &force, "don't complain, do it"),
 	/* TODO: type */
-	OPT_PARENT(lock_options)
+	OPT_END()
 	};
-
 	const char * const info_usage[] = {
 		"perf lock info [<options>]",
 		NULL
@@ -1014,7 +1006,7 @@ int cmd_lock(int argc, const char **argv)
 		rc = __cmd_report(false);
 	} else if (!strcmp(argv[0], "script")) {
 		/* Aliased to 'perf script' */
-		return cmd_script(argc, argv);
+		return cmd_script(argc, argv, prefix);
 	} else if (!strcmp(argv[0], "info")) {
 		if (argc) {
 			argc = parse_options(argc, argv,

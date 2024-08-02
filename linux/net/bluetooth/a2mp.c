@@ -1,8 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
    Copyright (c) 2010,2011 Code Aurora Forum.  All rights reserved.
    Copyright (c) 2011,2012 Intel Corp.
 
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License version 2 and
+   only version 2 as published by the Free Software Foundation.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
 */
 
 #include <net/bluetooth/bluetooth.h>
@@ -56,7 +63,7 @@ static void a2mp_send(struct amp_mgr *mgr, u8 code, u8 ident, u16 len, void *dat
 
 	memset(&msg, 0, sizeof(msg));
 
-	iov_iter_kvec(&msg.msg_iter, WRITE, &iv, 1, total_len);
+	iov_iter_kvec(&msg.msg_iter, WRITE | ITER_KVEC, &iv, 1, total_len);
 
 	l2cap_chan_send(chan, &msg, total_len);
 
@@ -167,7 +174,7 @@ static int a2mp_discover_req(struct amp_mgr *mgr, struct sk_buff *skb,
 			num_ctrl++;
 	}
 
-	len = struct_size(rsp, cl, num_ctrl);
+	len = num_ctrl * sizeof(struct a2mp_cl) + sizeof(*rsp);
 	rsp = kmalloc(len, GFP_ATOMIC);
 	if (!rsp) {
 		read_unlock(&hci_dev_list_lock);
@@ -226,16 +233,13 @@ static int a2mp_discover_rsp(struct amp_mgr *mgr, struct sk_buff *skb,
 			struct a2mp_info_req req;
 
 			found = true;
-
-			memset(&req, 0, sizeof(req));
-
 			req.id = cl->id;
 			a2mp_send(mgr, A2MP_GETINFO_REQ, __next_ident(mgr),
 				  sizeof(req), &req);
 		}
 
 		len -= sizeof(*cl);
-		cl = skb_pull(skb, sizeof(*cl));
+		cl = (void *) skb_pull(skb, sizeof(*cl));
 	}
 
 	/* Fall back to L2CAP init sequence */
@@ -275,7 +279,7 @@ static int a2mp_change_notify(struct amp_mgr *mgr, struct sk_buff *skb,
 	while (skb->len >= sizeof(*cl)) {
 		BT_DBG("Controller id %d type %d status %d", cl->id, cl->type,
 		       cl->status);
-		cl = skb_pull(skb, sizeof(*cl));
+		cl = (struct a2mp_cl *) skb_pull(skb, sizeof(*cl));
 	}
 
 	/* TODO send A2MP_CHANGE_RSP */
@@ -307,8 +311,6 @@ static int a2mp_getinfo_req(struct amp_mgr *mgr, struct sk_buff *skb,
 	hdev = hci_dev_get(req->id);
 	if (!hdev || hdev->dev_type != HCI_AMP) {
 		struct a2mp_info_rsp rsp;
-
-		memset(&rsp, 0, sizeof(rsp));
 
 		rsp.id = req->id;
 		rsp.status = A2MP_STATUS_INVALID_CTRL_ID;
@@ -353,8 +355,6 @@ static int a2mp_getinfo_rsp(struct amp_mgr *mgr, struct sk_buff *skb,
 	if (!ctrl)
 		return -ENOMEM;
 
-	memset(&req, 0, sizeof(req));
-
 	req.id = rsp->id;
 	a2mp_send(mgr, A2MP_GETAMPASSOC_REQ, __next_ident(mgr), sizeof(req),
 		  &req);
@@ -381,8 +381,6 @@ static int a2mp_getampassoc_req(struct amp_mgr *mgr, struct sk_buff *skb,
 	hdev = hci_dev_get(req->id);
 	if (!hdev || hdev->amp_type == AMP_TYPE_BREDR || tmp) {
 		struct a2mp_amp_assoc_rsp rsp;
-
-		memset(&rsp, 0, sizeof(rsp));
 		rsp.id = req->id;
 
 		if (tmp) {
@@ -473,6 +471,7 @@ static int a2mp_createphyslink_req(struct amp_mgr *mgr, struct sk_buff *skb,
 				   struct a2mp_cmd *hdr)
 {
 	struct a2mp_physlink_req *req = (void *) skb->data;
+
 	struct a2mp_physlink_rsp rsp;
 	struct hci_dev *hdev;
 	struct hci_conn *hcon;
@@ -482,8 +481,6 @@ static int a2mp_createphyslink_req(struct amp_mgr *mgr, struct sk_buff *skb,
 		return -EINVAL;
 
 	BT_DBG("local_id %d, remote_id %d", req->local_id, req->remote_id);
-
-	memset(&rsp, 0, sizeof(rsp));
 
 	rsp.local_id = req->remote_id;
 	rsp.remote_id = req->local_id;
@@ -512,7 +509,6 @@ static int a2mp_createphyslink_req(struct amp_mgr *mgr, struct sk_buff *skb,
 		assoc = kmemdup(req->amp_assoc, assoc_len, GFP_KERNEL);
 		if (!assoc) {
 			amp_ctrl_put(ctrl);
-			hci_dev_put(hdev);
 			return -ENOMEM;
 		}
 
@@ -564,8 +560,6 @@ static int a2mp_discphyslink_req(struct amp_mgr *mgr, struct sk_buff *skb,
 
 	BT_DBG("local_id %d remote_id %d", req->local_id, req->remote_id);
 
-	memset(&rsp, 0, sizeof(rsp));
-
 	rsp.local_id = req->remote_id;
 	rsp.remote_id = req->local_id;
 	rsp.status = A2MP_STATUS_SUCCESS;
@@ -579,7 +573,7 @@ static int a2mp_discphyslink_req(struct amp_mgr *mgr, struct sk_buff *skb,
 	hcon = hci_conn_hash_lookup_ba(hdev, AMP_LINK,
 				       &mgr->l2cap_conn->hcon->dst);
 	if (!hcon) {
-		bt_dev_err(hdev, "no phys link exist");
+		BT_ERR("No phys link exist");
 		rsp.status = A2MP_STATUS_NO_PHYSICAL_LINK_EXISTS;
 		goto clean;
 	}
@@ -687,8 +681,6 @@ static int a2mp_chan_recv_cb(struct l2cap_chan *chan, struct sk_buff *skb)
 
 	if (err) {
 		struct a2mp_cmd_rej rej;
-
-		memset(&rej, 0, sizeof(rej));
 
 		rej.reason = cpu_to_le16(0);
 		hdr = (void *) skb->data;
@@ -818,7 +810,7 @@ static struct l2cap_chan *a2mp_chan_open(struct l2cap_conn *conn, bool locked)
 /* AMP Manager functions */
 struct amp_mgr *amp_mgr_get(struct amp_mgr *mgr)
 {
-	BT_DBG("mgr %p orig refcnt %d", mgr, kref_read(&mgr->kref));
+	BT_DBG("mgr %p orig refcnt %d", mgr, atomic_read(&mgr->kref.refcount));
 
 	kref_get(&mgr->kref);
 
@@ -841,7 +833,7 @@ static void amp_mgr_destroy(struct kref *kref)
 
 int amp_mgr_put(struct amp_mgr *mgr)
 {
-	BT_DBG("mgr %p orig refcnt %d", mgr, kref_read(&mgr->kref));
+	BT_DBG("mgr %p orig refcnt %d", mgr, atomic_read(&mgr->kref.refcount));
 
 	return kref_put(&mgr->kref, &amp_mgr_destroy);
 }
@@ -912,8 +904,6 @@ void a2mp_send_getinfo_rsp(struct hci_dev *hdev)
 		return;
 
 	BT_DBG("%s mgr %p", hdev->name, mgr);
-
-	memset(&rsp, 0, sizeof(rsp));
 
 	rsp.id = hdev->id;
 	rsp.status = A2MP_STATUS_INVALID_CTRL_ID;
@@ -1012,8 +1002,6 @@ void a2mp_send_create_phy_link_rsp(struct hci_dev *hdev, u8 status)
 	if (!mgr)
 		return;
 
-	memset(&rsp, 0, sizeof(rsp));
-
 	hs_hcon = hci_conn_hash_lookup_state(hdev, AMP_LINK, BT_CONNECT);
 	if (!hs_hcon) {
 		rsp.status = A2MP_STATUS_UNABLE_START_LINK_CREATION;
@@ -1045,8 +1033,6 @@ void a2mp_discover_amp(struct l2cap_chan *chan)
 	}
 
 	mgr->bredr_chan = chan;
-
-	memset(&req, 0, sizeof(req));
 
 	req.mtu = cpu_to_le16(L2CAP_A2MP_DEFAULT_MTU);
 	req.ext_feat = 0;

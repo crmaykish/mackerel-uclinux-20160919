@@ -1,13 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * L2TPv3 IP encapsulation support
  *
  * Copyright (c) 2008,2009,2010 Katalix Systems Ltd
+ *
+ *	This program is free software; you can redistribute it and/or
+ *	modify it under the terms of the GNU General Public License
+ *	as published by the Free Software Foundation; either version
+ *	2 of the License, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <asm/ioctls.h>
 #include <linux/icmp.h>
 #include <linux/module.h>
 #include <linux/skbuff.h>
@@ -20,6 +23,7 @@
 #include <net/icmp.h>
 #include <net/udp.h>
 #include <net/inet_common.h>
+#include <net/inet_hashtables.h>
 #include <net/tcp_states.h>
 #include <net/protocol.h>
 #include <net/xfrm.h>
@@ -43,36 +47,35 @@ static inline struct l2tp_ip_sock *l2tp_ip_sk(const struct sock *sk)
 	return (struct l2tp_ip_sock *)sk;
 }
 
-static struct sock *__l2tp_ip_bind_lookup(const struct net *net, __be32 laddr,
-					  __be32 raddr, int dif, u32 tunnel_id)
+static struct sock *__l2tp_ip_bind_lookup(struct net *net, __be32 laddr, int dif, u32 tunnel_id)
 {
 	struct sock *sk;
 
 	sk_for_each_bound(sk, &l2tp_ip_bind_table) {
-		const struct l2tp_ip_sock *l2tp = l2tp_ip_sk(sk);
-		const struct inet_sock *inet = inet_sk(sk);
+		struct inet_sock *inet = inet_sk(sk);
+		struct l2tp_ip_sock *l2tp = l2tp_ip_sk(sk);
 
-		if (!net_eq(sock_net(sk), net))
+		if (l2tp == NULL)
 			continue;
 
-		if (sk->sk_bound_dev_if && dif && sk->sk_bound_dev_if != dif)
-			continue;
-
-		if (inet->inet_rcv_saddr && laddr &&
-		    inet->inet_rcv_saddr != laddr)
-			continue;
-
-		if (inet->inet_daddr && raddr && inet->inet_daddr != raddr)
-			continue;
-
-		if (l2tp->conn_id != tunnel_id)
-			continue;
-
-		goto found;
+		if ((l2tp->conn_id == tunnel_id) &&
+		    net_eq(sock_net(sk), net) &&
+		    !(inet->inet_rcv_saddr && inet->inet_rcv_saddr != laddr) &&
+		    !(sk->sk_bound_dev_if && sk->sk_bound_dev_if != dif))
+			goto found;
 	}
 
 	sk = NULL;
 found:
+	return sk;
+}
+
+static inline struct sock *l2tp_ip_bind_lookup(struct net *net, __be32 laddr, int dif, u32 tunnel_id)
+{
+	struct sock *sk = __l2tp_ip_bind_lookup(net, laddr, dif, tunnel_id);
+	if (sk)
+		sock_hold(sk);
+
 	return sk;
 }
 
@@ -118,14 +121,14 @@ static int l2tp_ip_recv(struct sk_buff *skb)
 	unsigned char *ptr, *optr;
 	struct l2tp_session *session;
 	struct l2tp_tunnel *tunnel = NULL;
-	struct iphdr *iph;
 	int length;
+
+	/* Point to L2TP header */
+	optr = ptr = skb->data;
 
 	if (!pskb_may_pull(skb, 4))
 		goto discard;
 
-	/* Point to L2TP header */
-	optr = ptr = skb->data;
 	session_id = ntohl(*((__be32 *) ptr));
 	ptr += 4;
 
@@ -139,32 +142,25 @@ static int l2tp_ip_recv(struct sk_buff *skb)
 	}
 
 	/* Ok, this is a data packet. Lookup the session. */
-	session = l2tp_session_get(net, session_id);
-	if (!session)
+	session = l2tp_session_find(net, NULL, session_id);
+	if (session == NULL)
 		goto discard;
 
 	tunnel = session->tunnel;
-	if (!tunnel)
-		goto discard_sess;
+	if (tunnel == NULL)
+		goto discard;
 
 	/* Trace packet contents, if enabled */
 	if (tunnel->debug & L2TP_MSG_DATA) {
 		length = min(32u, skb->len);
 		if (!pskb_may_pull(skb, length))
-			goto discard_sess;
+			goto discard;
 
-		/* Point to L2TP header */
-		optr = ptr = skb->data;
-		ptr += 4;
 		pr_debug("%s: ip recv\n", tunnel->name);
 		print_hex_dump_bytes("", DUMP_PREFIX_OFFSET, ptr, length);
 	}
 
-	if (l2tp_v3_ensure_opt_in_linear(session, skb, &ptr, &optr))
-		goto discard_sess;
-
-	l2tp_recv_common(session, skb, ptr, optr, 0, skb->len);
-	l2tp_session_dec_refcount(session);
+	l2tp_recv_common(session, skb, ptr, optr, 0, skb->len, tunnel->recv_payload_hook);
 
 	return 0;
 
@@ -177,28 +173,28 @@ pass_up:
 		goto discard;
 
 	tunnel_id = ntohl(*(__be32 *) &skb->data[4]);
-	iph = (struct iphdr *)skb_network_header(skb);
+	tunnel = l2tp_tunnel_find(net, tunnel_id);
+	if (tunnel != NULL)
+		sk = tunnel->sock;
+	else {
+		struct iphdr *iph = (struct iphdr *) skb_network_header(skb);
 
-	read_lock_bh(&l2tp_ip_lock);
-	sk = __l2tp_ip_bind_lookup(net, iph->daddr, iph->saddr, inet_iif(skb),
-				   tunnel_id);
-	if (!sk) {
+		read_lock_bh(&l2tp_ip_lock);
+		sk = __l2tp_ip_bind_lookup(net, iph->daddr, 0, tunnel_id);
 		read_unlock_bh(&l2tp_ip_lock);
-		goto discard;
 	}
+
+	if (sk == NULL)
+		goto discard;
+
 	sock_hold(sk);
-	read_unlock_bh(&l2tp_ip_lock);
 
 	if (!xfrm4_policy_check(sk, XFRM_POLICY_IN, skb))
 		goto discard_put;
 
-	nf_reset_ct(skb);
+	nf_reset(skb);
 
 	return sk_receive_skb(sk, skb, 1);
-
-discard_sess:
-	l2tp_session_dec_refcount(session);
-	goto discard;
 
 discard_put:
 	sock_put(sk);
@@ -208,31 +204,15 @@ discard:
 	return 0;
 }
 
-static int l2tp_ip_hash(struct sock *sk)
-{
-	if (sk_unhashed(sk)) {
-		write_lock_bh(&l2tp_ip_lock);
-		sk_add_node(sk, &l2tp_ip_table);
-		write_unlock_bh(&l2tp_ip_lock);
-	}
-	return 0;
-}
-
-static void l2tp_ip_unhash(struct sock *sk)
-{
-	if (sk_unhashed(sk))
-		return;
-	write_lock_bh(&l2tp_ip_lock);
-	sk_del_node_init(sk);
-	write_unlock_bh(&l2tp_ip_lock);
-}
-
 static int l2tp_ip_open(struct sock *sk)
 {
 	/* Prevent autobind. We don't have ports. */
 	inet_sk(sk)->inet_num = IPPROTO_L2TP;
 
-	l2tp_ip_hash(sk);
+	write_lock_bh(&l2tp_ip_lock);
+	sk_add_node(sk, &l2tp_ip_table);
+	write_unlock_bh(&l2tp_ip_lock);
+
 	return 0;
 }
 
@@ -248,13 +228,17 @@ static void l2tp_ip_close(struct sock *sk, long timeout)
 static void l2tp_ip_destroy_sock(struct sock *sk)
 {
 	struct sk_buff *skb;
-	struct l2tp_tunnel *tunnel = sk->sk_user_data;
+	struct l2tp_tunnel *tunnel = l2tp_sock_to_tunnel(sk);
 
 	while ((skb = __skb_dequeue_tail(&sk->sk_write_queue)) != NULL)
 		kfree_skb(skb);
 
-	if (tunnel)
-		l2tp_tunnel_delete(tunnel);
+	if (tunnel) {
+		l2tp_tunnel_closeall(tunnel);
+		sock_put(sk);
+	}
+
+	sk_refcnt_debug_dec(sk);
 }
 
 static int l2tp_ip_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
@@ -265,18 +249,23 @@ static int l2tp_ip_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	int ret;
 	int chk_addr_ret;
 
+	if (!sock_flag(sk, SOCK_ZAPPED))
+		return -EINVAL;
 	if (addr_len < sizeof(struct sockaddr_l2tpip))
 		return -EINVAL;
 	if (addr->l2tp_family != AF_INET)
 		return -EINVAL;
 
+	ret = -EADDRINUSE;
+	read_lock_bh(&l2tp_ip_lock);
+	if (__l2tp_ip_bind_lookup(net, addr->l2tp_addr.s_addr,
+				  sk->sk_bound_dev_if, addr->l2tp_conn_id))
+		goto out_in_use;
+
+	read_unlock_bh(&l2tp_ip_lock);
+
 	lock_sock(sk);
-
-	ret = -EINVAL;
-	if (!sock_flag(sk, SOCK_ZAPPED))
-		goto out;
-
-	if (sk->sk_state != TCP_CLOSE)
+	if (sk->sk_state != TCP_CLOSE || addr_len < sizeof(struct sockaddr_l2tpip))
 		goto out;
 
 	chk_addr_ret = inet_addr_type(net, addr->l2tp_addr.s_addr);
@@ -289,27 +278,24 @@ static int l2tp_ip_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 		inet->inet_rcv_saddr = inet->inet_saddr = addr->l2tp_addr.s_addr;
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
 		inet->inet_saddr = 0;  /* Use device */
-
-	write_lock_bh(&l2tp_ip_lock);
-	if (__l2tp_ip_bind_lookup(net, addr->l2tp_addr.s_addr, 0,
-				  sk->sk_bound_dev_if, addr->l2tp_conn_id)) {
-		write_unlock_bh(&l2tp_ip_lock);
-		ret = -EADDRINUSE;
-		goto out;
-	}
-
 	sk_dst_reset(sk);
+
 	l2tp_ip_sk(sk)->conn_id = addr->l2tp_conn_id;
 
+	write_lock_bh(&l2tp_ip_lock);
 	sk_add_bind_node(sk, &l2tp_ip_bind_table);
 	sk_del_node_init(sk);
 	write_unlock_bh(&l2tp_ip_lock);
-
 	ret = 0;
 	sock_reset_flag(sk, SOCK_ZAPPED);
 
 out:
 	release_sock(sk);
+
+	return ret;
+
+out_in_use:
+	read_unlock_bh(&l2tp_ip_lock);
 
 	return ret;
 }
@@ -319,23 +305,20 @@ static int l2tp_ip_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len
 	struct sockaddr_l2tpip *lsa = (struct sockaddr_l2tpip *) uaddr;
 	int rc;
 
+	if (sock_flag(sk, SOCK_ZAPPED)) /* Must bind first - autobinding does not work */
+		return -EINVAL;
+
 	if (addr_len < sizeof(*lsa))
 		return -EINVAL;
 
 	if (ipv4_is_multicast(lsa->l2tp_addr.s_addr))
 		return -EINVAL;
 
-	lock_sock(sk);
-
-	/* Must bind first - autobinding does not work */
-	if (sock_flag(sk, SOCK_ZAPPED)) {
-		rc = -EINVAL;
-		goto out_sk;
-	}
-
-	rc = __ip4_datagram_connect(sk, uaddr, addr_len);
+	rc = ip4_datagram_connect(sk, uaddr, addr_len);
 	if (rc < 0)
-		goto out_sk;
+		return rc;
+
+	lock_sock(sk);
 
 	l2tp_ip_sk(sk)->peer_conn_id = lsa->l2tp_conn_id;
 
@@ -344,9 +327,7 @@ static int l2tp_ip_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len
 	sk_add_bind_node(sk, &l2tp_ip_bind_table);
 	write_unlock_bh(&l2tp_ip_lock);
 
-out_sk:
 	release_sock(sk);
-
 	return rc;
 }
 
@@ -355,11 +336,11 @@ static int l2tp_ip_disconnect(struct sock *sk, int flags)
 	if (sock_flag(sk, SOCK_ZAPPED))
 		return 0;
 
-	return __udp_disconnect(sk, flags);
+	return udp_disconnect(sk, flags);
 }
 
 static int l2tp_ip_getname(struct socket *sock, struct sockaddr *uaddr,
-			   int peer)
+			   int *uaddr_len, int peer)
 {
 	struct sock *sk		= sock->sk;
 	struct inet_sock *inet	= inet_sk(sk);
@@ -380,7 +361,8 @@ static int l2tp_ip_getname(struct socket *sock, struct sockaddr *uaddr,
 		lsa->l2tp_conn_id = lsk->conn_id;
 		lsa->l2tp_addr.s_addr = addr;
 	}
-	return sizeof(*lsa);
+	*uaddr_len = sizeof(*lsa);
+	return 0;
 }
 
 static int l2tp_ip_backlog_recv(struct sock *sk, struct sk_buff *skb)
@@ -397,7 +379,7 @@ static int l2tp_ip_backlog_recv(struct sock *sk, struct sk_buff *skb)
 drop:
 	IP_INC_STATS(sock_net(sk), IPSTATS_MIB_INDISCARDS);
 	kfree_skb(skb);
-	return 0;
+	return -1;
 }
 
 /* Userspace will call sendmsg() on the tunnel socket to send L2TP
@@ -570,30 +552,6 @@ out:
 	return err ? err : copied;
 }
 
-int l2tp_ioctl(struct sock *sk, int cmd, unsigned long arg)
-{
-	struct sk_buff *skb;
-	int amount;
-
-	switch (cmd) {
-	case SIOCOUTQ:
-		amount = sk_wmem_alloc_get(sk);
-		break;
-	case SIOCINQ:
-		spin_lock_bh(&sk->sk_receive_queue.lock);
-		skb = skb_peek(&sk->sk_receive_queue);
-		amount = skb ? skb->len : 0;
-		spin_unlock_bh(&sk->sk_receive_queue.lock);
-		break;
-
-	default:
-		return -ENOIOCTLCMD;
-	}
-
-	return put_user(amount, (int __user *)arg);
-}
-EXPORT_SYMBOL(l2tp_ioctl);
-
 static struct proto l2tp_ip_prot = {
 	.name		   = "L2TP/IP",
 	.owner		   = THIS_MODULE,
@@ -602,15 +560,15 @@ static struct proto l2tp_ip_prot = {
 	.bind		   = l2tp_ip_bind,
 	.connect	   = l2tp_ip_connect,
 	.disconnect	   = l2tp_ip_disconnect,
-	.ioctl		   = l2tp_ioctl,
+	.ioctl		   = udp_ioctl,
 	.destroy	   = l2tp_ip_destroy_sock,
 	.setsockopt	   = ip_setsockopt,
 	.getsockopt	   = ip_getsockopt,
 	.sendmsg	   = l2tp_ip_sendmsg,
 	.recvmsg	   = l2tp_ip_recvmsg,
 	.backlog_rcv	   = l2tp_ip_backlog_recv,
-	.hash		   = l2tp_ip_hash,
-	.unhash		   = l2tp_ip_unhash,
+	.hash		   = inet_hash,
+	.unhash		   = inet_unhash,
 	.obj_size	   = sizeof(struct l2tp_ip_sock),
 #ifdef CONFIG_COMPAT
 	.compat_setsockopt = compat_ip_setsockopt,
@@ -629,7 +587,6 @@ static const struct proto_ops l2tp_ip_ops = {
 	.getname	   = l2tp_ip_getname,
 	.poll		   = datagram_poll,
 	.ioctl		   = inet_ioctl,
-	.gettstamp	   = sock_gettstamp,
 	.listen		   = sock_no_listen,
 	.shutdown	   = inet_shutdown,
 	.setsockopt	   = sock_common_setsockopt,

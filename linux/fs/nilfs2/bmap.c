@@ -1,10 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * bmap.c - NILFS block mapping.
  *
  * Copyright (C) 2006-2008 Nippon Telegraph and Telephone Corporation.
  *
- * Written by Koji Sato.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * Written by Koji Sato <koji@osrg.net>.
  */
 
 #include <linux/fs.h>
@@ -32,8 +45,8 @@ static int nilfs_bmap_convert_error(struct nilfs_bmap *bmap,
 	struct inode *inode = bmap->b_inode;
 
 	if (err == -EINVAL) {
-		__nilfs_error(inode->i_sb, fname,
-			      "broken bmap (inode number=%lu)", inode->i_ino);
+		nilfs_error(inode->i_sb, fname,
+			    "broken bmap (inode number=%lu)\n", inode->i_ino);
 		err = -EIO;
 	}
 	return err;
@@ -67,32 +80,24 @@ int nilfs_bmap_lookup_at_level(struct nilfs_bmap *bmap, __u64 key, int level,
 
 	down_read(&bmap->b_sem);
 	ret = bmap->b_ops->bop_lookup(bmap, key, level, ptrp);
-	if (ret < 0)
+	if (ret < 0) {
+		ret = nilfs_bmap_convert_error(bmap, __func__, ret);
 		goto out;
-
+	}
 	if (NILFS_BMAP_USE_VBN(bmap)) {
 		ret = nilfs_dat_translate(nilfs_bmap_get_dat(bmap), *ptrp,
 					  &blocknr);
 		if (!ret)
 			*ptrp = blocknr;
-		else if (ret == -ENOENT) {
-			/*
-			 * If there was no valid entry in DAT for the block
-			 * address obtained by b_ops->bop_lookup, then pass
-			 * internal code -EINVAL to nilfs_bmap_convert_error
-			 * to treat it as metadata corruption.
-			 */
-			ret = -EINVAL;
-		}
 	}
 
  out:
 	up_read(&bmap->b_sem);
-	return nilfs_bmap_convert_error(bmap, __func__, ret);
+	return ret;
 }
 
 int nilfs_bmap_lookup_contig(struct nilfs_bmap *bmap, __u64 key, __u64 *ptrp,
-			     unsigned int maxblocks)
+			     unsigned maxblocks)
 {
 	int ret;
 
@@ -453,7 +458,7 @@ __u64 nilfs_bmap_data_get_key(const struct nilfs_bmap *bmap,
 	struct buffer_head *pbh;
 	__u64 key;
 
-	key = page_index(bh->b_page) << (PAGE_SHIFT -
+	key = page_index(bh->b_page) << (PAGE_CACHE_SHIFT -
 					 bmap->b_inode->i_blkbits);
 	for (pbh = page_buffers(bh->b_page); pbh != bh; pbh = pbh->b_this_page)
 		key++;

@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * I2C bus driver for Conexant Digicolor SoCs
  *
  * Author: Baruch Siach <baruch@tkos.co.il>
  *
  * Copyright (C) 2015 Paradox Innovation Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -344,7 +347,7 @@ static int dc_i2c_probe(struct platform_device *pdev)
 
 	ret = i2c_add_adapter(&i2c->adap);
 	if (ret < 0) {
-		clk_disable_unprepare(i2c->clk);
+		clk_unprepare(i2c->clk);
 		return ret;
 	}
 
@@ -365,7 +368,6 @@ static const struct of_device_id dc_i2c_match[] = {
 	{ .compatible = "cnxt,cx92755-i2c" },
 	{ },
 };
-MODULE_DEVICE_TABLE(of, dc_i2c_match);
 
 static struct platform_driver dc_i2c_driver = {
 	.probe   = dc_i2c_probe,

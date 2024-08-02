@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/hfsplus/ioctl.c
  *
@@ -17,7 +16,7 @@
 #include <linux/fs.h>
 #include <linux/mount.h>
 #include <linux/sched.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include "hfsplus_fs.h"
 
 /*
@@ -57,8 +56,9 @@ static int hfsplus_ioctl_bless(struct file *file, int __user *user_flags)
 	return 0;
 }
 
-static inline unsigned int hfsplus_getflags(struct inode *inode)
+static int hfsplus_ioctl_getflags(struct file *file, int __user *user_flags)
 {
+	struct inode *inode = file_inode(file);
 	struct hfsplus_inode_info *hip = HFSPLUS_I(inode);
 	unsigned int flags = 0;
 
@@ -68,13 +68,6 @@ static inline unsigned int hfsplus_getflags(struct inode *inode)
 		flags |= FS_APPEND_FL;
 	if (hip->userflags & HFSPLUS_FLG_NODUMP)
 		flags |= FS_NODUMP_FL;
-	return flags;
-}
-
-static int hfsplus_ioctl_getflags(struct file *file, int __user *user_flags)
-{
-	struct inode *inode = file_inode(file);
-	unsigned int flags = hfsplus_getflags(inode);
 
 	return put_user(flags, user_flags);
 }
@@ -84,7 +77,6 @@ static int hfsplus_ioctl_setflags(struct file *file, int __user *user_flags)
 	struct inode *inode = file_inode(file);
 	struct hfsplus_inode_info *hip = HFSPLUS_I(inode);
 	unsigned int flags, new_fl = 0;
-	unsigned int oldflags = hfsplus_getflags(inode);
 	int err = 0;
 
 	err = mnt_want_write_file(file);
@@ -101,11 +93,15 @@ static int hfsplus_ioctl_setflags(struct file *file, int __user *user_flags)
 		goto out_drop_write;
 	}
 
-	inode_lock(inode);
+	mutex_lock(&inode->i_mutex);
 
-	err = vfs_ioc_setflags_prepare(inode, oldflags, flags);
-	if (err)
-		goto out_unlock_inode;
+	if ((flags & (FS_IMMUTABLE_FL|FS_APPEND_FL)) ||
+	    inode->i_flags & (S_IMMUTABLE|S_APPEND)) {
+		if (!capable(CAP_LINUX_IMMUTABLE)) {
+			err = -EPERM;
+			goto out_unlock_inode;
+		}
+	}
 
 	/* don't silently ignore unsupported ext2 flags */
 	if (flags & ~(FS_IMMUTABLE_FL|FS_APPEND_FL|FS_NODUMP_FL)) {
@@ -126,11 +122,11 @@ static int hfsplus_ioctl_setflags(struct file *file, int __user *user_flags)
 	else
 		hip->userflags &= ~HFSPLUS_FLG_NODUMP;
 
-	inode->i_ctime = current_time(inode);
+	inode->i_ctime = CURRENT_TIME_SEC;
 	mark_inode_dirty(inode);
 
 out_unlock_inode:
-	inode_unlock(inode);
+	mutex_unlock(&inode->i_mutex);
 out_drop_write:
 	mnt_drop_write_file(file);
 out:

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * linux/fs/ext2/ioctl.c
  *
@@ -15,7 +14,7 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <asm/current.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 
 long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
@@ -30,6 +29,7 @@ long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 	case EXT2_IOC_GETFLAGS:
+		ext2_get_inode_flags(ei);
 		flags = ei->i_flags & EXT2_FL_USER_VISIBLE;
 		return put_user(flags, (int __user *) arg);
 	case EXT2_IOC_SETFLAGS: {
@@ -51,19 +51,27 @@ long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 		flags = ext2_mask_flags(inode->i_mode, flags);
 
-		inode_lock(inode);
+		mutex_lock(&inode->i_mutex);
 		/* Is it quota file? Do not allow user to mess with it */
 		if (IS_NOQUOTA(inode)) {
-			inode_unlock(inode);
+			mutex_unlock(&inode->i_mutex);
 			ret = -EPERM;
 			goto setflags_out;
 		}
 		oldflags = ei->i_flags;
 
-		ret = vfs_ioc_setflags_prepare(inode, oldflags, flags);
-		if (ret) {
-			inode_unlock(inode);
-			goto setflags_out;
+		/*
+		 * The IMMUTABLE and APPEND_ONLY flags can only be changed by
+		 * the relevant capability.
+		 *
+		 * This test looks nicer. Thanks to Pauline Middelink
+		 */
+		if ((flags ^ oldflags) & (EXT2_APPEND_FL | EXT2_IMMUTABLE_FL)) {
+			if (!capable(CAP_LINUX_IMMUTABLE)) {
+				mutex_unlock(&inode->i_mutex);
+				ret = -EPERM;
+				goto setflags_out;
+			}
 		}
 
 		flags = flags & EXT2_FL_USER_MODIFIABLE;
@@ -71,8 +79,8 @@ long ext2_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		ei->i_flags = flags;
 
 		ext2_set_inode_flags(inode);
-		inode->i_ctime = current_time(inode);
-		inode_unlock(inode);
+		inode->i_ctime = CURRENT_TIME_SEC;
+		mutex_unlock(&inode->i_mutex);
 
 		mark_inode_dirty(inode);
 setflags_out:
@@ -94,10 +102,10 @@ setflags_out:
 			goto setversion_out;
 		}
 
-		inode_lock(inode);
-		inode->i_ctime = current_time(inode);
+		mutex_lock(&inode->i_mutex);
+		inode->i_ctime = CURRENT_TIME_SEC;
 		inode->i_generation = generation;
-		inode_unlock(inode);
+		mutex_unlock(&inode->i_mutex);
 
 		mark_inode_dirty(inode);
 setversion_out:

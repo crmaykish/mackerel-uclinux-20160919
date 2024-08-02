@@ -1,11 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/arch/alpha/mm/fault.c
  *
  *  Copyright (C) 1995  Linus Torvalds
  */
 
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <asm/io.h>
@@ -23,7 +22,7 @@
 #include <linux/mman.h>
 #include <linux/smp.h>
 #include <linux/interrupt.h>
-#include <linux/extable.h>
+#include <linux/module.h>
 #include <linux/uaccess.h>
 
 extern void die_if_kernel(char *,struct pt_regs *,long, unsigned long *);
@@ -78,7 +77,7 @@ __load_new_mm_context(struct mm_struct *next_mm)
 /* Macro for exception fixup code to access integer registers.  */
 #define dpf_reg(r)							\
 	(((unsigned long *)regs)[(r) <= 8 ? (r) : (r) <= 15 ? (r)-16 :	\
-				 (r) <= 18 ? (r)+10 : (r)-10])
+				 (r) <= 18 ? (r)+8 : (r)-10])
 
 asmlinkage void
 do_page_fault(unsigned long address, unsigned long mmcsr,
@@ -87,8 +86,8 @@ do_page_fault(unsigned long address, unsigned long mmcsr,
 	struct vm_area_struct * vma;
 	struct mm_struct *mm = current->mm;
 	const struct exception_table_entry *fixup;
-	int si_code = SEGV_MAPERR;
-	vm_fault_t fault;
+	int fault, si_code = SEGV_MAPERR;
+	siginfo_t info;
 	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
 
 	/* As of EV6, a load into $31/$f31 is a prefetch, and never faults
@@ -148,7 +147,7 @@ retry:
 	/* If for any reason at all we couldn't handle the fault,
 	   make sure we exit gracefully rather than endlessly redo
 	   the fault.  */
-	fault = handle_mm_fault(vma, address, flags);
+	fault = handle_mm_fault(mm, vma, address, flags);
 
 	if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(current))
 		return;
@@ -206,7 +205,7 @@ retry:
 	printk(KERN_ALERT "Unable to handle kernel paging request at "
 	       "virtual address %016lx\n", address);
 	die_if_kernel("Oops", regs, cause, (unsigned long*)regs - 16);
-	make_task_dead(SIGKILL);
+	do_exit(SIGKILL);
 
 	/* We ran out of memory, or some other thing happened to us that
 	   made us unable to handle the page fault gracefully.  */
@@ -221,13 +220,21 @@ retry:
 	up_read(&mm->mmap_sem);
 	/* Send a sigbus, regardless of whether we were in kernel
 	   or user mode.  */
-	force_sig_fault(SIGBUS, BUS_ADRERR, (void __user *) address, 0);
+	info.si_signo = SIGBUS;
+	info.si_errno = 0;
+	info.si_code = BUS_ADRERR;
+	info.si_addr = (void __user *) address;
+	force_sig_info(SIGBUS, &info, current);
 	if (!user_mode(regs))
 		goto no_context;
 	return;
 
  do_sigsegv:
-	force_sig_fault(SIGSEGV, si_code, (void __user *) address, 0);
+	info.si_signo = SIGSEGV;
+	info.si_errno = 0;
+	info.si_code = si_code;
+	info.si_addr = (void __user *) address;
+	force_sig_info(SIGSEGV, &info, current);
 	return;
 
 #ifdef CONFIG_ALPHA_LARGE_VMALLOC

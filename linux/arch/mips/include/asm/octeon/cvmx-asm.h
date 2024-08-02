@@ -136,4 +136,20 @@
 	asm volatile ("rdhwr %[rt],$" CVMX_TMP_STR(regstr) : [rt] "=d" (result))
 #define CVMX_RDHWRNV(result, regstr) \
 	asm ("rdhwr %[rt],$" CVMX_TMP_STR(regstr) : [rt] "=d" (result))
+
+
+#define CVMX_PREFETCH0(address)		CVMX_PREFETCH(address, 0)
+#define CVMX_PREFETCH(address, offset)	CVMX_PREFETCH_PREF0(address, offset)
+
+// normal prefetches that use the pref instruction
+#define CVMX_PREFETCH_PREFX(X, address, offset) \
+	asm volatile ("pref %[type], %[off](%[rbase])" : : \
+	[rbase] "d" (address), [off] "I" (offset), [type] "n" (X))
+#define CVMX_PREFETCH_PREF0(address, offset) \
+	CVMX_PREFETCH_PREFX(0, address, offset)
+
+
+#define CVMX_CLZ(result, input) \
+	asm ("clz %[rd],%[rs]" : [rd] "=d" (result) : [rs] "d" (input))
+
 #endif /* __CVMX_ASM_H__ */

@@ -1,8 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Apple Onboard Audio driver for Onyx codec
  *
  * Copyright 2006 Johannes Berg <johannes@sipsolutions.net>
+ *
+ * GPL v2, can be found in COPYING.
+ *
  *
  * This is a driver for the pcm3052 codec chip (codenamed Onyx)
  * that is present in newer Apple hardware (with digital output).
@@ -27,6 +29,7 @@
  *	 having just a single card on a system, and making the
  *	 'card' pointer accessible to anyone who needs it instead
  *	 of hiding it in the aoa_snd_* functions...
+ *
  */
 #include <linux/delay.h>
 #include <linux/module.h>
@@ -71,10 +74,8 @@ static int onyx_read_register(struct onyx *onyx, u8 reg, u8 *value)
 		return 0;
 	}
 	v = i2c_smbus_read_byte_data(onyx->i2c, reg);
-	if (v < 0) {
-		*value = 0;
+	if (v < 0)
 		return -1;
-	}
 	*value = (u8)v;
 	onyx->cache[ONYX_REG_CONTROL-FIRSTREGISTER] = *value;
 	return 0;
@@ -166,7 +167,7 @@ static int onyx_snd_vol_put(struct snd_kcontrol *kcontrol,
 	return 1;
 }
 
-static const struct snd_kcontrol_new volume_control = {
+static struct snd_kcontrol_new volume_control = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Master Playback Volume",
 	.access = SNDRV_CTL_ELEM_ACCESS_READWRITE,
@@ -228,7 +229,7 @@ static int onyx_snd_inputgain_put(struct snd_kcontrol *kcontrol,
 	return n != v;
 }
 
-static const struct snd_kcontrol_new inputgain_control = {
+static struct snd_kcontrol_new inputgain_control = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Master Capture Volume",
 	.access = SNDRV_CTL_ELEM_ACCESS_READWRITE,
@@ -283,7 +284,7 @@ static int onyx_snd_capture_source_put(struct snd_kcontrol *kcontrol,
 	return 1;
 }
 
-static const struct snd_kcontrol_new capture_source_control = {
+static struct snd_kcontrol_new capture_source_control = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	/* If we name this 'Input Source', it properly shows up in
 	 * alsamixer as a selection, * but it's shown under the
@@ -347,7 +348,7 @@ static int onyx_snd_mute_put(struct snd_kcontrol *kcontrol,
 	return !err ? (v != c) : err;
 }
 
-static const struct snd_kcontrol_new mute_control = {
+static struct snd_kcontrol_new mute_control = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Master Playback Switch",
 	.access = SNDRV_CTL_ELEM_ACCESS_READWRITE,
@@ -475,7 +476,7 @@ static int onyx_spdif_mask_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static const struct snd_kcontrol_new onyx_spdif_mask = {
+static struct snd_kcontrol_new onyx_spdif_mask = {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READ,
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =		SNDRV_CTL_NAME_IEC958("",PLAYBACK,CON_MASK),
@@ -532,7 +533,7 @@ static int onyx_spdif_put(struct snd_kcontrol *kcontrol,
 	return 1;
 }
 
-static const struct snd_kcontrol_new onyx_spdif_ctrl = {
+static struct snd_kcontrol_new onyx_spdif_ctrl = {
 	.access =	SNDRV_CTL_ELEM_ACCESS_READWRITE,
 	.iface =	SNDRV_CTL_ELEM_IFACE_PCM,
 	.name =		SNDRV_CTL_NAME_IEC958("",PLAYBACK,DEFAULT),

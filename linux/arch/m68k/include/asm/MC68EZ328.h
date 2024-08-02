@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
 /* include/asm-m68knommu/MC68EZ328.h: 'EZ328 control registers
  *
@@ -10,7 +9,6 @@
  *                     The Silver Hammer Group, Ltd.
  *
  */
-#include <linux/compiler.h>
 
 #ifndef _MC68EZ328_H_
 #define _MC68EZ328_H_
@@ -633,7 +631,7 @@
 
 /**********
  *
- * 0xFFFFF8xx -- Serial Peripheral Interface Master (SPIM)
+ * 0xFFFFF8xx -- Serial Periferial Interface Master (SPIM)
  *
  **********/
 
@@ -714,7 +712,7 @@
 
 #define UBAUD_PRESCALER_MASK	0x003f	/* Actual divisor is 65 - PRESCALER */
 #define UBAUD_PRESCALER_SHIFT	0
-#define UBAUD_DIVIDE_MASK	0x0700	/* Baud Rate freq. divisor */
+#define UBAUD_DIVIDE_MASK	0x0700	/* Baud Rate freq. divizor */
 #define UBAUD_DIVIDE_SHIFT	8
 #define UBAUD_BAUD_SRC		0x0800	/* Baud Rate Source */
 #define UBAUD_UCLKDIR		0x2000	/* UCLK Direction */
@@ -817,7 +815,7 @@ typedef volatile struct {
   volatile unsigned short int nipr;
   volatile unsigned short int pad1;
   volatile unsigned short int pad2;
-} __packed m68328_uart;
+} __attribute__((packed)) m68328_uart;
 
 
 /**********
@@ -1162,7 +1160,7 @@ typedef volatile struct {
 #define DRAMMC_COL10		0x0080	/* Col address bit for MD10 PA11/PA0  */
 #define DRAMMC_COL9		0x0040	/* Col address bit for MD9  PA10/PA0  */
 #define DRAMMC_COL8		0x0020	/* Col address bit for MD8  PA9/PA0   */
-#define DRAMMC_REF_MASK		0x001f	/* Refresh Cycle */
+#define DRAMMC_REF_MASK		0x001f	/* Reresh Cycle */
 #define DRAMMC_REF_SHIFT	0
 
 /*

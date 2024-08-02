@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_KGDB_H
 #define _ASM_X86_KGDB_H
 
@@ -6,8 +5,6 @@
  * Copyright (C) 2001-2004 Amit S. Kale
  * Copyright (C) 2008 Wind River Systems, Inc.
  */
-
-#include <asm/ptrace.h>
 
 /*
  * BUFMAX defines the maximum number of characters in inbound/outbound

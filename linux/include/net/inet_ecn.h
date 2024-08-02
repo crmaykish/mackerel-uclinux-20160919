@@ -1,10 +1,8 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _INET_ECN_H_
 #define _INET_ECN_H_
 
 #include <linux/ip.h>
 #include <linux/skbuff.h>
-#include <linux/if_vlan.h>
 
 #include <net/inet_sock.h>
 #include <net/dsfield.h>
@@ -100,20 +98,6 @@ static inline int IP_ECN_set_ce(struct iphdr *iph)
 	return 1;
 }
 
-static inline int IP_ECN_set_ect1(struct iphdr *iph)
-{
-	u32 check = (__force u32)iph->check;
-
-	if ((iph->tos & INET_ECN_MASK) != INET_ECN_ECT_0)
-		return 0;
-
-	check += (__force u16)htons(0x1);
-
-	iph->check = (__force __sum16)(check + (check>=0xFFFF));
-	iph->tos ^= INET_ECN_MASK;
-	return 1;
-}
-
 static inline void IP_ECN_clear(struct iphdr *iph)
 {
 	iph->tos &= ~INET_ECN_MASK;
@@ -127,42 +111,17 @@ static inline void ipv4_copy_dscp(unsigned int dscp, struct iphdr *inner)
 
 struct ipv6hdr;
 
-/* Note:
- * IP_ECN_set_ce() has to tweak IPV4 checksum when setting CE,
- * meaning both changes have no effect on skb->csum if/when CHECKSUM_COMPLETE
- * In IPv6 case, no checksum compensates the change in IPv6 header,
- * so we have to update skb->csum.
- */
-static inline int IP6_ECN_set_ce(struct sk_buff *skb, struct ipv6hdr *iph)
+static inline int IP6_ECN_set_ce(struct ipv6hdr *iph)
 {
-	__be32 from, to;
-
 	if (INET_ECN_is_not_ect(ipv6_get_dsfield(iph)))
 		return 0;
-
-	from = *(__be32 *)iph;
-	to = from | htonl(INET_ECN_CE << 20);
-	*(__be32 *)iph = to;
-	if (skb->ip_summed == CHECKSUM_COMPLETE)
-		skb->csum = csum_add(csum_sub(skb->csum, (__force __wsum)from),
-				     (__force __wsum)to);
+	*(__be32*)iph |= htonl(INET_ECN_CE << 20);
 	return 1;
 }
 
-static inline int IP6_ECN_set_ect1(struct sk_buff *skb, struct ipv6hdr *iph)
+static inline void IP6_ECN_clear(struct ipv6hdr *iph)
 {
-	__be32 from, to;
-
-	if ((ipv6_get_dsfield(iph) & INET_ECN_MASK) != INET_ECN_ECT_0)
-		return 0;
-
-	from = *(__be32 *)iph;
-	to = from ^ htonl(INET_ECN_MASK << 20);
-	*(__be32 *)iph = to;
-	if (skb->ip_summed == CHECKSUM_COMPLETE)
-		skb->csum = csum_add(csum_sub(skb->csum, (__force __wsum)from),
-				     (__force __wsum)to);
-	return 1;
+	*(__be32*)iph &= ~htonl(INET_ECN_MASK << 20);
 }
 
 static inline void ipv6_copy_dscp(unsigned int dscp, struct ipv6hdr *inner)
@@ -173,7 +132,7 @@ static inline void ipv6_copy_dscp(unsigned int dscp, struct ipv6hdr *inner)
 
 static inline int INET_ECN_set_ce(struct sk_buff *skb)
 {
-	switch (skb_protocol(skb, true)) {
+	switch (skb->protocol) {
 	case cpu_to_be16(ETH_P_IP):
 		if (skb_network_header(skb) + sizeof(struct iphdr) <=
 		    skb_tail_pointer(skb))
@@ -183,26 +142,7 @@ static inline int INET_ECN_set_ce(struct sk_buff *skb)
 	case cpu_to_be16(ETH_P_IPV6):
 		if (skb_network_header(skb) + sizeof(struct ipv6hdr) <=
 		    skb_tail_pointer(skb))
-			return IP6_ECN_set_ce(skb, ipv6_hdr(skb));
-		break;
-	}
-
-	return 0;
-}
-
-static inline int INET_ECN_set_ect1(struct sk_buff *skb)
-{
-	switch (skb_protocol(skb, true)) {
-	case cpu_to_be16(ETH_P_IP):
-		if (skb_network_header(skb) + sizeof(struct iphdr) <=
-		    skb_tail_pointer(skb))
-			return IP_ECN_set_ect1(ip_hdr(skb));
-		break;
-
-	case cpu_to_be16(ETH_P_IPV6):
-		if (skb_network_header(skb) + sizeof(struct ipv6hdr) <=
-		    skb_tail_pointer(skb))
-			return IP6_ECN_set_ect1(skb, ipv6_hdr(skb));
+			return IP6_ECN_set_ce(ipv6_hdr(skb));
 		break;
 	}
 
@@ -233,7 +173,8 @@ static inline int INET_ECN_set_ect1(struct sk_buff *skb)
  *          1 if something is broken and should be logged (!!! above)
  *          2 if packet should be dropped
  */
-static inline int __INET_ECN_decapsulate(__u8 outer, __u8 inner, bool *set_ce)
+static inline int INET_ECN_decapsulate(struct sk_buff *skb,
+				       __u8 outer, __u8 inner)
 {
 	if (INET_ECN_is_not_ect(inner)) {
 		switch (outer & INET_ECN_MASK) {
@@ -247,25 +188,10 @@ static inline int __INET_ECN_decapsulate(__u8 outer, __u8 inner, bool *set_ce)
 		}
 	}
 
-	*set_ce = INET_ECN_is_ce(outer);
+	if (INET_ECN_is_ce(outer))
+		INET_ECN_set_ce(skb);
+
 	return 0;
-}
-
-static inline int INET_ECN_decapsulate(struct sk_buff *skb,
-				       __u8 outer, __u8 inner)
-{
-	bool set_ce = false;
-	int rc;
-
-	rc = __INET_ECN_decapsulate(outer, inner, &set_ce);
-	if (!rc) {
-		if (set_ce)
-			INET_ECN_set_ce(skb);
-		else if ((outer & INET_ECN_MASK) == INET_ECN_ECT_1)
-			INET_ECN_set_ect1(skb);
-	}
-
-	return rc;
 }
 
 static inline int IP_ECN_decapsulate(const struct iphdr *oiph,
@@ -273,16 +199,12 @@ static inline int IP_ECN_decapsulate(const struct iphdr *oiph,
 {
 	__u8 inner;
 
-	switch (skb_protocol(skb, true)) {
-	case htons(ETH_P_IP):
+	if (skb->protocol == htons(ETH_P_IP))
 		inner = ip_hdr(skb)->tos;
-		break;
-	case htons(ETH_P_IPV6):
+	else if (skb->protocol == htons(ETH_P_IPV6))
 		inner = ipv6_get_dsfield(ipv6_hdr(skb));
-		break;
-	default:
+	else
 		return 0;
-	}
 
 	return INET_ECN_decapsulate(skb, oiph->tos, inner);
 }
@@ -292,16 +214,12 @@ static inline int IP6_ECN_decapsulate(const struct ipv6hdr *oipv6h,
 {
 	__u8 inner;
 
-	switch (skb_protocol(skb, true)) {
-	case htons(ETH_P_IP):
+	if (skb->protocol == htons(ETH_P_IP))
 		inner = ip_hdr(skb)->tos;
-		break;
-	case htons(ETH_P_IPV6):
+	else if (skb->protocol == htons(ETH_P_IPV6))
 		inner = ipv6_get_dsfield(ipv6_hdr(skb));
-		break;
-	default:
+	else
 		return 0;
-	}
 
 	return INET_ECN_decapsulate(skb, ipv6_get_dsfield(oipv6h), inner);
 }

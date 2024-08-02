@@ -1,23 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2015 Anton Ivanov (aivanov@{brocade.com,kot-begemot.co.uk})
  * Copyright (C) 2015 Thomas Meyer (thomas@m3y3r.de)
  * Copyright (C) 2004 PathScale, Inc
  * Copyright (C) 2004 - 2007 Jeff Dike (jdike@{addtoit,linux.intel}.com)
+ * Licensed under the GPL
  */
 
 #include <stdlib.h>
 #include <stdarg.h>
 #include <errno.h>
 #include <signal.h>
-#include <string.h>
 #include <strings.h>
 #include <as-layout.h>
 #include <kern_util.h>
 #include <os.h>
 #include <sysdep/mcontext.h>
-#include <um_malloc.h>
-#include <sys/ucontext.h>
 
 void (*sig_info[NSIG])(int, struct siginfo *, struct uml_pt_regs *) = {
 	[SIGTRAP]	= relay_signal,
@@ -27,6 +24,7 @@ void (*sig_info[NSIG])(int, struct siginfo *, struct uml_pt_regs *) = {
 	[SIGBUS]	= bus_handler,
 	[SIGSEGV]	= segv_handler,
 	[SIGIO]		= sigio_handler,
+	[SIGALRM]	= timer_handler
 };
 
 static void sig_handler_common(int sig, struct siginfo *si, mcontext_t *mc)
@@ -42,8 +40,8 @@ static void sig_handler_common(int sig, struct siginfo *si, mcontext_t *mc)
 	}
 
 	/* enable signals if sig isn't IRQ signal */
-	if ((sig != SIGIO) && (sig != SIGWINCH))
-		unblock_signals_trace();
+	if ((sig != SIGIO) && (sig != SIGWINCH) && (sig != SIGALRM))
+		unblock_signals();
 
 	(*sig_info[sig])(sig, si, &r);
 
@@ -64,7 +62,6 @@ static void sig_handler_common(int sig, struct siginfo *si, mcontext_t *mc)
 
 static int signals_enabled;
 static unsigned int signals_pending;
-static unsigned int signals_active = 0;
 
 void sig_handler(int sig, struct siginfo *si, mcontext_t *mc)
 {
@@ -76,11 +73,11 @@ void sig_handler(int sig, struct siginfo *si, mcontext_t *mc)
 		return;
 	}
 
-	block_signals_trace();
+	block_signals();
 
 	sig_handler_common(sig, si, mc);
 
-	set_signals_trace(enabled);
+	set_signals(enabled);
 }
 
 static void timer_real_alarm_handler(mcontext_t *mc)
@@ -89,8 +86,6 @@ static void timer_real_alarm_handler(mcontext_t *mc)
 
 	if (mc != NULL)
 		get_regs_from_mc(&regs, mc);
-	else
-		memset(&regs, 0, sizeof(regs));
 	timer_handler(SIGALRM, NULL, &regs);
 }
 
@@ -104,15 +99,10 @@ void timer_alarm_handler(int sig, struct siginfo *unused_si, mcontext_t *mc)
 		return;
 	}
 
-	block_signals_trace();
-
-	signals_active |= SIGALRM_MASK;
+	block_signals();
 
 	timer_real_alarm_handler(mc);
-
-	signals_active &= ~SIGALRM_MASK;
-
-	set_signals_trace(enabled);
+	set_signals(enabled);
 }
 
 void deliver_alarm(void) {
@@ -150,7 +140,7 @@ static void (*handlers[_NSIG])(int sig, struct siginfo *si, mcontext_t *mc) = {
 
 static void hard_handler(int sig, siginfo_t *si, void *p)
 {
-	ucontext_t *uc = p;
+	struct ucontext *uc = p;
 	mcontext_t *mc = &uc->uc_mcontext;
 	unsigned long pending = 1UL << sig;
 
@@ -253,8 +243,6 @@ void unblock_signals(void)
 	if (signals_enabled == 1)
 		return;
 
-	signals_enabled = 1;
-
 	/*
 	 * We loop because the IRQ handler returns with interrupts off.  So,
 	 * interrupts may have arrived and we need to re-enable them and
@@ -264,9 +252,12 @@ void unblock_signals(void)
 		/*
 		 * Save and reset save_pending after enabling signals.  This
 		 * way, signals_pending won't be changed while we're reading it.
-		 *
+		 */
+		signals_enabled = 1;
+
+		/*
 		 * Setting signals_enabled and reading signals_pending must
-		 * happen in this order, so have the barrier here.
+		 * happen in this order.
 		 */
 		barrier();
 
@@ -279,13 +270,10 @@ void unblock_signals(void)
 		/*
 		 * We have pending interrupts, so disable signals, as the
 		 * handlers expect them off when they are called.  They will
-		 * be enabled again above. We need to trace this, as we're
-		 * expected to be enabling interrupts already, but any more
-		 * tracing that happens inside the handlers we call for the
-		 * pending signals will mess up the tracing state.
+		 * be enabled again above.
 		 */
+
 		signals_enabled = 0;
-		um_trace_signals_off();
 
 		/*
 		 * Deal with SIGIO first because the alarm handler might
@@ -298,19 +286,8 @@ void unblock_signals(void)
 		if (save_pending & SIGIO_MASK)
 			sig_handler_common(SIGIO, NULL, NULL);
 
-		/* Do not reenter the handler */
-
-		if ((save_pending & SIGALRM_MASK) && (!(signals_active & SIGALRM_MASK)))
+		if (save_pending & SIGALRM_MASK)
 			timer_real_alarm_handler(NULL);
-
-		/* Rerun the loop only if there is still pending SIGIO and not in TIMER handler */
-
-		if (!(signals_pending & SIGIO_MASK) && (signals_active & SIGALRM_MASK))
-			return;
-
-		/* Re-enable signals and trace that we're doing so. */
-		um_trace_signals_on();
-		signals_enabled = 1;
 	}
 }
 
@@ -329,21 +306,6 @@ int set_signals(int enable)
 	if (enable)
 		unblock_signals();
 	else block_signals();
-
-	return ret;
-}
-
-int set_signals_trace(int enable)
-{
-	int ret;
-	if (signals_enabled == enable)
-		return enable;
-
-	ret = signals_enabled;
-	if (enable)
-		unblock_signals_trace();
-	else
-		block_signals_trace();
 
 	return ret;
 }

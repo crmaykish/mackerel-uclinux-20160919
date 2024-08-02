@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/ext2/balloc.c
  *
@@ -16,7 +15,6 @@
 #include <linux/quotaops.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
-#include <linux/cred.h>
 #include <linux/buffer_head.h>
 #include <linux/capability.h>
 
@@ -48,9 +46,10 @@ struct ext2_group_desc * ext2_get_group_desc(struct super_block * sb,
 	struct ext2_sb_info *sbi = EXT2_SB(sb);
 
 	if (block_group >= sbi->s_groups_count) {
-		WARN(1, "block_group >= groups_count - "
-		     "block_group = %d, groups_count = %lu",
-		     block_group, sbi->s_groups_count);
+		ext2_error (sb, "ext2_get_group_desc",
+			    "block_group >= groups_count - "
+			    "block_group = %d, groups_count = %lu",
+			    block_group, sbi->s_groups_count);
 
 		return NULL;
 	}
@@ -58,9 +57,10 @@ struct ext2_group_desc * ext2_get_group_desc(struct super_block * sb,
 	group_desc = block_group >> EXT2_DESC_PER_BLOCK_BITS(sb);
 	offset = block_group & (EXT2_DESC_PER_BLOCK(sb) - 1);
 	if (!sbi->s_group_desc[group_desc]) {
-		WARN(1, "Group descriptor not loaded - "
-		     "block_group = %d, group_desc = %lu, desc = %lu",
-		      block_group, group_desc, offset);
+		ext2_error (sb, "ext2_get_group_desc",
+			    "Group descriptor not loaded - "
+			    "block_group = %d, group_desc = %lu, desc = %lu",
+			     block_group, group_desc, offset);
 		return NULL;
 	}
 
@@ -488,7 +488,9 @@ void ext2_free_blocks (struct inode * inode, unsigned long block,
 	struct ext2_super_block * es = sbi->s_es;
 	unsigned freed = 0, group_freed;
 
-	if (!ext2_data_block_valid(sbi, block, count)) {
+	if (block < le32_to_cpu(es->s_first_data_block) ||
+	    block + count < block ||
+	    block + count > le32_to_cpu(es->s_blocks_count)) {
 		ext2_error (sb, "ext2_free_blocks",
 			    "Freeing blocks not in datazone - "
 			    "block = %lu, count = %lu", block, count);
@@ -544,7 +546,7 @@ do_more:
 	}
 
 	mark_buffer_dirty(bitmap_bh);
-	if (sb->s_flags & SB_SYNCHRONOUS)
+	if (sb->s_flags & MS_SYNCHRONOUS)
 		sync_dirty_buffer(bitmap_bh);
 
 	group_adjust_blocks(sb, block_group, desc, bh2, group_freed);
@@ -1192,26 +1194,6 @@ static int ext2_has_free_blocks(struct ext2_sb_info *sbi)
 }
 
 /*
- * Returns 1 if the passed-in block region is valid; 0 if some part overlaps
- * with filesystem metadata blocks.
- */
-int ext2_data_block_valid(struct ext2_sb_info *sbi, ext2_fsblk_t start_blk,
-			  unsigned int count)
-{
-	if ((start_blk <= le32_to_cpu(sbi->s_es->s_first_data_block)) ||
-	    (start_blk + count - 1 < start_blk) ||
-	    (start_blk + count - 1 >= le32_to_cpu(sbi->s_es->s_blocks_count)))
-		return 0;
-
-	/* Ensure we do not step over superblock */
-	if ((start_blk <= sbi->s_sb_block) &&
-	    (start_blk + count - 1 >= sbi->s_sb_block))
-		return 0;
-
-	return 1;
-}
-
-/*
  * ext2_new_blocks() -- core block(s) allocation function
  * @inode:		file inode
  * @goal:		given target block(filesystem wide)
@@ -1419,7 +1401,7 @@ allocated:
 	percpu_counter_sub(&sbi->s_freeblocks_counter, num);
 
 	mark_buffer_dirty(bitmap_bh);
-	if (sb->s_flags & SB_SYNCHRONOUS)
+	if (sb->s_flags & MS_SYNCHRONOUS)
 		sync_dirty_buffer(bitmap_bh);
 
 	*errp = 0;

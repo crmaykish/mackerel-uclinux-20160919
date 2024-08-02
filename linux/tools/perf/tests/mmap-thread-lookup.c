@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
-#include <inttypes.h>
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -8,15 +6,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include "debug.h"
-#include "event.h"
 #include "tests.h"
 #include "machine.h"
 #include "thread_map.h"
-#include "map.h"
 #include "symbol.h"
-#include "util/synthetic-events.h"
 #include "thread.h"
-#include <internal/lib.h> // page_size
 
 #define THREADS 4
 
@@ -55,7 +49,7 @@ static void *thread_fn(void *arg)
 {
 	struct thread_data *td = arg;
 	ssize_t ret;
-	int go = 0;
+	int go;
 
 	if (thread_init(td))
 		return NULL;
@@ -135,26 +129,27 @@ static int synth_all(struct machine *machine)
 {
 	return perf_event__synthesize_threads(NULL,
 					      perf_event__process,
-					      machine, 0, 1);
+					      machine, 0, 500);
 }
 
 static int synth_process(struct machine *machine)
 {
-	struct perf_thread_map *map;
+	struct thread_map *map;
 	int err;
 
 	map = thread_map__new_by_pid(getpid());
 
 	err = perf_event__synthesize_thread_map(NULL, map,
 						perf_event__process,
-						machine, 0);
+						machine, 0, 500);
 
-	perf_thread_map__put(map);
+	thread_map__put(map);
 	return err;
 }
 
 static int mmap_events(synth_cb synth)
 {
+	struct machines machines;
 	struct machine *machine;
 	int err, i;
 
@@ -167,7 +162,8 @@ static int mmap_events(synth_cb synth)
 	 */
 	TEST_ASSERT_VAL("failed to create threads", !threads_create());
 
-	machine = machine__new_host();
+	machines__init(&machines);
+	machine = &machines.host;
 
 	dump_trace = verbose > 1 ? 1 : 0;
 
@@ -191,8 +187,9 @@ static int mmap_events(synth_cb synth)
 
 		pr_debug("looking for map %p\n", td->map);
 
-		thread__find_map(thread, PERF_RECORD_MISC_USER,
-				 (unsigned long) (td->map + 1), &al);
+		thread__find_addr_map(thread,
+				      PERF_RECORD_MISC_USER, MAP__FUNCTION,
+				      (unsigned long) (td->map + 1), &al);
 
 		thread__put(thread);
 
@@ -206,7 +203,7 @@ static int mmap_events(synth_cb synth)
 	}
 
 	machine__delete_threads(machine);
-	machine__delete(machine);
+	machines__exit(&machines);
 	return err;
 }
 
@@ -220,11 +217,11 @@ static int mmap_events(synth_cb synth)
  *   perf_event__synthesize_threads    (global)
  *
  * We test we can find all memory maps via:
- *   thread__find_map
+ *   thread__find_addr_map
  *
  * by using all thread objects.
  */
-int test__mmap_thread_lookup(struct test *test __maybe_unused, int subtest __maybe_unused)
+int test__mmap_thread_lookup(void)
 {
 	/* perf_event__synthesize_threads synthesize */
 	TEST_ASSERT_VAL("failed with sythesizing all",

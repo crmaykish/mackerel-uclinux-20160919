@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Dmaengine driver base library for DMA controllers, found on SH-based SoCs
  *
@@ -8,6 +7,10 @@
  * Copyright (C) 2009 Nobuhiro Iwamatsu <iwamatsu.nobuhiro@renesas.com>
  * Copyright (C) 2009 Renesas Solutions, Inc. All rights reserved.
  * Copyright (C) 2007 Freescale Semiconductor, Inc. All rights reserved.
+ *
+ * This is free software; you can redistribute it and/or modify
+ * it under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -327,11 +330,10 @@ static dma_async_tx_callback __ld_cleanup(struct shdma_chan *schan, bool all)
 	bool head_acked = false;
 	dma_cookie_t cookie = 0;
 	dma_async_tx_callback callback = NULL;
-	struct dmaengine_desc_callback cb;
+	void *param = NULL;
 	unsigned long flags;
 	LIST_HEAD(cyclic_list);
 
-	memset(&cb, 0, sizeof(cb));
 	spin_lock_irqsave(&schan->chan_lock, flags);
 	list_for_each_entry_safe(desc, _desc, &schan->ld_queue, node) {
 		struct dma_async_tx_descriptor *tx = &desc->async_tx;
@@ -365,8 +367,8 @@ static dma_async_tx_callback __ld_cleanup(struct shdma_chan *schan, bool all)
 		/* Call callback on the last chunk */
 		if (desc->mark == DESC_COMPLETED && tx->callback) {
 			desc->mark = DESC_WAITING;
-			dmaengine_desc_get_callback(tx, &cb);
 			callback = tx->callback;
+			param = tx->callback_param;
 			dev_dbg(schan->dev, "descriptor #%d@%p on %d callback\n",
 				tx->cookie, tx, schan->id);
 			BUG_ON(desc->chunks != 1);
@@ -428,7 +430,8 @@ static dma_async_tx_callback __ld_cleanup(struct shdma_chan *schan, bool all)
 
 	spin_unlock_irqrestore(&schan->chan_lock, flags);
 
-	dmaengine_desc_callback_invoke(&cb, NULL);
+	if (callback)
+		callback(param);
 
 	return callback;
 }
@@ -882,9 +885,9 @@ bool shdma_reset(struct shdma_dev *sdev)
 		/* Complete all  */
 		list_for_each_entry(sdesc, &dl, node) {
 			struct dma_async_tx_descriptor *tx = &sdesc->async_tx;
-
 			sdesc->mark = DESC_IDLE;
-			dmaengine_desc_get_callback_invoke(tx, NULL);
+			if (tx->callback)
+				tx->callback(tx->callback_param);
 		}
 
 		spin_lock(&schan->chan_lock);
@@ -1042,9 +1045,8 @@ EXPORT_SYMBOL(shdma_cleanup);
 
 static int __init shdma_enter(void)
 {
-	shdma_slave_used = kcalloc(DIV_ROUND_UP(slave_num, BITS_PER_LONG),
-				   sizeof(long),
-				   GFP_KERNEL);
+	shdma_slave_used = kzalloc(DIV_ROUND_UP(slave_num, BITS_PER_LONG) *
+				    sizeof(long), GFP_KERNEL);
 	if (!shdma_slave_used)
 		return -ENOMEM;
 	return 0;

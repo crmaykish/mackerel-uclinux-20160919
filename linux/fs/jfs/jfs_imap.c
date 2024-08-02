@@ -1,6 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *   Copyright (C) International Business Machines Corp., 2000-2004
+ *
+ *   This program is free software;  you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
+ *   the GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program;  if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 /*
@@ -195,7 +208,6 @@ int diUnmount(struct inode *ipimap, int mounterror)
 	 * free in-memory control structure
 	 */
 	kfree(imap);
-	JFS_IP(ipimap)->i_imap = NULL;
 
 	return (0);
 }
@@ -479,7 +491,13 @@ struct inode *diReadSpecial(struct super_block *sb, ino_t inum, int secondary)
 	/* release the page */
 	release_metapage(mp);
 
-	inode_fake_hash(ip);
+	/*
+	 * __mark_inode_dirty expects inodes to be hashed.  Since we don't
+	 * want special inodes in the fileset inode space, we make them
+	 * appear hashed, but do not put on any lists.  hlist_del()
+	 * will work fine and require no locking.
+	 */
+	hlist_add_fake(&ip->i_hash);
 
 	return (ip);
 }
@@ -516,7 +534,8 @@ void diWriteSpecial(struct inode *ip, int secondary)
 	/* read the page of fixed disk inode (AIT) in raw mode */
 	mp = read_metapage(ip, address << sbi->l2nbperpage, PSIZE, 1);
 	if (mp == NULL) {
-		jfs_err("diWriteSpecial: failed to read aggregate inode extent!");
+		jfs_err("diWriteSpecial: failed to read aggregate inode "
+			"extent!");
 		return;
 	}
 
@@ -1322,7 +1341,7 @@ diInitInode(struct inode *ip, int iagno, int ino, int extno, struct iag * iagp)
 int diAlloc(struct inode *pip, bool dir, struct inode *ip)
 {
 	int rc, ino, iagno, addext, extno, bitno, sword;
-	int nwords, rem, i, agno, dn_numag;
+	int nwords, rem, i, agno;
 	u32 mask, inosmap, extsmap;
 	struct inode *ipimap;
 	struct metapage *mp;
@@ -1358,9 +1377,6 @@ int diAlloc(struct inode *pip, bool dir, struct inode *ip)
 
 	/* get the ag number of this iag */
 	agno = BLKTOAG(JFS_IP(pip)->agstart, JFS_SBI(pip->i_sb));
-	dn_numag = JFS_SBI(pip->i_sb)->bmap->db_numag;
-	if (agno < 0 || agno > dn_numag)
-		return -EIO;
 
 	if (atomic_read(&JFS_SBI(pip->i_sb)->bmap->db_active[agno])) {
 		/*
@@ -2181,9 +2197,6 @@ static int diNewExt(struct inomap * imap, struct iag * iagp, int extno)
 	/* get the ag and iag numbers for this iag.
 	 */
 	agno = BLKTOAG(le64_to_cpu(iagp->agstart), sbi);
-	if (agno >= MAXAG || agno < 0)
-		return -EIO;
-
 	iagno = le32_to_cpu(iagp->iagnum);
 
 	/* check if this is the last free extent within the
@@ -3136,6 +3149,7 @@ static void copy_to_dinode(struct dinode * dip, struct inode *ip)
 	else
 		dip->di_gid = cpu_to_le32(from_kgid(&init_user_ns,
 						    jfs_ip->saved_gid));
+	jfs_get_inode_flags(jfs_ip);
 	/*
 	 * mode2 is only needed for storing the higher order bits.
 	 * Trust i_mode for the lower order ones

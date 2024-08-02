@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ST Random Number Generator Driver ST's Platforms
  *
@@ -6,13 +5,16 @@
  *         Lee Jones <lee.jones@linaro.org>
  *
  * Copyright (C) 2015 STMicroelectronics (R&D) Limited
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/hw_random.h>
 #include <linux/io.h>
-#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -42,6 +44,7 @@
 
 struct st_rng_data {
 	void __iomem	*base;
+	struct clk	*clk;
 	struct hwrng	ops;
 };
 
@@ -50,6 +53,9 @@ static int st_rng_read(struct hwrng *rng, void *data, size_t max, bool wait)
 	struct st_rng_data *ddata = (struct st_rng_data *)rng->priv;
 	u32 status;
 	int i;
+
+	if (max < sizeof(u16))
+		return -EINVAL;
 
 	/* Wait until FIFO is full - max 4uS*/
 	for (i = 0; i < ST_RNG_FILL_FIFO_TIMEOUT; i++) {
@@ -86,16 +92,23 @@ static int st_rng_probe(struct platform_device *pdev)
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
-	clk = devm_clk_get_enabled(&pdev->dev, NULL);
+	clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
+
+	ret = clk_prepare_enable(clk);
+	if (ret)
+		return ret;
 
 	ddata->ops.priv	= (unsigned long)ddata;
 	ddata->ops.read	= st_rng_read;
 	ddata->ops.name	= pdev->name;
 	ddata->base	= base;
+	ddata->clk	= clk;
 
-	ret = devm_hwrng_register(&pdev->dev, &ddata->ops);
+	dev_set_drvdata(&pdev->dev, ddata);
+
+	ret = hwrng_register(&ddata->ops);
 	if (ret) {
 		dev_err(&pdev->dev, "Failed to register HW RNG\n");
 		return ret;
@@ -106,7 +119,18 @@ static int st_rng_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id st_rng_match[] __maybe_unused = {
+static int st_rng_remove(struct platform_device *pdev)
+{
+	struct st_rng_data *ddata = dev_get_drvdata(&pdev->dev);
+
+	hwrng_unregister(&ddata->ops);
+
+	clk_disable_unprepare(ddata->clk);
+
+	return 0;
+}
+
+static const struct of_device_id st_rng_match[] = {
 	{ .compatible = "st,rng" },
 	{},
 };
@@ -118,6 +142,7 @@ static struct platform_driver st_rng_driver = {
 		.of_match_table = of_match_ptr(st_rng_match),
 	},
 	.probe = st_rng_probe,
+	.remove = st_rng_remove
 };
 
 module_platform_driver(st_rng_driver);

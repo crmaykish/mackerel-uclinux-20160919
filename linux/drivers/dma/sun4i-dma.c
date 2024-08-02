@@ -1,7 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2014 Emilio López
  * Emilio López <emilio@elopez.com.ar>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/bitmap.h>
@@ -234,7 +238,7 @@ static struct sun4i_dma_pchan *find_and_use_pchan(struct sun4i_dma_dev *priv,
 	}
 
 	spin_lock_irqsave(&priv->lock, flags);
-	for_each_clear_bit_from(i, priv->pchans_used, max) {
+	for_each_clear_bit_from(i, &priv->pchans_used, max) {
 		pchan = &pchans[i];
 		pchan->vchan = vchan;
 		set_bit(i, priv->pchans_used);
@@ -457,25 +461,25 @@ generate_ndma_promise(struct dma_chan *chan, dma_addr_t src, dma_addr_t dest,
 
 	/* Source burst */
 	ret = convert_burst(sconfig->src_maxburst);
-	if (ret < 0)
+	if (IS_ERR_VALUE(ret))
 		goto fail;
 	promise->cfg |= SUN4I_DMA_CFG_SRC_BURST_LENGTH(ret);
 
 	/* Destination burst */
 	ret = convert_burst(sconfig->dst_maxburst);
-	if (ret < 0)
+	if (IS_ERR_VALUE(ret))
 		goto fail;
 	promise->cfg |= SUN4I_DMA_CFG_DST_BURST_LENGTH(ret);
 
 	/* Source bus width */
 	ret = convert_buswidth(sconfig->src_addr_width);
-	if (ret < 0)
+	if (IS_ERR_VALUE(ret))
 		goto fail;
 	promise->cfg |= SUN4I_DMA_CFG_SRC_DATA_WIDTH(ret);
 
 	/* Destination bus width */
 	ret = convert_buswidth(sconfig->dst_addr_width);
-	if (ret < 0)
+	if (IS_ERR_VALUE(ret))
 		goto fail;
 	promise->cfg |= SUN4I_DMA_CFG_DST_DATA_WIDTH(ret);
 
@@ -514,25 +518,25 @@ generate_ddma_promise(struct dma_chan *chan, dma_addr_t src, dma_addr_t dest,
 
 	/* Source burst */
 	ret = convert_burst(sconfig->src_maxburst);
-	if (ret < 0)
+	if (IS_ERR_VALUE(ret))
 		goto fail;
 	promise->cfg |= SUN4I_DMA_CFG_SRC_BURST_LENGTH(ret);
 
 	/* Destination burst */
 	ret = convert_burst(sconfig->dst_maxburst);
-	if (ret < 0)
+	if (IS_ERR_VALUE(ret))
 		goto fail;
 	promise->cfg |= SUN4I_DMA_CFG_DST_BURST_LENGTH(ret);
 
 	/* Source bus width */
 	ret = convert_buswidth(sconfig->src_addr_width);
-	if (ret < 0)
+	if (IS_ERR_VALUE(ret))
 		goto fail;
 	promise->cfg |= SUN4I_DMA_CFG_SRC_DATA_WIDTH(ret);
 
 	/* Destination bus width */
 	ret = convert_buswidth(sconfig->dst_addr_width);
-	if (ret < 0)
+	if (IS_ERR_VALUE(ret))
 		goto fail;
 	promise->cfg |= SUN4I_DMA_CFG_DST_DATA_WIDTH(ret);
 
@@ -1132,8 +1136,10 @@ static int sun4i_dma_probe(struct platform_device *pdev)
 		return PTR_ERR(priv->base);
 
 	priv->irq = platform_get_irq(pdev, 0);
-	if (priv->irq < 0)
+	if (priv->irq < 0) {
+		dev_err(&pdev->dev, "Cannot claim IRQ\n");
 		return priv->irq;
+	}
 
 	priv->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(priv->clk)) {
@@ -1265,7 +1271,6 @@ static const struct of_device_id sun4i_dma_match[] = {
 	{ .compatible = "allwinner,sun4i-a10-dma" },
 	{ /* sentinel */ },
 };
-MODULE_DEVICE_TABLE(of, sun4i_dma_match);
 
 static struct platform_driver sun4i_dma_driver = {
 	.probe	= sun4i_dma_probe,

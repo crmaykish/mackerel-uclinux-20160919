@@ -1,13 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) Maxime Coquelin 2015
  * Author:  Maxime Coquelin <mcoquelin.stm32@gmail.com>
+ * License terms:  GNU General Public License (GPL), version 2
  */
 
 #include <linux/kernel.h>
 #include <linux/clocksource.h>
 #include <linux/clockchips.h>
-#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/clk.h>
@@ -22,7 +21,7 @@
 
 #define SYSTICK_LOAD_RELOAD_MASK 0x00FFFFFF
 
-static int __init system_timer_of_register(struct device_node *np)
+static void __init system_timer_of_register(struct device_node *np)
 {
 	struct clk *clk = NULL;
 	void __iomem *base;
@@ -32,26 +31,22 @@ static int __init system_timer_of_register(struct device_node *np)
 	base = of_iomap(np, 0);
 	if (!base) {
 		pr_warn("system-timer: invalid base address\n");
-		return -ENXIO;
+		return;
 	}
 
 	ret = of_property_read_u32(np, "clock-frequency", &rate);
 	if (ret) {
 		clk = of_clk_get(np, 0);
-		if (IS_ERR(clk)) {
-			ret = PTR_ERR(clk);
+		if (IS_ERR(clk))
 			goto out_unmap;
-		}
 
 		ret = clk_prepare_enable(clk);
 		if (ret)
 			goto out_clk_put;
 
 		rate = clk_get_rate(clk);
-		if (!rate) {
-			ret = -EINVAL;
+		if (!rate)
 			goto out_clk_disable;
-		}
 	}
 
 	writel_relaxed(SYSTICK_LOAD_RELOAD_MASK, base + SYST_RVR);
@@ -69,7 +64,7 @@ static int __init system_timer_of_register(struct device_node *np)
 
 	pr_info("ARM System timer initialized as clocksource\n");
 
-	return 0;
+	return;
 
 out_clk_disable:
 	clk_disable_unprepare(clk);
@@ -78,9 +73,7 @@ out_clk_put:
 out_unmap:
 	iounmap(base);
 	pr_warn("ARM System timer register failed (%d)\n", ret);
-
-	return ret;
 }
 
-TIMER_OF_DECLARE(arm_systick, "arm,armv7m-systick",
+CLOCKSOURCE_OF_DECLARE(arm_systick, "arm,armv7m-systick",
 			system_timer_of_register);

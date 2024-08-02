@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *	stacktrace.c : stacktracing APIs needed by rest of kernel
  *			(wrappers over ARC dwarf based unwinder)
  *
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  *  vineetg: aug 2009
  *  -Implemented CONFIG_STACKTRACE APIs, primarily save_stack_trace_tsk( )
@@ -25,8 +28,6 @@
 #include <linux/export.h>
 #include <linux/stacktrace.h>
 #include <linux/kallsyms.h>
-#include <linux/sched/debug.h>
-
 #include <asm/arcregs.h>
 #include <asm/unwind.h>
 #include <asm/switch_to.h>
@@ -38,15 +39,15 @@
 
 #ifdef CONFIG_ARC_DW2_UNWIND
 
-static int
-seed_unwind_frame_info(struct task_struct *tsk, struct pt_regs *regs,
-		       struct unwind_frame_info *frame_info)
+static void seed_unwind_frame_info(struct task_struct *tsk,
+				   struct pt_regs *regs,
+				   struct unwind_frame_info *frame_info)
 {
 	/*
 	 * synchronous unwinding (e.g. dump_stack)
 	 *  - uses current values of SP and friends
 	 */
-	if (regs == NULL && (tsk == NULL || tsk == current)) {
+	if (tsk == NULL && regs == NULL) {
 		unsigned long fp, sp, blink, ret;
 		frame_info->task = current;
 
@@ -65,14 +66,10 @@ seed_unwind_frame_info(struct task_struct *tsk, struct pt_regs *regs,
 		frame_info->call_frame = 0;
 	} else if (regs == NULL) {
 		/*
-		 * Asynchronous unwinding of a likely sleeping task
-		 *  - first ensure it is actually sleeping
-		 *  - if so, it will be in __switch_to, kernel mode SP of task
-		 *    is safe-kept and BLINK at a well known location in there
+		 * Asynchronous unwinding of sleeping task
+		 *  - Gets SP etc from task's pt_regs (saved bottom of kernel
+		 *    mode stack of task)
 		 */
-
-		if (tsk->state == TASK_RUNNING)
-			return -1;
 
 		frame_info->task = tsk;
 
@@ -107,8 +104,6 @@ seed_unwind_frame_info(struct task_struct *tsk, struct pt_regs *regs,
 		frame_info->regs.r63 = regs->ret;
 		frame_info->call_frame = 0;
 	}
-
-	return 0;
 }
 
 #endif
@@ -118,12 +113,11 @@ arc_unwind_core(struct task_struct *tsk, struct pt_regs *regs,
 		int (*consumer_fn) (unsigned int, void *), void *arg)
 {
 #ifdef CONFIG_ARC_DW2_UNWIND
-	int ret = 0, cnt = 0;
+	int ret = 0;
 	unsigned int address;
 	struct unwind_frame_info frame_info;
 
-	if (seed_unwind_frame_info(tsk, regs, &frame_info))
-		return 0;
+	seed_unwind_frame_info(tsk, regs, &frame_info);
 
 	while (1) {
 		address = UNW_PC(&frame_info);
@@ -139,11 +133,6 @@ arc_unwind_core(struct task_struct *tsk, struct pt_regs *regs,
 			break;
 
 		frame_info.regs.r63 = frame_info.regs.r31;
-
-		if (cnt++ > 128) {
-			printk("unwinder looping too long, aborting !\n");
-			return 0;
-		}
 	}
 
 	return address;		/* return the last address it saw */
@@ -153,7 +142,7 @@ arc_unwind_core(struct task_struct *tsk, struct pt_regs *regs,
 	 * prelogue is setup (callee regs saved and then fp set and not other
 	 * way around
 	 */
-	pr_warn_once("CONFIG_ARC_DW2_UNWIND needs to be enabled\n");
+	pr_warn("CONFIG_ARC_DW2_UNWIND needs to be enabled\n");
 	return 0;
 
 #endif
@@ -172,7 +161,7 @@ arc_unwind_core(struct task_struct *tsk, struct pt_regs *regs,
  */
 static int __print_sym(unsigned int address, void *unused)
 {
-	printk("  %pS\n", (void *)address);
+	__print_symbol("  %s\n", address);
 	return 0;
 }
 
@@ -243,7 +232,7 @@ void show_stack(struct task_struct *tsk, unsigned long *sp)
 }
 
 /* Another API expected by schedular, shows up in "ps" as Wait Channel
- * Of course just returning schedule( ) would be pointless so unwind until
+ * Ofcourse just returning schedule( ) would be pointless so unwind until
  * the function is not in schedular code
  */
 unsigned int get_wchan(struct task_struct *tsk)

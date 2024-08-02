@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *
  * Optimized version of the copy_user() routine.
@@ -31,7 +30,6 @@
  */
 
 #include <asm/asmmacro.h>
-#include <asm/export.h>
 
 //
 // Tuneable parameters
@@ -610,4 +608,3 @@ GLOBAL_ENTRY(__copy_user)
 	mov ar.pfs=saved_pfs
 	br.ret.sptk.many rp
 END(__copy_user)
-EXPORT_SYMBOL(__copy_user)

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Controls for M-5MOLS 8M Pixel camera sensor with ISP
  *
@@ -7,6 +6,11 @@
  *
  * Copyright (C) 2009 Samsung Electronics Co., Ltd.
  * Author: Dongsoo Nathaniel Kim <dongsoo45.kim@samsung.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/i2c.h>
@@ -122,7 +126,6 @@ static struct m5mols_scenemode m5mols_default_scenemode[] = {
 
 /**
  * m5mols_do_scenemode() - Change current scenemode
- * @info: M-5MOLS driver data structure
  * @mode:	Desired mode of the scenemode
  *
  * WARNING: The execution order is important. Do not change the order.
@@ -402,7 +405,7 @@ static int m5mols_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 	struct v4l2_subdev *sd = to_sd(ctrl);
 	struct m5mols_info *info = to_m5mols(sd);
 	int ret = 0;
-	u8 status = REG_ISO_AUTO;
+	u8 status;
 
 	v4l2_dbg(1, m5mols_debug, sd, "%s: ctrl: %s (%d)\n",
 		 __func__, ctrl->name, info->isp_ready);

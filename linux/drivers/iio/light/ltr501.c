@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ltr501.c - Support for Lite-On LTR501 ambient light and proximity sensor
  *
  * Copyright 2014 Peter Meerwald <pmeerw@pmeerw.net>
+ *
+ * This file is subject to the terms and conditions of version 2 of
+ * the GNU General Public License.  See the file COPYING in the main
+ * directory of this archive for more details.
  *
  * 7-bit I2C slave address 0x23
  *
@@ -32,12 +35,9 @@
 #define LTR501_PART_ID 0x86
 #define LTR501_MANUFAC_ID 0x87
 #define LTR501_ALS_DATA1 0x88 /* 16-bit, little endian */
-#define LTR501_ALS_DATA1_UPPER 0x89 /* upper 8 bits of LTR501_ALS_DATA1 */
 #define LTR501_ALS_DATA0 0x8a /* 16-bit, little endian */
-#define LTR501_ALS_DATA0_UPPER 0x8b /* upper 8 bits of LTR501_ALS_DATA0 */
 #define LTR501_ALS_PS_STATUS 0x8c
 #define LTR501_PS_DATA 0x8d /* 16-bit, little endian */
-#define LTR501_PS_DATA_UPPER 0x8e /* upper 8 bits of LTR501_PS_DATA */
 #define LTR501_INTR 0x8f /* output mode, polarity, mode */
 #define LTR501_PS_THRESH_UP 0x90 /* 11 bit, ps upper threshold */
 #define LTR501_PS_THRESH_LOW 0x92 /* 11 bit, ps lower threshold */
@@ -74,9 +74,9 @@ static const int int_time_mapping[] = {100000, 50000, 200000, 400000};
 static const struct reg_field reg_field_it =
 				REG_FIELD(LTR501_ALS_MEAS_RATE, 3, 4);
 static const struct reg_field reg_field_als_intr =
-				REG_FIELD(LTR501_INTR, 1, 1);
-static const struct reg_field reg_field_ps_intr =
 				REG_FIELD(LTR501_INTR, 0, 0);
+static const struct reg_field reg_field_ps_intr =
+				REG_FIELD(LTR501_INTR, 1, 1);
 static const struct reg_field reg_field_als_rate =
 				REG_FIELD(LTR501_ALS_MEAS_RATE, 0, 2);
 static const struct reg_field reg_field_ps_rate =
@@ -180,7 +180,7 @@ static const struct ltr501_samp_table ltr501_ps_samp_table[] = {
 			{500000, 2000000}
 };
 
-static int ltr501_match_samp_freq(const struct ltr501_samp_table *tab,
+static unsigned int ltr501_match_samp_freq(const struct ltr501_samp_table *tab,
 					   int len, int val, int val2)
 {
 	int i, freq;
@@ -408,19 +408,18 @@ static int ltr501_read_als(struct ltr501_data *data, __le16 buf[2])
 
 static int ltr501_read_ps(struct ltr501_data *data)
 {
-	__le16 status;
-	int ret;
+	int ret, status;
 
 	ret = ltr501_drdy(data, LTR501_STATUS_PS_RDY);
 	if (ret < 0)
 		return ret;
 
 	ret = regmap_bulk_read(data->regmap, LTR501_PS_DATA,
-			       &status, sizeof(status));
+			       &status, 2);
 	if (ret < 0)
 		return ret;
 
-	return le16_to_cpu(status);
+	return status;
 }
 
 static int ltr501_read_intr_prst(struct ltr501_data *data,
@@ -632,16 +631,14 @@ static int ltr501_read_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_PROCESSED:
+		if (iio_buffer_enabled(indio_dev))
+			return -EBUSY;
+
 		switch (chan->type) {
 		case IIO_LIGHT:
-			ret = iio_device_claim_direct_mode(indio_dev);
-			if (ret)
-				return ret;
-
 			mutex_lock(&data->lock_als);
 			ret = ltr501_read_als(data, buf);
 			mutex_unlock(&data->lock_als);
-			iio_device_release_direct_mode(indio_dev);
 			if (ret < 0)
 				return ret;
 			*val = ltr501_calculate_lux(le16_to_cpu(buf[1]),
@@ -651,9 +648,8 @@ static int ltr501_read_raw(struct iio_dev *indio_dev,
 			return -EINVAL;
 		}
 	case IIO_CHAN_INFO_RAW:
-		ret = iio_device_claim_direct_mode(indio_dev);
-		if (ret)
-			return ret;
+		if (iio_buffer_enabled(indio_dev))
+			return -EBUSY;
 
 		switch (chan->type) {
 		case IIO_INTENSITY:
@@ -661,28 +657,21 @@ static int ltr501_read_raw(struct iio_dev *indio_dev,
 			ret = ltr501_read_als(data, buf);
 			mutex_unlock(&data->lock_als);
 			if (ret < 0)
-				break;
+				return ret;
 			*val = le16_to_cpu(chan->address == LTR501_ALS_DATA1 ?
 					   buf[0] : buf[1]);
-			ret = IIO_VAL_INT;
-			break;
+			return IIO_VAL_INT;
 		case IIO_PROXIMITY:
 			mutex_lock(&data->lock_ps);
 			ret = ltr501_read_ps(data);
 			mutex_unlock(&data->lock_ps);
 			if (ret < 0)
-				break;
+				return ret;
 			*val = ret & LTR501_PS_DATA_MASK;
-			ret = IIO_VAL_INT;
-			break;
+			return IIO_VAL_INT;
 		default:
-			ret = -EINVAL;
-			break;
+			return -EINVAL;
 		}
-
-		iio_device_release_direct_mode(indio_dev);
-		return ret;
-
 	case IIO_CHAN_INFO_SCALE:
 		switch (chan->type) {
 		case IIO_INTENSITY:
@@ -740,9 +729,8 @@ static int ltr501_write_raw(struct iio_dev *indio_dev,
 	int i, ret, freq_val, freq_val2;
 	struct ltr501_chip_info *info = data->chip_info;
 
-	ret = iio_device_claim_direct_mode(indio_dev);
-	if (ret)
-		return ret;
+	if (iio_buffer_enabled(indio_dev))
+		return -EBUSY;
 
 	switch (mask) {
 	case IIO_CHAN_INFO_SCALE:
@@ -751,105 +739,85 @@ static int ltr501_write_raw(struct iio_dev *indio_dev,
 			i = ltr501_get_gain_index(info->als_gain,
 						  info->als_gain_tbl_size,
 						  val, val2);
-			if (i < 0) {
-				ret = -EINVAL;
-				break;
-			}
+			if (i < 0)
+				return -EINVAL;
 
 			data->als_contr &= ~info->als_gain_mask;
 			data->als_contr |= i << info->als_gain_shift;
 
-			ret = regmap_write(data->regmap, LTR501_ALS_CONTR,
-					   data->als_contr);
-			break;
+			return regmap_write(data->regmap, LTR501_ALS_CONTR,
+					    data->als_contr);
 		case IIO_PROXIMITY:
 			i = ltr501_get_gain_index(info->ps_gain,
 						  info->ps_gain_tbl_size,
 						  val, val2);
-			if (i < 0) {
-				ret = -EINVAL;
-				break;
-			}
+			if (i < 0)
+				return -EINVAL;
 			data->ps_contr &= ~LTR501_CONTR_PS_GAIN_MASK;
 			data->ps_contr |= i << LTR501_CONTR_PS_GAIN_SHIFT;
 
-			ret = regmap_write(data->regmap, LTR501_PS_CONTR,
-					   data->ps_contr);
-			break;
+			return regmap_write(data->regmap, LTR501_PS_CONTR,
+					    data->ps_contr);
 		default:
-			ret = -EINVAL;
-			break;
+			return -EINVAL;
 		}
-		break;
-
 	case IIO_CHAN_INFO_INT_TIME:
 		switch (chan->type) {
 		case IIO_INTENSITY:
-			if (val != 0) {
-				ret = -EINVAL;
-				break;
-			}
+			if (val != 0)
+				return -EINVAL;
 			mutex_lock(&data->lock_als);
-			ret = ltr501_set_it_time(data, val2);
+			i = ltr501_set_it_time(data, val2);
 			mutex_unlock(&data->lock_als);
-			break;
+			return i;
 		default:
-			ret = -EINVAL;
-			break;
+			return -EINVAL;
 		}
-		break;
-
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		switch (chan->type) {
 		case IIO_INTENSITY:
 			ret = ltr501_als_read_samp_freq(data, &freq_val,
 							&freq_val2);
 			if (ret < 0)
-				break;
+				return ret;
 
 			ret = ltr501_als_write_samp_freq(data, val, val2);
 			if (ret < 0)
-				break;
+				return ret;
 
 			/* update persistence count when changing frequency */
 			ret = ltr501_write_intr_prst(data, chan->type,
 						     0, data->als_period);
 
 			if (ret < 0)
-				ret = ltr501_als_write_samp_freq(data, freq_val,
-								 freq_val2);
-			break;
+				return ltr501_als_write_samp_freq(data,
+								  freq_val,
+								  freq_val2);
+			return ret;
 		case IIO_PROXIMITY:
 			ret = ltr501_ps_read_samp_freq(data, &freq_val,
 						       &freq_val2);
 			if (ret < 0)
-				break;
+				return ret;
 
 			ret = ltr501_ps_write_samp_freq(data, val, val2);
 			if (ret < 0)
-				break;
+				return ret;
 
 			/* update persistence count when changing frequency */
 			ret = ltr501_write_intr_prst(data, chan->type,
 						     0, data->ps_period);
 
 			if (ret < 0)
-				ret = ltr501_ps_write_samp_freq(data, freq_val,
-								freq_val2);
-			break;
+				return ltr501_ps_write_samp_freq(data,
+								 freq_val,
+								 freq_val2);
+			return ret;
 		default:
-			ret = -EINVAL;
-			break;
+			return -EINVAL;
 		}
-		break;
-
-	default:
-		ret = -EINVAL;
-		break;
 	}
-
-	iio_device_release_direct_mode(indio_dev);
-	return ret;
+	return -EINVAL;
 }
 
 static int ltr501_read_thresh(struct iio_dev *indio_dev,
@@ -1159,6 +1127,7 @@ static const struct iio_info ltr501_info_no_irq = {
 	.read_raw = ltr501_read_raw,
 	.write_raw = ltr501_write_raw,
 	.attrs = &ltr501_attribute_group,
+	.driver_module = THIS_MODULE,
 };
 
 static const struct iio_info ltr501_info = {
@@ -1169,12 +1138,14 @@ static const struct iio_info ltr501_info = {
 	.write_event_value	= &ltr501_write_event,
 	.read_event_config	= &ltr501_read_event_config,
 	.write_event_config	= &ltr501_write_event_config,
+	.driver_module = THIS_MODULE,
 };
 
 static const struct iio_info ltr301_info_no_irq = {
 	.read_raw = ltr501_read_raw,
 	.write_raw = ltr501_write_raw,
 	.attrs = &ltr301_attribute_group,
+	.driver_module = THIS_MODULE,
 };
 
 static const struct iio_info ltr301_info = {
@@ -1185,6 +1156,7 @@ static const struct iio_info ltr301_info = {
 	.write_event_value	= &ltr501_write_event,
 	.read_event_config	= &ltr501_read_event_config,
 	.write_event_config	= &ltr501_write_event_config,
+	.driver_module = THIS_MODULE,
 };
 
 static struct ltr501_chip_info ltr501_chip_info_tbl[] = {
@@ -1208,7 +1180,7 @@ static struct ltr501_chip_info ltr501_chip_info_tbl[] = {
 		.als_gain_tbl_size = ARRAY_SIZE(ltr559_als_gain_tbl),
 		.ps_gain = ltr559_ps_gain_tbl,
 		.ps_gain_tbl_size = ARRAY_SIZE(ltr559_ps_gain_tbl),
-		.als_mode_active = BIT(0),
+		.als_mode_active = BIT(1),
 		.als_gain_mask = BIT(2) | BIT(3) | BIT(4),
 		.als_gain_shift = 2,
 		.info = &ltr501_info,
@@ -1246,16 +1218,13 @@ static irqreturn_t ltr501_trigger_handler(int irq, void *p)
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct ltr501_data *data = iio_priv(indio_dev);
-	struct {
-		u16 channels[3];
-		s64 ts __aligned(8);
-	} scan;
+	u16 buf[8];
 	__le16 als_buf[2];
 	u8 mask = 0;
 	int j = 0;
 	int ret, psdata;
 
-	memset(&scan, 0, sizeof(scan));
+	memset(buf, 0, sizeof(buf));
 
 	/* figure out which data needs to be ready */
 	if (test_bit(0, indio_dev->active_scan_mask) ||
@@ -1272,11 +1241,11 @@ static irqreturn_t ltr501_trigger_handler(int irq, void *p)
 		ret = regmap_bulk_read(data->regmap, LTR501_ALS_DATA1,
 				       (u8 *)als_buf, sizeof(als_buf));
 		if (ret < 0)
-			goto done;
+			return ret;
 		if (test_bit(0, indio_dev->active_scan_mask))
-			scan.channels[j++] = le16_to_cpu(als_buf[1]);
+			buf[j++] = le16_to_cpu(als_buf[1]);
 		if (test_bit(1, indio_dev->active_scan_mask))
-			scan.channels[j++] = le16_to_cpu(als_buf[0]);
+			buf[j++] = le16_to_cpu(als_buf[0]);
 	}
 
 	if (mask & LTR501_STATUS_PS_RDY) {
@@ -1284,11 +1253,10 @@ static irqreturn_t ltr501_trigger_handler(int irq, void *p)
 				       &psdata, 2);
 		if (ret < 0)
 			goto done;
-		scan.channels[j++] = psdata & LTR501_PS_DATA_MASK;
+		buf[j++] = psdata & LTR501_PS_DATA_MASK;
 	}
 
-	iio_push_to_buffers_with_timestamp(indio_dev, &scan,
-					   iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_timestamp(indio_dev, buf, iio_get_time_ns());
 
 done:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -1314,14 +1282,14 @@ static irqreturn_t ltr501_interrupt_handler(int irq, void *private)
 			       IIO_UNMOD_EVENT_CODE(IIO_INTENSITY, 0,
 						    IIO_EV_TYPE_THRESH,
 						    IIO_EV_DIR_EITHER),
-			       iio_get_time_ns(indio_dev));
+			       iio_get_time_ns());
 
 	if (status & LTR501_STATUS_PS_INTR)
 		iio_push_event(indio_dev,
 			       IIO_UNMOD_EVENT_CODE(IIO_PROXIMITY, 0,
 						    IIO_EV_TYPE_THRESH,
 						    IIO_EV_DIR_EITHER),
-			       iio_get_time_ns(indio_dev));
+			       iio_get_time_ns());
 
 	return IRQ_HANDLED;
 }
@@ -1357,12 +1325,9 @@ static bool ltr501_is_volatile_reg(struct device *dev, unsigned int reg)
 {
 	switch (reg) {
 	case LTR501_ALS_DATA1:
-	case LTR501_ALS_DATA1_UPPER:
 	case LTR501_ALS_DATA0:
-	case LTR501_ALS_DATA0_UPPER:
 	case LTR501_ALS_PS_STATUS:
 	case LTR501_PS_DATA:
-	case LTR501_PS_DATA_UPPER:
 		return true;
 	default:
 		return false;

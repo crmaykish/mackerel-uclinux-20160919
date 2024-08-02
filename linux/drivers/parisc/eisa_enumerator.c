@@ -1,8 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * eisa_enumerator.c - provide support for EISA adapters in PA-RISC machines
  *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
+ *
  * Copyright (c) 2002 Daniel Engstrom <5116@telia.com>
+ *
  */
 
 #include <linux/ioport.h>
@@ -10,7 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/byteorder.h>
 
 #include <asm/eisa_bus.h>
@@ -86,14 +91,14 @@ static int configure_memory(const unsigned char *buf,
 	for (i=0;i<HPEE_MEMORY_MAX_ENT;i++) {
 		c = get_8(buf+len);
 		
-		if (NULL != (res = kzalloc(sizeof(struct resource), GFP_KERNEL))) {
+		if (NULL != (res = kmalloc(sizeof(struct resource), GFP_KERNEL))) {
 			int result;
 			
 			res->name = name;
 			res->start = mem_parent->start + get_24(buf+len+2);
 			res->end = res->start + get_16(buf+len+5)*1024;
 			res->flags = IORESOURCE_MEM;
-			pr_cont("memory %pR ", res);
+			printk("memory %lx-%lx ", (unsigned long)res->start, (unsigned long)res->end);
 			result = request_resource(mem_parent, res);
 			if (result < 0) {
 				printk(KERN_ERR "EISA Enumerator: failed to claim EISA Bus address space!\n");
@@ -123,7 +128,7 @@ static int configure_irq(const unsigned char *buf)
 	for (i=0;i<HPEE_IRQ_MAX_ENT;i++) {
 		c = get_8(buf+len);
 		
-		pr_cont("IRQ %d ", c & HPEE_IRQ_CHANNEL_MASK);
+		printk("IRQ %d ", c & HPEE_IRQ_CHANNEL_MASK);
 		if (c & HPEE_IRQ_TRIG_LEVEL) {
 			eisa_make_irq_level(c & HPEE_IRQ_CHANNEL_MASK);
 		} else {
@@ -153,7 +158,7 @@ static int configure_dma(const unsigned char *buf)
 	
 	for (i=0;i<HPEE_DMA_MAX_ENT;i++) {
 		c = get_8(buf+len);
-		pr_cont("DMA %d ", c&HPEE_DMA_CHANNEL_MASK);
+		printk("DMA %d ", c&HPEE_DMA_CHANNEL_MASK);
 		/* fixme: maybe initialize the dma channel withthe timing ? */
 		len+=2;      
 		if (!(c & HPEE_DMA_MORE)) {
@@ -178,12 +183,12 @@ static int configure_port(const unsigned char *buf, struct resource *io_parent,
 	for (i=0;i<HPEE_PORT_MAX_ENT;i++) {
 		c = get_8(buf+len);
 		
-		if (NULL != (res = kzalloc(sizeof(struct resource), GFP_KERNEL))) {
+		if (NULL != (res = kmalloc(sizeof(struct resource), GFP_KERNEL))) {
 			res->name = board;
 			res->start = get_16(buf+len+1);
 			res->end = get_16(buf+len+1)+(c&HPEE_PORT_SIZE_MASK)+1;
 			res->flags = IORESOURCE_IO;
-			pr_cont("ioports %pR ", res);
+			printk("ioports %lx-%lx ", (unsigned long)res->start, (unsigned long)res->end);
 			result = request_resource(io_parent, res);
 			if (result < 0) {
 				printk(KERN_ERR "EISA Enumerator: failed to claim EISA Bus address space!\n");
@@ -401,7 +406,7 @@ static int parse_slot_config(int slot,
 		}
 		pos = p0 + function_len;
 	}
-	pr_cont("\n");
+	printk("\n");
 	if (!id_string_used) {
 		kfree(board);
 	}

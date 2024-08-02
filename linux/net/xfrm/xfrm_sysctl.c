@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/sysctl.h>
 #include <linux/slab.h>
 #include <net/net_namespace.h>
@@ -18,13 +17,13 @@ static struct ctl_table xfrm_table[] = {
 		.procname	= "xfrm_aevent_etime",
 		.maxlen		= sizeof(u32),
 		.mode		= 0644,
-		.proc_handler	= proc_douintvec
+		.proc_handler	= proc_dointvec
 	},
 	{
 		.procname	= "xfrm_aevent_rseqth",
 		.maxlen		= sizeof(u32),
 		.mode		= 0644,
-		.proc_handler	= proc_douintvec
+		.proc_handler	= proc_dointvec
 	},
 	{
 		.procname	= "xfrm_larval_drop",

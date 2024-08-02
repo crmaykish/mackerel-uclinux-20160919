@@ -1,10 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * S3C24XX IRQ handling
  *
  * Copyright (c) 2003-2004 Simtec Electronics
  *	Ben Dooks <ben@simtec.co.uk>
  * Copyright (c) 2012 Heiko Stuebner <heiko@sntech.de>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
 */
 
 #include <linux/init.h>
@@ -49,7 +58,7 @@ struct s3c_irq_data {
 };
 
 /*
- * Structure holding the controller data
+ * Sructure holding the controller data
  * @reg_pending		register holding pending irqs
  * @reg_intpnd		special register intpnd in main intc
  * @reg_mask		mask register
@@ -83,9 +92,9 @@ static void s3c_irq_mask(struct irq_data *data)
 	unsigned long mask;
 	unsigned int irqno;
 
-	mask = readl_relaxed(intc->reg_mask);
+	mask = __raw_readl(intc->reg_mask);
 	mask |= (1UL << irq_data->offset);
-	writel_relaxed(mask, intc->reg_mask);
+	__raw_writel(mask, intc->reg_mask);
 
 	if (parent_intc) {
 		parent_data = &parent_intc->irqs[irq_data->parent_irq];
@@ -110,9 +119,9 @@ static void s3c_irq_unmask(struct irq_data *data)
 	unsigned long mask;
 	unsigned int irqno;
 
-	mask = readl_relaxed(intc->reg_mask);
+	mask = __raw_readl(intc->reg_mask);
 	mask &= ~(1UL << irq_data->offset);
-	writel_relaxed(mask, intc->reg_mask);
+	__raw_writel(mask, intc->reg_mask);
 
 	if (parent_intc) {
 		irqno = irq_find_mapping(parent_intc->domain,
@@ -127,9 +136,9 @@ static inline void s3c_irq_ack(struct irq_data *data)
 	struct s3c_irq_intc *intc = irq_data->intc;
 	unsigned long bitval = 1UL << irq_data->offset;
 
-	writel_relaxed(bitval, intc->reg_pending);
+	__raw_writel(bitval, intc->reg_pending);
 	if (intc->reg_intpnd)
-		writel_relaxed(bitval, intc->reg_intpnd);
+		__raw_writel(bitval, intc->reg_intpnd);
 }
 
 static int s3c_irq_type(struct irq_data *data, unsigned int type)
@@ -147,7 +156,7 @@ static int s3c_irq_type(struct irq_data *data, unsigned int type)
 		irq_set_handler(data->irq, handle_level_irq);
 		break;
 	default:
-		pr_err("No such irq type %d\n", type);
+		pr_err("No such irq type %d", type);
 		return -EINVAL;
 	}
 
@@ -163,9 +172,9 @@ static int s3c_irqext_type_set(void __iomem *gpcon_reg,
 	unsigned long newvalue = 0, value;
 
 	/* Set the GPIO to external interrupt mode */
-	value = readl_relaxed(gpcon_reg);
+	value = __raw_readl(gpcon_reg);
 	value = (value & ~(3 << gpcon_offset)) | (0x02 << gpcon_offset);
-	writel_relaxed(value, gpcon_reg);
+	__raw_writel(value, gpcon_reg);
 
 	/* Set the external interrupt to pointed trigger type */
 	switch (type)
@@ -195,13 +204,13 @@ static int s3c_irqext_type_set(void __iomem *gpcon_reg,
 			break;
 
 		default:
-			pr_err("No such irq type %d\n", type);
+			pr_err("No such irq type %d", type);
 			return -EINVAL;
 	}
 
-	value = readl_relaxed(extint_reg);
+	value = __raw_readl(extint_reg);
 	value = (value & ~(7 << extint_offset)) | (newvalue << extint_offset);
-	writel_relaxed(value, extint_reg);
+	__raw_writel(value, extint_reg);
 
 	return 0;
 }
@@ -241,7 +250,7 @@ static int s3c_irqext0_type(struct irq_data *data, unsigned int type)
 	void __iomem *gpcon_reg;
 	unsigned long gpcon_offset, extint_offset;
 
-	if (data->hwirq <= 3) {
+	if ((data->hwirq >= 0) && (data->hwirq <= 3)) {
 		gpcon_reg = S3C2410_GPFCON;
 		extint_reg = S3C24XX_EXTINT0;
 		gpcon_offset = (data->hwirq) * 2;
@@ -306,8 +315,8 @@ static void s3c_irq_demux(struct irq_desc *desc)
 
 	chained_irq_enter(chip, desc);
 
-	src = readl_relaxed(sub_intc->reg_pending);
-	msk = readl_relaxed(sub_intc->reg_mask);
+	src = __raw_readl(sub_intc->reg_pending);
+	msk = __raw_readl(sub_intc->reg_mask);
 
 	src &= ~msk;
 	src &= irq_data->sub_bits;
@@ -328,7 +337,7 @@ static inline int s3c24xx_handle_intc(struct s3c_irq_intc *intc,
 	int pnd;
 	int offset;
 
-	pnd = readl_relaxed(intc->reg_intpnd);
+	pnd = __raw_readl(intc->reg_intpnd);
 	if (!pnd)
 		return false;
 
@@ -343,7 +352,7 @@ static inline int s3c24xx_handle_intc(struct s3c_irq_intc *intc,
 	 *
 	 * Thanks to Klaus, Shannon, et al for helping to debug this problem
 	 */
-	offset = readl_relaxed(intc->reg_intpnd + 4);
+	offset = __raw_readl(intc->reg_intpnd + 4);
 
 	/* Find the bit manually, when the offset is wrong.
 	 * The pending register only ever contains the one bit of the next
@@ -359,25 +368,11 @@ static inline int s3c24xx_handle_intc(struct s3c_irq_intc *intc,
 asmlinkage void __exception_irq_entry s3c24xx_handle_irq(struct pt_regs *regs)
 {
 	do {
-		/*
-		 * For platform based machines, neither ERR nor NULL can happen here.
-		 * The s3c24xx_handle_irq() will be set as IRQ handler iff this succeeds:
-		 *
-		 *    s3c_intc[0] = s3c24xx_init_intc()
-		 *
-		 * If this fails, the next calls to s3c24xx_init_intc() won't be executed.
-		 *
-		 * For DT machine, s3c_init_intc_of() could set the IRQ handler without
-		 * setting s3c_intc[0] only if it was called with num_ctrl=0. There is no
-		 * such code path, so again the s3c_intc[0] will have a valid pointer if
-		 * set_handle_irq() is called.
-		 *
-		 * Therefore in s3c24xx_handle_irq(), the s3c_intc[0] is always something.
-		 */
-		if (s3c24xx_handle_intc(s3c_intc[0], regs, 0))
-			continue;
+		if (likely(s3c_intc[0]))
+			if (s3c24xx_handle_intc(s3c_intc[0], regs, 0))
+				continue;
 
-		if (!IS_ERR_OR_NULL(s3c_intc[2]))
+		if (s3c_intc[2])
 			if (s3c24xx_handle_intc(s3c_intc[2], regs, 64))
 				continue;
 
@@ -411,7 +406,7 @@ int s3c24xx_set_fiq(unsigned int irq, bool on)
 		intmod = 0;
 	}
 
-	writel_relaxed(intmod, S3C2410_INTMOD);
+	__raw_writel(intmod, S3C2410_INTMOD);
 	return 0;
 }
 
@@ -513,14 +508,14 @@ static void s3c24xx_clear_intc(struct s3c_irq_intc *intc)
 
 	last = 0;
 	for (i = 0; i < 4; i++) {
-		pend = readl_relaxed(reg_source);
+		pend = __raw_readl(reg_source);
 
 		if (pend == 0 || pend == last)
 			break;
 
-		writel_relaxed(pend, intc->reg_pending);
+		__raw_writel(pend, intc->reg_pending);
 		if (intc->reg_intpnd)
-			writel_relaxed(pend, intc->reg_intpnd);
+			__raw_writel(pend, intc->reg_intpnd);
 
 		pr_info("irq: clearing pending status %08x\n", (int)pend);
 		last = pend;
@@ -610,7 +605,7 @@ err:
 	return ERR_PTR(ret);
 }
 
-static struct s3c_irq_data __maybe_unused init_eint[32] = {
+static struct s3c_irq_data init_eint[32] = {
 	{ .type = S3C_IRQTYPE_NONE, }, /* reserved */
 	{ .type = S3C_IRQTYPE_NONE, }, /* reserved */
 	{ .type = S3C_IRQTYPE_NONE, }, /* reserved */
@@ -1266,7 +1261,7 @@ static int __init s3c_init_intc_of(struct device_node *np,
 			return -ENOMEM;
 
 		intc->domain = domain;
-		intc->irqs = kcalloc(32, sizeof(struct s3c_irq_data),
+		intc->irqs = kzalloc(sizeof(struct s3c_irq_data) * 32,
 				     GFP_KERNEL);
 		if (!intc->irqs) {
 			kfree(intc);

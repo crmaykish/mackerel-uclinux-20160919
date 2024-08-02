@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef RELOCS_H
 #define RELOCS_H
 
@@ -17,7 +16,7 @@
 #include <regex.h>
 #include <tools/le_byteshift.h>
 
-void die(char *fmt, ...) __attribute__((noreturn));
+void die(char *fmt, ...);
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 

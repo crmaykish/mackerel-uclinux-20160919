@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Device Tree file for LaCie 2Big NAS
  *
@@ -6,6 +5,9 @@
  *
  * Author: Simon Guinot <simon.guinot@sequanux.org>
  *
+ * This file is licensed under the terms of the GNU General Public
+ * License version 2.  This program is licensed "as is" without any
+ * warranty of any kind, whether express or implied.
 */
 
 /dts-v1/;
@@ -24,6 +26,16 @@
 	chosen {
 		bootargs = "console=ttyS0,115200n8";
 		stdout-path = &uart0;
+	};
+
+	mbus {
+		pcie-controller {
+			status = "okay";
+
+			pcie@1,0 {
+				status = "okay";
+			};
+		};
 	};
 
 	ocp@f1000000 {
@@ -128,12 +140,4 @@
 		label = "unused";
 		reg = <0x9100000 0x6f00000>;
 	};
-};
-
-&pciec {
-        status = "okay";
-};
-
-&pcie0 {
-	status = "okay";
 };

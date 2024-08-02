@@ -1,10 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Helpers for the host side of a virtio ring.
  *
  * Since these may be in userspace, we use (inline) accessors.
  */
-#include <linux/compiler.h>
 #include <linux/module.h>
 #include <linux/vringh.h>
 #include <linux/virtio_ring.h>
@@ -192,7 +190,7 @@ static int resize_iovec(struct vringh_kiov *iov, gfp_t gfp)
 	if (flag)
 		new = krealloc(iov->iov, new_num * sizeof(struct iovec), gfp);
 	else {
-		new = kmalloc_array(new_num, sizeof(struct iovec), gfp);
+		new = kmalloc(new_num * sizeof(struct iovec), gfp);
 		if (new) {
 			memcpy(new, iov->iov,
 			       iov->max_num * sizeof(struct iovec));
@@ -264,7 +262,7 @@ __vringh_iov(struct vringh *vrh, u16 i,
 	     gfp_t gfp,
 	     int (*copy)(void *dst, const void *src, size_t len))
 {
-	int err, count = 0, indirect_count = 0, up_next, desc_max;
+	int err, count = 0, up_next, desc_max;
 	struct vring_desc desc, *descs;
 	struct vringh_range range = { -1ULL, 0 }, slowrange;
 	bool slow = false;
@@ -274,14 +272,13 @@ __vringh_iov(struct vringh *vrh, u16 i,
 	desc_max = vrh->vring.num;
 	up_next = -1;
 
-	/* You must want something! */
-	if (WARN_ON(!riov && !wiov))
-		return -EINVAL;
-
 	if (riov)
 		riov->i = riov->used = 0;
-	if (wiov)
+	else if (wiov)
 		wiov->i = wiov->used = 0;
+	else
+		/* You must want something! */
+		BUG();
 
 	for (;;) {
 		void *addr;
@@ -321,12 +318,7 @@ __vringh_iov(struct vringh *vrh, u16 i,
 			continue;
 		}
 
-		if (up_next == -1)
-			count++;
-		else
-			indirect_count++;
-
-		if (count > vrh->vring.num || indirect_count > desc_max) {
+		if (count++ == vrh->vring.num) {
 			vringh_bad("Descriptor loop in %p", descs);
 			err = -ELOOP;
 			goto fail;
@@ -336,7 +328,7 @@ __vringh_iov(struct vringh *vrh, u16 i,
 			iov = wiov;
 		else {
 			iov = riov;
-			if (unlikely(wiov && wiov->used)) {
+			if (unlikely(wiov && wiov->i)) {
 				vringh_bad("Readable desc %p after writable",
 					   &descs[i]);
 				err = -EINVAL;
@@ -388,7 +380,6 @@ __vringh_iov(struct vringh *vrh, u16 i,
 				i = return_from_indirect(vrh, &up_next,
 							 &descs, &desc_max);
 				slow = false;
-				indirect_count = 0;
 			} else
 				break;
 		}
@@ -829,13 +820,13 @@ EXPORT_SYMBOL(vringh_need_notify_user);
 static inline int getu16_kern(const struct vringh *vrh,
 			      u16 *val, const __virtio16 *p)
 {
-	*val = vringh16_to_cpu(vrh, READ_ONCE(*p));
+	*val = vringh16_to_cpu(vrh, ACCESS_ONCE(*p));
 	return 0;
 }
 
 static inline int putu16_kern(const struct vringh *vrh, __virtio16 *p, u16 val)
 {
-	WRITE_ONCE(*p, cpu_to_vringh16(vrh, val));
+	ACCESS_ONCE(*p) = cpu_to_vringh16(vrh, val);
 	return 0;
 }
 
@@ -854,12 +845,6 @@ static inline int putused_kern(struct vring_used_elem *dst,
 }
 
 static inline int xfer_kern(void *src, void *dst, size_t len)
-{
-	memcpy(dst, src, len);
-	return 0;
-}
-
-static inline int kern_xfer(void *dst, void *src, size_t len)
 {
 	memcpy(dst, src, len);
 	return 0;
@@ -971,7 +956,7 @@ EXPORT_SYMBOL(vringh_iov_pull_kern);
 ssize_t vringh_iov_push_kern(struct vringh_kiov *wiov,
 			     const void *src, size_t len)
 {
-	return vringh_iov_xfer(wiov, (void *)src, len, kern_xfer);
+	return vringh_iov_xfer(wiov, (void *)src, len, xfer_kern);
 }
 EXPORT_SYMBOL(vringh_iov_push_kern);
 

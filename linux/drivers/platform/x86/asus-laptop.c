@@ -1,10 +1,25 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  asus-laptop.c - Asus Laptop Support
+ *
  *
  *  Copyright (C) 2002-2005 Julien Lerouge, 2003-2006 Karol Kozimor
  *  Copyright (C) 2006-2007 Corentin Chary
  *  Copyright (C) 2011 Wind River Systems
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  *
  *  The development page for this driver is located at
  *  http://sourceforge.net/projects/acpi4asus/
@@ -756,14 +771,12 @@ static int asus_read_brightness(struct backlight_device *bd)
 {
 	struct asus_laptop *asus = bl_get_data(bd);
 	unsigned long long value;
-	acpi_status rv;
+	acpi_status rv = AE_OK;
 
 	rv = acpi_evaluate_integer(asus->handle, METHOD_BRIGHTNESS_GET,
 				   NULL, &value);
-	if (ACPI_FAILURE(rv)) {
+	if (ACPI_FAILURE(rv))
 		pr_warn("Error reading brightness\n");
-		return 0;
-	}
 
 	return value;
 }
@@ -852,7 +865,7 @@ static ssize_t infos_show(struct device *dev, struct device_attribute *attr,
 	int len = 0;
 	unsigned long long temp;
 	char buf[16];		/* enough for all info */
-	acpi_status rv;
+	acpi_status rv = AE_OK;
 
 	/*
 	 * We use the easy way, we don't care of off and count,
@@ -917,19 +930,31 @@ static ssize_t infos_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RO(infos);
 
+static int parse_arg(const char *buf, unsigned long count, int *val)
+{
+	if (!count)
+		return 0;
+	if (count > 31)
+		return -EINVAL;
+	if (sscanf(buf, "%i", val) != 1)
+		return -EINVAL;
+	return count;
+}
+
 static ssize_t sysfs_acpi_set(struct asus_laptop *asus,
 			      const char *buf, size_t count,
 			      const char *method)
 {
 	int rv, value;
+	int out = 0;
 
-	rv = kstrtoint(buf, 0, &value);
-	if (rv < 0)
-		return rv;
+	rv = parse_arg(buf, count, &value);
+	if (rv > 0)
+		out = value ? 1 : 0;
 
 	if (write_acpi_int(asus->handle, method, value))
 		return -ENODEV;
-	return count;
+	return rv;
 }
 
 /*
@@ -949,17 +974,15 @@ static ssize_t ledd_store(struct device *dev, struct device_attribute *attr,
 	struct asus_laptop *asus = dev_get_drvdata(dev);
 	int rv, value;
 
-	rv = kstrtoint(buf, 0, &value);
-	if (rv < 0)
-		return rv;
-
-	if (write_acpi_int(asus->handle, METHOD_LEDD, value)) {
-		pr_warn("LED display write failed\n");
-		return -ENODEV;
+	rv = parse_arg(buf, count, &value);
+	if (rv > 0) {
+		if (write_acpi_int(asus->handle, METHOD_LEDD, value)) {
+			pr_warn("LED display write failed\n");
+			return -ENODEV;
+		}
+		asus->ledd_status = (u32) value;
 	}
-
-	asus->ledd_status = (u32) value;
-	return count;
+	return rv;
 }
 static DEVICE_ATTR_RW(ledd);
 
@@ -1124,12 +1147,10 @@ static ssize_t display_store(struct device *dev, struct device_attribute *attr,
 	struct asus_laptop *asus = dev_get_drvdata(dev);
 	int rv, value;
 
-	rv = kstrtoint(buf, 0, &value);
-	if (rv < 0)
-		return rv;
-
-	asus_set_display(asus, value);
-	return count;
+	rv = parse_arg(buf, count, &value);
+	if (rv > 0)
+		asus_set_display(asus, value);
+	return rv;
 }
 static DEVICE_ATTR_WO(display);
 
@@ -1168,12 +1189,11 @@ static ssize_t ls_switch_store(struct device *dev,
 	struct asus_laptop *asus = dev_get_drvdata(dev);
 	int rv, value;
 
-	rv = kstrtoint(buf, 0, &value);
-	if (rv < 0)
-		return rv;
+	rv = parse_arg(buf, count, &value);
+	if (rv > 0)
+		asus_als_switch(asus, value ? 1 : 0);
 
-	asus_als_switch(asus, value ? 1 : 0);
-	return count;
+	return rv;
 }
 static DEVICE_ATTR_RW(ls_switch);
 
@@ -1198,15 +1218,14 @@ static ssize_t ls_level_store(struct device *dev, struct device_attribute *attr,
 	struct asus_laptop *asus = dev_get_drvdata(dev);
 	int rv, value;
 
-	rv = kstrtoint(buf, 0, &value);
-	if (rv < 0)
-		return rv;
+	rv = parse_arg(buf, count, &value);
+	if (rv > 0) {
+		value = (0 < value) ? ((15 < value) ? 15 : value) : 0;
+		/* 0 <= value <= 15 */
+		asus_als_level(asus, value);
+	}
 
-	value = (0 < value) ? ((15 < value) ? 15 : value) : 0;
-	/* 0 <= value <= 15 */
-	asus_als_level(asus, value);
-
-	return count;
+	return rv;
 }
 static DEVICE_ATTR_RW(ls_level);
 
@@ -1246,7 +1265,7 @@ static DEVICE_ATTR_RO(ls_value);
 static int asus_gps_status(struct asus_laptop *asus)
 {
 	unsigned long long status;
-	acpi_status rv;
+	acpi_status rv = AE_OK;
 
 	rv = acpi_evaluate_integer(asus->handle, METHOD_GPS_STATUS,
 				   NULL, &status);
@@ -1281,14 +1300,14 @@ static ssize_t gps_store(struct device *dev, struct device_attribute *attr,
 	int rv, value;
 	int ret;
 
-	rv = kstrtoint(buf, 0, &value);
-	if (rv < 0)
-		return rv;
+	rv = parse_arg(buf, count, &value);
+	if (rv <= 0)
+		return -EINVAL;
 	ret = asus_gps_switch(asus, !!value);
 	if (ret)
 		return ret;
 	rfkill_set_sw_state(asus->gps.rfkill, !value);
-	return count;
+	return rv;
 }
 static DEVICE_ATTR_RW(gps);
 
@@ -1501,12 +1520,14 @@ static int asus_input_init(struct asus_laptop *asus)
 	error = input_register_device(input);
 	if (error) {
 		pr_warn("Unable to register input device\n");
-		goto err_free_dev;
+		goto err_free_keymap;
 	}
 
 	asus->inputdev = input;
 	return 0;
 
+err_free_keymap:
+	sparse_keymap_free(input);
 err_free_dev:
 	input_free_device(input);
 	return error;
@@ -1514,8 +1535,10 @@ err_free_dev:
 
 static void asus_input_exit(struct asus_laptop *asus)
 {
-	if (asus->inputdev)
+	if (asus->inputdev) {
+		sparse_keymap_free(asus->inputdev);
 		input_unregister_device(asus->inputdev);
+	}
 	asus->inputdev = NULL;
 }
 
@@ -1578,7 +1601,8 @@ static umode_t asus_sysfs_is_visible(struct kobject *kobj,
 				    int idx)
 {
 	struct device *dev = container_of(kobj, struct device, kobj);
-	struct asus_laptop *asus = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct asus_laptop *asus = platform_get_drvdata(pdev);
 	acpi_handle handle = asus->handle;
 	bool supported;
 

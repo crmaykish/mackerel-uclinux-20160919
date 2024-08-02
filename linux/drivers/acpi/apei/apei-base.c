@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * apei-base.c - ACPI Platform Error Interface (APEI) supporting
  * infrastructure
@@ -16,6 +15,15 @@
  *
  * Copyright (C) 2009, Intel Corp.
  *	Author: Huang Ying <ying.huang@intel.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License version
+ * 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/kernel.h>
@@ -528,8 +536,7 @@ int apei_resources_request(struct apei_resources *resources,
 		goto err_unmap_ioport;
 	}
 
-	goto arch_res_fini;
-
+	return 0;
 err_unmap_ioport:
 	list_for_each_entry(res, &resources->ioport, list) {
 		if (res == res_bak)
@@ -544,8 +551,7 @@ err_unmap_iomem:
 		release_mem_region(res->start, res->end - res->start);
 	}
 arch_res_fini:
-	if (arch_apei_filter_addr)
-		apei_resources_fini(&arch_res);
+	apei_resources_fini(&arch_res);
 nvs_res_fini:
 	apei_resources_fini(&nvs_resources);
 	return rc;

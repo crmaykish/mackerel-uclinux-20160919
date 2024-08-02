@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -17,7 +25,6 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/spmi.h>
 
-static bool is_registered;
 static DEFINE_IDA(ctrl_ida);
 
 static void spmi_dev_release(struct device *dev)
@@ -348,8 +355,7 @@ static int spmi_drv_remove(struct device *dev)
 	const struct spmi_driver *sdrv = to_spmi_driver(dev->driver);
 
 	pm_runtime_get_sync(dev);
-	if (sdrv->remove)
-		sdrv->remove(to_spmi_device(dev));
+	sdrv->remove(to_spmi_device(dev));
 	pm_runtime_put_noidle(dev);
 
 	pm_runtime_disable(dev);
@@ -358,23 +364,11 @@ static int spmi_drv_remove(struct device *dev)
 	return 0;
 }
 
-static int spmi_drv_uevent(struct device *dev, struct kobj_uevent_env *env)
-{
-	int ret;
-
-	ret = of_device_uevent_modalias(dev, env);
-	if (ret != -ENODEV)
-		return ret;
-
-	return 0;
-}
-
 static struct bus_type spmi_bus_type = {
 	.name		= "spmi",
 	.match		= spmi_device_match,
 	.probe		= spmi_drv_probe,
 	.remove		= spmi_drv_remove,
-	.uevent		= spmi_drv_uevent,
 };
 
 /**
@@ -459,25 +453,27 @@ static void of_spmi_register_devices(struct spmi_controller *ctrl)
 		struct spmi_device *sdev;
 		u32 reg[2];
 
-		dev_dbg(&ctrl->dev, "adding child %pOF\n", node);
+		dev_dbg(&ctrl->dev, "adding child %s\n", node->full_name);
 
 		err = of_property_read_u32_array(node, "reg", reg, 2);
 		if (err) {
 			dev_err(&ctrl->dev,
-				"node %pOF err (%d) does not have 'reg' property\n",
-				node, err);
+				"node %s err (%d) does not have 'reg' property\n",
+				node->full_name, err);
 			continue;
 		}
 
 		if (reg[1] != SPMI_USID) {
 			dev_err(&ctrl->dev,
-				"node %pOF contains unsupported 'reg' entry\n",
-				node);
+				"node %s contains unsupported 'reg' entry\n",
+				node->full_name);
 			continue;
 		}
 
 		if (reg[0] >= SPMI_MAX_SLAVE_ID) {
-			dev_err(&ctrl->dev, "invalid usid on node %pOF\n", node);
+			dev_err(&ctrl->dev,
+				"invalid usid on node %s\n",
+				node->full_name);
 			continue;
 		}
 
@@ -511,7 +507,7 @@ int spmi_controller_add(struct spmi_controller *ctrl)
 	int ret;
 
 	/* Can't register until after driver model init */
-	if (WARN_ON(!is_registered))
+	if (WARN_ON(!spmi_bus_type.p))
 		return -EAGAIN;
 
 	ret = device_add(&ctrl->dev);
@@ -580,14 +576,7 @@ module_exit(spmi_exit);
 
 static int __init spmi_init(void)
 {
-	int ret;
-
-	ret = bus_register(&spmi_bus_type);
-	if (ret)
-		return ret;
-
-	is_registered = true;
-	return 0;
+	return bus_register(&spmi_bus_type);
 }
 postcore_initcall(spmi_init);
 

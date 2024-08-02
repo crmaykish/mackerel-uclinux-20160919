@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
  * Copyright (C) 2002-2006 Novell, Inc.
  *	Jan Beulich <jbeulich@novell.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * A simple API for unwinding kernel stacks.  This is used for
  * debugging and error reporting purposes.  The kernel doesn't need
@@ -12,7 +15,7 @@
 
 #include <linux/sched.h>
 #include <linux/module.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/sort.h>
 #include <linux/slab.h>
 #include <linux/stop_machine.h>
@@ -108,8 +111,6 @@ UNW_REGISTER_INFO};
 #define DW_EH_PE_indirect 0x80
 #define DW_EH_PE_omit     0xff
 
-#define CIE_ID	0
-
 typedef unsigned long uleb128_t;
 typedef signed long sleb128_t;
 
@@ -178,7 +179,13 @@ static void init_unwind_hdr(struct unwind_table *table,
  */
 static void *__init unw_hdr_alloc_early(unsigned long sz)
 {
-	return memblock_alloc_from(sz, sizeof(unsigned int), MAX_DMA_ADDRESS);
+	return __alloc_bootmem_nopanic(sz, sizeof(unsigned int),
+				       MAX_DMA_ADDRESS);
+}
+
+static void *unw_hdr_alloc(unsigned long sz)
+{
+	return kmalloc(sz, GFP_KERNEL);
 }
 
 static void init_unwind_table(struct unwind_table *table, const char *name,
@@ -225,7 +232,6 @@ void __init arc_unwind_init(void)
 
 static const u32 bad_cie, not_fde;
 static const u32 *cie_for_fde(const u32 *fde, const struct unwind_table *);
-static const u32 *__cie_for_fde(const u32 *fde);
 static signed fde_pointer_type(const u32 *cie);
 
 struct eh_frame_hdr_table_entry {
@@ -332,9 +338,10 @@ static void init_unwind_hdr(struct unwind_table *table,
 	for (fde = table->address, tableSize = table->size, n = 0;
 	     tableSize;
 	     tableSize -= sizeof(*fde) + *fde, fde += 1 + *fde / sizeof(*fde)) {
-		const u32 *cie = __cie_for_fde(fde);
+		/* const u32 *cie = fde + 1 - fde[1] / sizeof(*fde); */
+		const u32 *cie = (const u32 *)(fde[1]);
 
-		if (fde[1] == CIE_ID)
+		if (fde[1] == 0xffffffff)
 			continue;	/* this is a CIE */
 		ptr = (const u8 *)(fde + 2);
 		header->table[n].start = read_pointer(&ptr,
@@ -357,14 +364,10 @@ static void init_unwind_hdr(struct unwind_table *table,
 	return;
 
 ret_err:
-	panic("Attention !!! Dwarf FDE parsing errors\n");
+	panic("Attention !!! Dwarf FDE parsing errors\n");;
 }
 
 #ifdef CONFIG_MODULES
-static void *unw_hdr_alloc(unsigned long sz)
-{
-	return kmalloc(sz, GFP_KERNEL);
-}
 
 static struct unwind_table *last_table;
 
@@ -382,8 +385,8 @@ void *unwind_add_table(struct module *module, const void *table_start,
 		return NULL;
 
 	init_unwind_table(table, module->name,
-			  module->core_layout.base, module->core_layout.size,
-			  module->init_layout.base, module->init_layout.size,
+			  module->module_core, module->core_size,
+			  module->module_init, module->init_size,
 			  table_start, table_size,
 			  NULL, 0);
 
@@ -501,15 +504,6 @@ static sleb128_t get_sleb128(const u8 **pcur, const u8 *end)
 	return value;
 }
 
-static const u32 *__cie_for_fde(const u32 *fde)
-{
-	const u32 *cie;
-
-	cie = fde + 1 - fde[1] / sizeof(*fde);
-
-	return cie;
-}
-
 static const u32 *cie_for_fde(const u32 *fde, const struct unwind_table *table)
 {
 	const u32 *cie;
@@ -517,18 +511,19 @@ static const u32 *cie_for_fde(const u32 *fde, const struct unwind_table *table)
 	if (!*fde || (*fde & (sizeof(*fde) - 1)))
 		return &bad_cie;
 
-	if (fde[1] == CIE_ID)
+	if (fde[1] == 0xffffffff)
 		return &not_fde;	/* this is a CIE */
 
 	if ((fde[1] & (sizeof(*fde) - 1)))
 /* || fde[1] > (unsigned long)(fde + 1) - (unsigned long)table->address) */
 		return NULL;	/* this is not a valid FDE */
 
-	cie = __cie_for_fde(fde);
+	/* cie = fde + 1 - fde[1] / sizeof(*fde); */
+	cie = (u32 *) fde[1];
 
 	if (*cie <= sizeof(*cie) + 4 || *cie >= fde[1] - sizeof(*fde)
 	    || (*cie & (sizeof(*cie) - 1))
-	    || (cie[1] != CIE_ID))
+	    || (cie[1] != 0xffffffff))
 		return NULL;	/* this is not a (valid) CIE */
 	return cie;
 }
@@ -572,7 +567,6 @@ static unsigned long read_pointer(const u8 **pLoc, const void *end,
 #else
 		BUILD_BUG_ON(sizeof(u32) != sizeof(value));
 #endif
-		/* Fall through */
 	case DW_EH_PE_native:
 		if (end < (const void *)(ptr.pul + 1))
 			return 0;
@@ -827,7 +821,7 @@ static int processCFI(const u8 *start, const u8 *end, unsigned long targetLoc,
 			case DW_CFA_def_cfa:
 				state->cfa.reg = get_uleb128(&ptr.p8, end);
 				unw_debug("cfa_def_cfa: r%lu ", state->cfa.reg);
-				/* fall through */
+				/*nobreak*/
 			case DW_CFA_def_cfa_offset:
 				state->cfa.offs = get_uleb128(&ptr.p8, end);
 				unw_debug("cfa_def_cfa_offset: 0x%lx ",
@@ -835,13 +829,13 @@ static int processCFI(const u8 *start, const u8 *end, unsigned long targetLoc,
 				break;
 			case DW_CFA_def_cfa_sf:
 				state->cfa.reg = get_uleb128(&ptr.p8, end);
-				/* fall through */
+				/*nobreak */
 			case DW_CFA_def_cfa_offset_sf:
 				state->cfa.offs = get_sleb128(&ptr.p8, end)
 				    * state->dataAlign;
 				break;
 			case DW_CFA_def_cfa_register:
-				unw_debug("cfa_def_cfa_register: ");
+				unw_debug("cfa_def_cfa_regsiter: ");
 				state->cfa.reg = get_uleb128(&ptr.p8, end);
 				break;
 				/*todo case DW_CFA_def_cfa_expression: */
@@ -1047,9 +1041,9 @@ int arc_unwind(struct unwind_frame_info *frame)
 		++ptr;
 	}
 	if (cie != NULL) {
-		/* get code alignment factor */
+		/* get code aligment factor */
 		state.codeAlign = get_uleb128(&ptr, end);
-		/* get data alignment factor */
+		/* get data aligment factor */
 		state.dataAlign = get_sleb128(&ptr, end);
 		if (state.codeAlign == 0 || state.dataAlign == 0 || ptr >= end)
 			cie = NULL;

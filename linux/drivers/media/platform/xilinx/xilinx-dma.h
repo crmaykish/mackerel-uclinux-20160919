@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Xilinx Video DMA
  *
@@ -7,6 +6,10 @@
  *
  * Contacts: Hyun Kwon <hyun.kwon@xilinx.com>
  *           Laurent Pinchart <laurent.pinchart@ideasonboard.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #ifndef __XILINX_VIP_DMA_H__
@@ -62,6 +65,7 @@ static inline struct xvip_pipeline *to_xvip_pipeline(struct media_entity *e)
  * @format: active V4L2 pixel format
  * @fmtinfo: format information corresponding to the active @format
  * @queue: vb2 buffers queue
+ * @alloc_ctx: allocation context for the vb2 @queue
  * @sequence: V4L2 buffers sequence number
  * @queued_bufs: list of queued buffers
  * @queued_lock: protects the buf_queued list
@@ -84,6 +88,7 @@ struct xvip_dma {
 	const struct xvip_video_format *fmtinfo;
 
 	struct vb2_queue queue;
+	void *alloc_ctx;
 	unsigned int sequence;
 
 	struct list_head queued_bufs;

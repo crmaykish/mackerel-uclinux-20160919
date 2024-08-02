@@ -1,10 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * dir.c - NILFS directory entry operations
  *
  * Copyright (C) 2005-2008 Nippon Telegraph and Telephone Corporation.
  *
- * Modified for NILFS by Amagai Yoshiji.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * Modified for NILFS by Amagai Yoshiji <amagai@osrg.net>
  */
 /*
  *  linux/fs/ext2/dir.c
@@ -33,33 +46,11 @@
 #include "nilfs.h"
 #include "page.h"
 
-static inline unsigned int nilfs_rec_len_from_disk(__le16 dlen)
-{
-	unsigned int len = le16_to_cpu(dlen);
-
-#if (PAGE_SIZE >= 65536)
-	if (len == NILFS_MAX_REC_LEN)
-		return 1 << 16;
-#endif
-	return len;
-}
-
-static inline __le16 nilfs_rec_len_to_disk(unsigned int len)
-{
-#if (PAGE_SIZE >= 65536)
-	if (len == (1 << 16))
-		return cpu_to_le16(NILFS_MAX_REC_LEN);
-
-	BUG_ON(len > (1 << 16));
-#endif
-	return cpu_to_le16(len);
-}
-
 /*
  * nilfs uses block-sized chunks. Arguably, sector-sized ones would be
  * more robust, but we have what we have
  */
-static inline unsigned int nilfs_chunk_size(struct inode *inode)
+static inline unsigned nilfs_chunk_size(struct inode *inode)
 {
 	return inode->i_sb->s_blocksize;
 }
@@ -67,39 +58,37 @@ static inline unsigned int nilfs_chunk_size(struct inode *inode)
 static inline void nilfs_put_page(struct page *page)
 {
 	kunmap(page);
-	put_page(page);
+	page_cache_release(page);
 }
 
 /*
  * Return the offset into page `page_nr' of the last valid
  * byte in that page, plus one.
  */
-static unsigned int nilfs_last_byte(struct inode *inode, unsigned long page_nr)
+static unsigned nilfs_last_byte(struct inode *inode, unsigned long page_nr)
 {
-	unsigned int last_byte = inode->i_size;
+	unsigned last_byte = inode->i_size;
 
-	last_byte -= page_nr << PAGE_SHIFT;
-	if (last_byte > PAGE_SIZE)
-		last_byte = PAGE_SIZE;
+	last_byte -= page_nr << PAGE_CACHE_SHIFT;
+	if (last_byte > PAGE_CACHE_SIZE)
+		last_byte = PAGE_CACHE_SIZE;
 	return last_byte;
 }
 
-static int nilfs_prepare_chunk(struct page *page, unsigned int from,
-			       unsigned int to)
+static int nilfs_prepare_chunk(struct page *page, unsigned from, unsigned to)
 {
 	loff_t pos = page_offset(page) + from;
-
 	return __block_write_begin(page, pos, to - from, nilfs_get_block);
 }
 
 static void nilfs_commit_chunk(struct page *page,
 			       struct address_space *mapping,
-			       unsigned int from, unsigned int to)
+			       unsigned from, unsigned to)
 {
 	struct inode *dir = mapping->host;
 	loff_t pos = page_offset(page) + from;
-	unsigned int len = to - from;
-	unsigned int nr_dirty, copied;
+	unsigned len = to - from;
+	unsigned nr_dirty, copied;
 	int err;
 
 	nr_dirty = nilfs_page_count_clean_buffers(page, from, to);
@@ -113,19 +102,19 @@ static void nilfs_commit_chunk(struct page *page,
 	unlock_page(page);
 }
 
-static bool nilfs_check_page(struct page *page)
+static void nilfs_check_page(struct page *page)
 {
 	struct inode *dir = page->mapping->host;
 	struct super_block *sb = dir->i_sb;
-	unsigned int chunk_size = nilfs_chunk_size(dir);
+	unsigned chunk_size = nilfs_chunk_size(dir);
 	char *kaddr = page_address(page);
-	unsigned int offs, rec_len;
-	unsigned int limit = PAGE_SIZE;
+	unsigned offs, rec_len;
+	unsigned limit = PAGE_CACHE_SIZE;
 	struct nilfs_dir_entry *p;
 	char *error;
 
-	if ((dir->i_size >> PAGE_SHIFT) == page->index) {
-		limit = dir->i_size & ~PAGE_MASK;
+	if ((dir->i_size >> PAGE_CACHE_SHIFT) == page->index) {
+		limit = dir->i_size & ~PAGE_CACHE_MASK;
 		if (limit & (chunk_size - 1))
 			goto Ebadsize;
 		if (!limit)
@@ -143,22 +132,20 @@ static bool nilfs_check_page(struct page *page)
 			goto Enamelen;
 		if (((offs + rec_len - 1) ^ offs) & ~(chunk_size-1))
 			goto Espan;
-		if (unlikely(p->inode &&
-			     NILFS_PRIVATE_INODE(le64_to_cpu(p->inode))))
-			goto Einumber;
 	}
 	if (offs != limit)
 		goto Eend;
 out:
 	SetPageChecked(page);
-	return true;
+	return;
 
 	/* Too bad, we had an error */
 
 Ebadsize:
-	nilfs_error(sb,
+	nilfs_error(sb, "nilfs_check_page",
 		    "size of directory #%lu is not a multiple of chunk size",
-		    dir->i_ino);
+		    dir->i_ino
+	);
 	goto fail;
 Eshort:
 	error = "rec_len is smaller than minimal";
@@ -171,45 +158,38 @@ Enamelen:
 	goto bad_entry;
 Espan:
 	error = "directory entry across blocks";
-	goto bad_entry;
-Einumber:
-	error = "disallowed inode number";
 bad_entry:
-	nilfs_error(sb,
-		    "bad entry in directory #%lu: %s - offset=%lu, inode=%lu, rec_len=%d, name_len=%d",
-		    dir->i_ino, error, (page->index << PAGE_SHIFT) + offs,
-		    (unsigned long)le64_to_cpu(p->inode),
+	nilfs_error(sb, "nilfs_check_page", "bad entry in directory #%lu: %s - "
+		    "offset=%lu, inode=%lu, rec_len=%d, name_len=%d",
+		    dir->i_ino, error, (page->index<<PAGE_CACHE_SHIFT)+offs,
+		    (unsigned long) le64_to_cpu(p->inode),
 		    rec_len, p->name_len);
 	goto fail;
 Eend:
 	p = (struct nilfs_dir_entry *)(kaddr + offs);
-	nilfs_error(sb,
-		    "entry in directory #%lu spans the page boundary offset=%lu, inode=%lu",
-		    dir->i_ino, (page->index << PAGE_SHIFT) + offs,
-		    (unsigned long)le64_to_cpu(p->inode));
+	nilfs_error(sb, "nilfs_check_page",
+		    "entry in directory #%lu spans the page boundary"
+		    "offset=%lu, inode=%lu",
+		    dir->i_ino, (page->index<<PAGE_CACHE_SHIFT)+offs,
+		    (unsigned long) le64_to_cpu(p->inode));
 fail:
+	SetPageChecked(page);
 	SetPageError(page);
-	return false;
 }
 
-static void *nilfs_get_page(struct inode *dir, unsigned long n,
-		struct page **pagep)
+static struct page *nilfs_get_page(struct inode *dir, unsigned long n)
 {
 	struct address_space *mapping = dir->i_mapping;
 	struct page *page = read_mapping_page(mapping, n, NULL);
-	void *kaddr;
 
-	if (IS_ERR(page))
-		return page;
-
-	kaddr = kmap(page);
-	if (unlikely(!PageChecked(page))) {
-		if (!nilfs_check_page(page))
+	if (!IS_ERR(page)) {
+		kmap(page);
+		if (!PageChecked(page))
+			nilfs_check_page(page);
+		if (PageError(page))
 			goto fail;
 	}
-
-	*pagep = page;
-	return kaddr;
+	return page;
 
 fail:
 	nilfs_put_page(page);
@@ -254,7 +234,7 @@ nilfs_filetype_table[NILFS_FT_MAX] = {
 
 #define S_SHIFT 12
 static unsigned char
-nilfs_type_by_mode[(S_IFMT >> S_SHIFT) + 1] = {
+nilfs_type_by_mode[S_IFMT >> S_SHIFT] = {
 	[S_IFREG >> S_SHIFT]	= NILFS_FT_REG_FILE,
 	[S_IFDIR >> S_SHIFT]	= NILFS_FT_DIR,
 	[S_IFCHR >> S_SHIFT]	= NILFS_FT_CHRDEV,
@@ -276,9 +256,10 @@ static int nilfs_readdir(struct file *file, struct dir_context *ctx)
 	loff_t pos = ctx->pos;
 	struct inode *inode = file_inode(file);
 	struct super_block *sb = inode->i_sb;
-	unsigned int offset = pos & ~PAGE_MASK;
-	unsigned long n = pos >> PAGE_SHIFT;
+	unsigned int offset = pos & ~PAGE_CACHE_MASK;
+	unsigned long n = pos >> PAGE_CACHE_SHIFT;
 	unsigned long npages = dir_pages(inode);
+/*	unsigned chunk_mask = ~(nilfs_chunk_size(inode)-1); */
 
 	if (pos > inode->i_size - NILFS_DIR_REC_LEN(1))
 		return 0;
@@ -286,20 +267,22 @@ static int nilfs_readdir(struct file *file, struct dir_context *ctx)
 	for ( ; n < npages; n++, offset = 0) {
 		char *kaddr, *limit;
 		struct nilfs_dir_entry *de;
-		struct page *page;
+		struct page *page = nilfs_get_page(inode, n);
 
-		kaddr = nilfs_get_page(inode, n, &page);
-		if (IS_ERR(kaddr)) {
-			nilfs_error(sb, "bad page in #%lu", inode->i_ino);
-			ctx->pos += PAGE_SIZE - offset;
+		if (IS_ERR(page)) {
+			nilfs_error(sb, __func__, "bad page in #%lu",
+				    inode->i_ino);
+			ctx->pos += PAGE_CACHE_SIZE - offset;
 			return -EIO;
 		}
+		kaddr = page_address(page);
 		de = (struct nilfs_dir_entry *)(kaddr + offset);
 		limit = kaddr + nilfs_last_byte(inode, n) -
 			NILFS_DIR_REC_LEN(1);
 		for ( ; (char *)de <= limit; de = nilfs_next_entry(de)) {
 			if (de->rec_len == 0) {
-				nilfs_error(sb, "zero-length directory entry");
+				nilfs_error(sb, __func__,
+					    "zero-length directory entry");
 				nilfs_put_page(page);
 				return -EIO;
 			}
@@ -338,7 +321,7 @@ nilfs_find_entry(struct inode *dir, const struct qstr *qstr,
 {
 	const unsigned char *name = qstr->name;
 	int namelen = qstr->len;
-	unsigned int reclen = NILFS_DIR_REC_LEN(namelen);
+	unsigned reclen = NILFS_DIR_REC_LEN(namelen);
 	unsigned long start, n;
 	unsigned long npages = dir_pages(dir);
 	struct page *page = NULL;
@@ -356,14 +339,15 @@ nilfs_find_entry(struct inode *dir, const struct qstr *qstr,
 		start = 0;
 	n = start;
 	do {
-		char *kaddr = nilfs_get_page(dir, n, &page);
-
-		if (!IS_ERR(kaddr)) {
+		char *kaddr;
+		page = nilfs_get_page(dir, n);
+		if (!IS_ERR(page)) {
+			kaddr = page_address(page);
 			de = (struct nilfs_dir_entry *)kaddr;
 			kaddr += nilfs_last_byte(dir, n) - reclen;
 			while ((char *) de <= kaddr) {
 				if (de->rec_len == 0) {
-					nilfs_error(dir->i_sb,
+					nilfs_error(dir->i_sb, __func__,
 						"zero-length directory entry");
 					nilfs_put_page(page);
 					goto out;
@@ -377,8 +361,8 @@ nilfs_find_entry(struct inode *dir, const struct qstr *qstr,
 		if (++n >= npages)
 			n = 0;
 		/* next page is past the blocks we've got */
-		if (unlikely(n > (dir->i_blocks >> (PAGE_SHIFT - 9)))) {
-			nilfs_error(dir->i_sb,
+		if (unlikely(n > (dir->i_blocks >> (PAGE_CACHE_SHIFT - 9)))) {
+			nilfs_error(dir->i_sb, __func__,
 			       "dir %lu size %lld exceeds block count %llu",
 			       dir->i_ino, dir->i_size,
 			       (unsigned long long)dir->i_blocks);
@@ -396,39 +380,15 @@ found:
 
 struct nilfs_dir_entry *nilfs_dotdot(struct inode *dir, struct page **p)
 {
-	struct page *page;
-	struct nilfs_dir_entry *de, *next_de;
-	size_t limit;
-	char *msg;
+	struct page *page = nilfs_get_page(dir, 0);
+	struct nilfs_dir_entry *de = NULL;
 
-	de = nilfs_get_page(dir, 0, &page);
-	if (IS_ERR(de))
-		return NULL;
-
-	limit = nilfs_last_byte(dir, 0);  /* is a multiple of chunk size */
-	if (unlikely(!limit || le64_to_cpu(de->inode) != dir->i_ino ||
-		     !nilfs_match(1, ".", de))) {
-		msg = "missing '.'";
-		goto fail;
+	if (!IS_ERR(page)) {
+		de = nilfs_next_entry(
+			(struct nilfs_dir_entry *)page_address(page));
+		*p = page;
 	}
-
-	next_de = nilfs_next_entry(de);
-	/*
-	 * If "next_de" has not reached the end of the chunk, there is
-	 * at least one more record.  Check whether it matches "..".
-	 */
-	if (unlikely((char *)next_de == (char *)de + nilfs_chunk_size(dir) ||
-		     !nilfs_match(2, "..", next_de))) {
-		msg = "missing '..'";
-		goto fail;
-	}
-	*p = page;
-	return next_de;
-
-fail:
-	nilfs_error(dir->i_sb, "directory #%lu %s", dir->i_ino, msg);
-	nilfs_put_page(page);
-	return NULL;
+	return de;
 }
 
 ino_t nilfs_inode_by_name(struct inode *dir, const struct qstr *qstr)
@@ -441,7 +401,7 @@ ino_t nilfs_inode_by_name(struct inode *dir, const struct qstr *qstr)
 	if (de) {
 		res = le64_to_cpu(de->inode);
 		kunmap(page);
-		put_page(page);
+		page_cache_release(page);
 	}
 	return res;
 }
@@ -450,8 +410,8 @@ ino_t nilfs_inode_by_name(struct inode *dir, const struct qstr *qstr)
 void nilfs_set_link(struct inode *dir, struct nilfs_dir_entry *de,
 		    struct page *page, struct inode *inode)
 {
-	unsigned int from = (char *)de - (char *)page_address(page);
-	unsigned int to = from + nilfs_rec_len_from_disk(de->rec_len);
+	unsigned from = (char *) de - (char *) page_address(page);
+	unsigned to = from + nilfs_rec_len_from_disk(de->rec_len);
 	struct address_space *mapping = page->mapping;
 	int err;
 
@@ -462,7 +422,7 @@ void nilfs_set_link(struct inode *dir, struct nilfs_dir_entry *de,
 	nilfs_set_de_type(de, inode);
 	nilfs_commit_chunk(page, mapping, from, to);
 	nilfs_put_page(page);
-	dir->i_mtime = dir->i_ctime = current_time(dir);
+	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 }
 
 /*
@@ -473,15 +433,15 @@ int nilfs_add_link(struct dentry *dentry, struct inode *inode)
 	struct inode *dir = d_inode(dentry->d_parent);
 	const unsigned char *name = dentry->d_name.name;
 	int namelen = dentry->d_name.len;
-	unsigned int chunk_size = nilfs_chunk_size(dir);
-	unsigned int reclen = NILFS_DIR_REC_LEN(namelen);
+	unsigned chunk_size = nilfs_chunk_size(dir);
+	unsigned reclen = NILFS_DIR_REC_LEN(namelen);
 	unsigned short rec_len, name_len;
 	struct page *page = NULL;
 	struct nilfs_dir_entry *de;
 	unsigned long npages = dir_pages(dir);
 	unsigned long n;
 	char *kaddr;
-	unsigned int from, to;
+	unsigned from, to;
 	int err;
 
 	/*
@@ -492,14 +452,15 @@ int nilfs_add_link(struct dentry *dentry, struct inode *inode)
 	for (n = 0; n <= npages; n++) {
 		char *dir_end;
 
-		kaddr = nilfs_get_page(dir, n, &page);
-		err = PTR_ERR(kaddr);
-		if (IS_ERR(kaddr))
+		page = nilfs_get_page(dir, n);
+		err = PTR_ERR(page);
+		if (IS_ERR(page))
 			goto out;
 		lock_page(page);
+		kaddr = page_address(page);
 		dir_end = kaddr + nilfs_last_byte(dir, n);
 		de = (struct nilfs_dir_entry *)kaddr;
-		kaddr += PAGE_SIZE - reclen;
+		kaddr += PAGE_CACHE_SIZE - reclen;
 		while ((char *)de <= kaddr) {
 			if ((char *)de == dir_end) {
 				/* We hit i_size */
@@ -510,7 +471,7 @@ int nilfs_add_link(struct dentry *dentry, struct inode *inode)
 				goto got_it;
 			}
 			if (de->rec_len == 0) {
-				nilfs_error(dir->i_sb,
+				nilfs_error(dir->i_sb, __func__,
 					    "zero-length directory entry");
 				err = -EIO;
 				goto out_unlock;
@@ -551,7 +512,7 @@ got_it:
 	de->inode = cpu_to_le64(inode->i_ino);
 	nilfs_set_de_type(de, inode);
 	nilfs_commit_chunk(page, page->mapping, from, to);
-	dir->i_mtime = dir->i_ctime = current_time(dir);
+	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 	nilfs_mark_inode_dirty(dir);
 	/* OFFSET_CACHE */
 out_put:
@@ -572,17 +533,16 @@ int nilfs_delete_entry(struct nilfs_dir_entry *dir, struct page *page)
 	struct address_space *mapping = page->mapping;
 	struct inode *inode = mapping->host;
 	char *kaddr = page_address(page);
-	unsigned int from, to;
-	struct nilfs_dir_entry *de, *pde = NULL;
+	unsigned from = ((char *)dir - kaddr) & ~(nilfs_chunk_size(inode) - 1);
+	unsigned to = ((char *)dir - kaddr) +
+		nilfs_rec_len_from_disk(dir->rec_len);
+	struct nilfs_dir_entry *pde = NULL;
+	struct nilfs_dir_entry *de = (struct nilfs_dir_entry *)(kaddr + from);
 	int err;
-
-	from = ((char *)dir - kaddr) & ~(nilfs_chunk_size(inode) - 1);
-	to = ((char *)dir - kaddr) + nilfs_rec_len_from_disk(dir->rec_len);
-	de = (struct nilfs_dir_entry *)(kaddr + from);
 
 	while ((char *)de < (char *)dir) {
 		if (de->rec_len == 0) {
-			nilfs_error(inode->i_sb,
+			nilfs_error(inode->i_sb, __func__,
 				    "zero-length directory entry");
 			err = -EIO;
 			goto out;
@@ -599,7 +559,7 @@ int nilfs_delete_entry(struct nilfs_dir_entry *dir, struct page *page)
 		pde->rec_len = nilfs_rec_len_to_disk(to - from);
 	dir->inode = 0;
 	nilfs_commit_chunk(page, mapping, from, to);
-	inode->i_ctime = inode->i_mtime = current_time(inode);
+	inode->i_ctime = inode->i_mtime = CURRENT_TIME;
 out:
 	nilfs_put_page(page);
 	return err;
@@ -612,7 +572,7 @@ int nilfs_make_empty(struct inode *inode, struct inode *parent)
 {
 	struct address_space *mapping = inode->i_mapping;
 	struct page *page = grab_cache_page(mapping, 0);
-	unsigned int chunk_size = nilfs_chunk_size(inode);
+	unsigned chunk_size = nilfs_chunk_size(inode);
 	struct nilfs_dir_entry *de;
 	int err;
 	void *kaddr;
@@ -643,7 +603,7 @@ int nilfs_make_empty(struct inode *inode, struct inode *parent)
 	kunmap_atomic(kaddr);
 	nilfs_commit_chunk(page, mapping, 0, chunk_size);
 fail:
-	put_page(page);
+	page_cache_release(page);
 	return err;
 }
 
@@ -659,18 +619,19 @@ int nilfs_empty_dir(struct inode *inode)
 		char *kaddr;
 		struct nilfs_dir_entry *de;
 
-		kaddr = nilfs_get_page(inode, i, &page);
-		if (IS_ERR(kaddr))
-			return 0;
+		page = nilfs_get_page(inode, i);
+		if (IS_ERR(page))
+			continue;
 
+		kaddr = page_address(page);
 		de = (struct nilfs_dir_entry *)kaddr;
 		kaddr += nilfs_last_byte(inode, i) - NILFS_DIR_REC_LEN(1);
 
 		while ((char *)de <= kaddr) {
 			if (de->rec_len == 0) {
-				nilfs_error(inode->i_sb,
-					    "zero-length directory entry (kaddr=%p, de=%p)",
-					    kaddr, de);
+				nilfs_error(inode->i_sb, __func__,
+					    "zero-length directory entry "
+					    "(kaddr=%p, de=%p)\n", kaddr, de);
 				goto not_empty;
 			}
 			if (de->inode != 0) {
@@ -700,7 +661,7 @@ not_empty:
 const struct file_operations nilfs_dir_operations = {
 	.llseek		= generic_file_llseek,
 	.read		= generic_read_dir,
-	.iterate_shared	= nilfs_readdir,
+	.iterate	= nilfs_readdir,
 	.unlocked_ioctl	= nilfs_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= nilfs_compat_ioctl,

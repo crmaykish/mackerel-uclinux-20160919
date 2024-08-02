@@ -1,23 +1,30 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (C) 2013 Boris BREZILLON <b.brezillon@overkiz.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
  */
 
 #include <linux/clk-provider.h>
 #include <linux/clkdev.h>
 #include <linux/clk/at91_pmc.h>
 #include <linux/of.h>
-#include <linux/mfd/syscon.h>
-#include <linux/regmap.h>
+#include <linux/of_address.h>
+#include <linux/io.h>
 
 #include "pmc.h"
+
+#define SMD_SOURCE_MAX		2
 
 #define SMD_DIV_SHIFT		8
 #define SMD_MAX_DIV		0xf
 
 struct at91sam9x5_clk_smd {
 	struct clk_hw hw;
-	struct regmap *regmap;
+	struct at91_pmc *pmc;
 };
 
 #define to_at91sam9x5_clk_smd(hw) \
@@ -26,13 +33,13 @@ struct at91sam9x5_clk_smd {
 static unsigned long at91sam9x5_clk_smd_recalc_rate(struct clk_hw *hw,
 						    unsigned long parent_rate)
 {
-	struct at91sam9x5_clk_smd *smd = to_at91sam9x5_clk_smd(hw);
-	unsigned int smdr;
+	u32 tmp;
 	u8 smddiv;
+	struct at91sam9x5_clk_smd *smd = to_at91sam9x5_clk_smd(hw);
+	struct at91_pmc *pmc = smd->pmc;
 
-	regmap_read(smd->regmap, AT91_PMC_SMD, &smdr);
-	smddiv = (smdr & AT91_PMC_SMD_DIV) >> SMD_DIV_SHIFT;
-
+	tmp = pmc_read(pmc, AT91_PMC_SMD);
+	smddiv = (tmp & AT91_PMC_SMD_DIV) >> SMD_DIV_SHIFT;
 	return parent_rate / (smddiv + 1);
 }
 
@@ -60,38 +67,40 @@ static long at91sam9x5_clk_smd_round_rate(struct clk_hw *hw, unsigned long rate,
 
 static int at91sam9x5_clk_smd_set_parent(struct clk_hw *hw, u8 index)
 {
+	u32 tmp;
 	struct at91sam9x5_clk_smd *smd = to_at91sam9x5_clk_smd(hw);
+	struct at91_pmc *pmc = smd->pmc;
 
 	if (index > 1)
 		return -EINVAL;
-
-	regmap_update_bits(smd->regmap, AT91_PMC_SMD, AT91_PMC_SMDS,
-			   index ? AT91_PMC_SMDS : 0);
-
+	tmp = pmc_read(pmc, AT91_PMC_SMD) & ~AT91_PMC_SMDS;
+	if (index)
+		tmp |= AT91_PMC_SMDS;
+	pmc_write(pmc, AT91_PMC_SMD, tmp);
 	return 0;
 }
 
 static u8 at91sam9x5_clk_smd_get_parent(struct clk_hw *hw)
 {
 	struct at91sam9x5_clk_smd *smd = to_at91sam9x5_clk_smd(hw);
-	unsigned int smdr;
+	struct at91_pmc *pmc = smd->pmc;
 
-	regmap_read(smd->regmap, AT91_PMC_SMD, &smdr);
-
-	return smdr & AT91_PMC_SMDS;
+	return pmc_read(pmc, AT91_PMC_SMD) & AT91_PMC_SMDS;
 }
 
 static int at91sam9x5_clk_smd_set_rate(struct clk_hw *hw, unsigned long rate,
 				       unsigned long parent_rate)
 {
+	u32 tmp;
 	struct at91sam9x5_clk_smd *smd = to_at91sam9x5_clk_smd(hw);
+	struct at91_pmc *pmc = smd->pmc;
 	unsigned long div = parent_rate / rate;
 
 	if (parent_rate % rate || div < 1 || div > (SMD_MAX_DIV + 1))
 		return -EINVAL;
-
-	regmap_update_bits(smd->regmap, AT91_PMC_SMD, AT91_PMC_SMD_DIV,
-			   (div - 1) << SMD_DIV_SHIFT);
+	tmp = pmc_read(pmc, AT91_PMC_SMD) & ~AT91_PMC_SMD_DIV;
+	tmp |= (div - 1) << SMD_DIV_SHIFT;
+	pmc_write(pmc, AT91_PMC_SMD, tmp);
 
 	return 0;
 }
@@ -104,14 +113,13 @@ static const struct clk_ops at91sam9x5_smd_ops = {
 	.set_rate = at91sam9x5_clk_smd_set_rate,
 };
 
-struct clk_hw * __init
-at91sam9x5_clk_register_smd(struct regmap *regmap, const char *name,
+static struct clk * __init
+at91sam9x5_clk_register_smd(struct at91_pmc *pmc, const char *name,
 			    const char **parent_names, u8 num_parents)
 {
 	struct at91sam9x5_clk_smd *smd;
-	struct clk_hw *hw;
+	struct clk *clk = NULL;
 	struct clk_init_data init;
-	int ret;
 
 	smd = kzalloc(sizeof(*smd), GFP_KERNEL);
 	if (!smd)
@@ -124,14 +132,35 @@ at91sam9x5_clk_register_smd(struct regmap *regmap, const char *name,
 	init.flags = CLK_SET_RATE_GATE | CLK_SET_PARENT_GATE;
 
 	smd->hw.init = &init;
-	smd->regmap = regmap;
+	smd->pmc = pmc;
 
-	hw = &smd->hw;
-	ret = clk_hw_register(NULL, &smd->hw);
-	if (ret) {
+	clk = clk_register(NULL, &smd->hw);
+	if (IS_ERR(clk))
 		kfree(smd);
-		hw = ERR_PTR(ret);
-	}
 
-	return hw;
+	return clk;
+}
+
+void __init of_at91sam9x5_clk_smd_setup(struct device_node *np,
+					struct at91_pmc *pmc)
+{
+	struct clk *clk;
+	int num_parents;
+	const char *parent_names[SMD_SOURCE_MAX];
+	const char *name = np->name;
+
+	num_parents = of_clk_get_parent_count(np);
+	if (num_parents <= 0 || num_parents > SMD_SOURCE_MAX)
+		return;
+
+	of_clk_parent_fill(np, parent_names, num_parents);
+
+	of_property_read_string(np, "clock-output-names", &name);
+
+	clk = at91sam9x5_clk_register_smd(pmc, name, parent_names,
+					  num_parents);
+	if (IS_ERR(clk))
+		return;
+
+	of_clk_add_provider(np, of_clk_src_simple_get, clk);
 }

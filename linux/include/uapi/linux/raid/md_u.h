@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0+ WITH Linux-syscall-note */
 /*
    md_u.h : user <=> kernel API between Linux raidtools and RAID drivers
           Copyright (C) 1998 Ingo Molnar
@@ -81,7 +80,7 @@ typedef struct mdu_array_info_s {
 	int major_version;
 	int minor_version;
 	int patch_version;
-	unsigned int ctime;
+	int ctime;
 	int level;
 	int size;
 	int nr_disks;
@@ -92,7 +91,7 @@ typedef struct mdu_array_info_s {
 	/*
 	 * Generic state information
 	 */
-	unsigned int utime;	/*  0 Superblock update time		      */
+	int utime;		/*  0 Superblock update time		      */
 	int state;		/*  1 State bits (clean, ...)		      */
 	int active_disks;	/*  2 Number of currently active disks	      */
 	int working_disks;	/*  3 Number of working disks		      */

@@ -44,17 +44,19 @@
 #include "priv.h"
 
 #include <core/memory.h>
+#include <core/mm.h>
 #include <core/tegra.h>
+#include <subdev/fb.h>
 #include <subdev/ltc.h>
-#include <subdev/mmu.h>
 
 struct gk20a_instobj {
 	struct nvkm_memory memory;
-	struct nvkm_mm_node *mn;
+	struct nvkm_mem mem;
 	struct gk20a_instmem *imem;
 
 	/* CPU mapping */
 	u32 *vaddr;
+	struct list_head vaddr_node;
 };
 #define gk20a_instobj(p) container_of((p), struct gk20a_instobj, memory)
 
@@ -64,6 +66,7 @@ struct gk20a_instobj {
 struct gk20a_instobj_dma {
 	struct gk20a_instobj base;
 
+	u32 *cpuaddr;
 	dma_addr_t handle;
 	struct nvkm_mm_node r;
 };
@@ -75,11 +78,6 @@ struct gk20a_instobj_dma {
  */
 struct gk20a_instobj_iommu {
 	struct gk20a_instobj base;
-
-	/* to link into gk20a_instmem::vaddr_lru */
-	struct list_head vaddr_node;
-	/* how many clients are using vaddr? */
-	u32 use_cpt;
 
 	/* will point to the higher half of pages */
 	dma_addr_t *dma_addrs;
@@ -93,7 +91,7 @@ struct gk20a_instmem {
 	struct nvkm_instmem base;
 
 	/* protects vaddr_* and gk20a_instobj::vaddr* */
-	struct mutex lock;
+	spinlock_t lock;
 
 	/* CPU mappings LRU */
 	unsigned int vaddr_use;
@@ -108,107 +106,114 @@ struct gk20a_instmem {
 	u16 iommu_bit;
 
 	/* Only used by DMA API */
-	unsigned long attrs;
+	struct dma_attrs attrs;
+
+	void __iomem * (*cpu_map)(struct nvkm_memory *);
 };
 #define gk20a_instmem(p) container_of((p), struct gk20a_instmem, base)
 
 static enum nvkm_memory_target
 gk20a_instobj_target(struct nvkm_memory *memory)
 {
-	return NVKM_MEM_TARGET_NCOH;
-}
-
-static u8
-gk20a_instobj_page(struct nvkm_memory *memory)
-{
-	return 12;
+	return NVKM_MEM_TARGET_HOST;
 }
 
 static u64
 gk20a_instobj_addr(struct nvkm_memory *memory)
 {
-	return (u64)gk20a_instobj(memory)->mn->offset << 12;
+	return gk20a_instobj(memory)->mem.offset;
 }
 
 static u64
 gk20a_instobj_size(struct nvkm_memory *memory)
 {
-	return (u64)gk20a_instobj(memory)->mn->length << 12;
+	return (u64)gk20a_instobj(memory)->mem.size << 12;
 }
 
-/*
- * Recycle the vaddr of obj. Must be called with gk20a_instmem::lock held.
- */
-static void
-gk20a_instobj_iommu_recycle_vaddr(struct gk20a_instobj_iommu *obj)
+static void __iomem *
+gk20a_instobj_cpu_map_dma(struct nvkm_memory *memory)
 {
-	struct gk20a_instmem *imem = obj->base.imem;
-	/* there should not be any user left... */
-	WARN_ON(obj->use_cpt);
-	list_del(&obj->vaddr_node);
-	vunmap(obj->base.vaddr);
-	obj->base.vaddr = NULL;
-	imem->vaddr_use -= nvkm_memory_size(&obj->base.memory);
-	nvkm_debug(&imem->base.subdev, "vaddr used: %x/%x\n", imem->vaddr_use,
-		   imem->vaddr_max);
+#if defined(CONFIG_ARM) || defined(CONFIG_ARM64)
+	struct gk20a_instobj_dma *node = gk20a_instobj_dma(memory);
+	struct device *dev = node->base.imem->base.subdev.device->dev;
+	int npages = nvkm_memory_size(memory) >> 12;
+	struct page *pages[npages];
+	int i;
+
+	/* we shouldn't see a gk20a on anything but arm/arm64 anyways */
+	/* phys_to_page does not exist on all platforms... */
+	pages[0] = pfn_to_page(dma_to_phys(dev, node->handle) >> PAGE_SHIFT);
+	for (i = 1; i < npages; i++)
+		pages[i] = pages[0] + i;
+
+	return vmap(pages, npages, VM_MAP, pgprot_writecombine(PAGE_KERNEL));
+#else
+	BUG();
+	return NULL;
+#endif
+}
+
+static void __iomem *
+gk20a_instobj_cpu_map_iommu(struct nvkm_memory *memory)
+{
+	struct gk20a_instobj_iommu *node = gk20a_instobj_iommu(memory);
+	int npages = nvkm_memory_size(memory) >> 12;
+
+	return vmap(node->pages, npages, VM_MAP,
+		    pgprot_writecombine(PAGE_KERNEL));
 }
 
 /*
- * Must be called while holding gk20a_instmem::lock
+ * Must be called while holding gk20a_instmem_lock
  */
 static void
 gk20a_instmem_vaddr_gc(struct gk20a_instmem *imem, const u64 size)
 {
 	while (imem->vaddr_use + size > imem->vaddr_max) {
+		struct gk20a_instobj *obj;
+
 		/* no candidate that can be unmapped, abort... */
 		if (list_empty(&imem->vaddr_lru))
 			break;
 
-		gk20a_instobj_iommu_recycle_vaddr(
-				list_first_entry(&imem->vaddr_lru,
-				struct gk20a_instobj_iommu, vaddr_node));
+		obj = list_first_entry(&imem->vaddr_lru, struct gk20a_instobj,
+				       vaddr_node);
+		list_del(&obj->vaddr_node);
+		vunmap(obj->vaddr);
+		obj->vaddr = NULL;
+		imem->vaddr_use -= nvkm_memory_size(&obj->memory);
+		nvkm_debug(&imem->base.subdev, "(GC) vaddr used: %x/%x\n",
+			   imem->vaddr_use, imem->vaddr_max);
+
 	}
 }
 
 static void __iomem *
-gk20a_instobj_acquire_dma(struct nvkm_memory *memory)
+gk20a_instobj_acquire(struct nvkm_memory *memory)
 {
 	struct gk20a_instobj *node = gk20a_instobj(memory);
 	struct gk20a_instmem *imem = node->imem;
 	struct nvkm_ltc *ltc = imem->base.subdev.device->ltc;
-
-	nvkm_ltc_flush(ltc);
-
-	return node->vaddr;
-}
-
-static void __iomem *
-gk20a_instobj_acquire_iommu(struct nvkm_memory *memory)
-{
-	struct gk20a_instobj_iommu *node = gk20a_instobj_iommu(memory);
-	struct gk20a_instmem *imem = node->base.imem;
-	struct nvkm_ltc *ltc = imem->base.subdev.device->ltc;
 	const u64 size = nvkm_memory_size(memory);
+	unsigned long flags;
 
 	nvkm_ltc_flush(ltc);
 
-	mutex_lock(&imem->lock);
+	spin_lock_irqsave(&imem->lock, flags);
 
-	if (node->base.vaddr) {
-		if (!node->use_cpt) {
-			/* remove from LRU list since mapping in use again */
-			list_del(&node->vaddr_node);
-		}
+	if (node->vaddr) {
+		/* remove us from the LRU list since we cannot be unmapped */
+		list_del(&node->vaddr_node);
+
 		goto out;
 	}
 
 	/* try to free some address space if we reached the limit */
 	gk20a_instmem_vaddr_gc(imem, size);
 
-	/* map the pages */
-	node->base.vaddr = vmap(node->pages, size >> PAGE_SHIFT, VM_MAP,
-				pgprot_writecombine(PAGE_KERNEL));
-	if (!node->base.vaddr) {
+	node->vaddr = imem->cpu_map(memory);
+
+	if (!node->vaddr) {
 		nvkm_error(&imem->base.subdev, "cannot map instobj - "
 			   "this is not going to end well...\n");
 		goto out;
@@ -219,43 +224,25 @@ gk20a_instobj_acquire_iommu(struct nvkm_memory *memory)
 		   imem->vaddr_use, imem->vaddr_max);
 
 out:
-	node->use_cpt++;
-	mutex_unlock(&imem->lock);
+	spin_unlock_irqrestore(&imem->lock, flags);
 
-	return node->base.vaddr;
+	return node->vaddr;
 }
 
 static void
-gk20a_instobj_release_dma(struct nvkm_memory *memory)
+gk20a_instobj_release(struct nvkm_memory *memory)
 {
 	struct gk20a_instobj *node = gk20a_instobj(memory);
 	struct gk20a_instmem *imem = node->imem;
 	struct nvkm_ltc *ltc = imem->base.subdev.device->ltc;
+	unsigned long flags;
 
-	/* in case we got a write-combined mapping */
-	wmb();
-	nvkm_ltc_invalidate(ltc);
-}
+	spin_lock_irqsave(&imem->lock, flags);
 
-static void
-gk20a_instobj_release_iommu(struct nvkm_memory *memory)
-{
-	struct gk20a_instobj_iommu *node = gk20a_instobj_iommu(memory);
-	struct gk20a_instmem *imem = node->base.imem;
-	struct nvkm_ltc *ltc = imem->base.subdev.device->ltc;
+	/* add ourselves to the LRU list so our CPU mapping can be freed */
+	list_add_tail(&node->vaddr_node, &imem->vaddr_lru);
 
-	mutex_lock(&imem->lock);
-
-	/* we should at least have one user to release... */
-	if (WARN_ON(node->use_cpt == 0))
-		goto out;
-
-	/* add unused objs to the LRU list to recycle their mapping */
-	if (--node->use_cpt == 0)
-		list_add_tail(&node->vaddr_node, &imem->vaddr_lru);
-
-out:
-	mutex_unlock(&imem->lock);
+	spin_unlock_irqrestore(&imem->lock, flags);
 
 	wmb();
 	nvkm_ltc_invalidate(ltc);
@@ -277,18 +264,43 @@ gk20a_instobj_wr32(struct nvkm_memory *memory, u64 offset, u32 data)
 	node->vaddr[offset / 4] = data;
 }
 
-static int
-gk20a_instobj_map(struct nvkm_memory *memory, u64 offset, struct nvkm_vmm *vmm,
-		  struct nvkm_vma *vma, void *argv, u32 argc)
+static void
+gk20a_instobj_map(struct nvkm_memory *memory, struct nvkm_vma *vma, u64 offset)
 {
 	struct gk20a_instobj *node = gk20a_instobj(memory);
-	struct nvkm_vmm_map map = {
-		.memory = &node->memory,
-		.offset = offset,
-		.mem = node->mn,
-	};
 
-	return nvkm_vmm_map(vmm, vma, argv, argc, &map);
+	nvkm_vm_map_at(vma, offset, &node->mem);
+}
+
+/*
+ * Clear the CPU mapping of an instobj if it exists
+ */
+static void
+gk20a_instobj_dtor(struct gk20a_instobj *node)
+{
+	struct gk20a_instmem *imem = node->imem;
+	struct gk20a_instobj *obj;
+	unsigned long flags;
+
+	spin_lock_irqsave(&imem->lock, flags);
+
+	if (!node->vaddr)
+		goto out;
+
+	list_for_each_entry(obj, &imem->vaddr_lru, vaddr_node) {
+		if (obj == node) {
+			list_del(&obj->vaddr_node);
+			break;
+		}
+	}
+	vunmap(node->vaddr);
+	node->vaddr = NULL;
+	imem->vaddr_use -= nvkm_memory_size(&node->memory);
+	nvkm_debug(&imem->base.subdev, "vaddr used: %x/%x\n",
+		   imem->vaddr_use, imem->vaddr_max);
+
+out:
+	spin_unlock_irqrestore(&imem->lock, flags);
 }
 
 static void *
@@ -298,11 +310,13 @@ gk20a_instobj_dtor_dma(struct nvkm_memory *memory)
 	struct gk20a_instmem *imem = node->base.imem;
 	struct device *dev = imem->base.subdev.device->dev;
 
-	if (unlikely(!node->base.vaddr))
+	gk20a_instobj_dtor(&node->base);
+
+	if (unlikely(!node->cpuaddr))
 		goto out;
 
-	dma_free_attrs(dev, (u64)node->base.mn->length << PAGE_SHIFT,
-		       node->base.vaddr, node->handle, imem->attrs);
+	dma_free_attrs(dev, node->base.mem.size << PAGE_SHIFT, node->cpuaddr,
+		       node->handle, &imem->attrs);
 
 out:
 	return node;
@@ -314,25 +328,22 @@ gk20a_instobj_dtor_iommu(struct nvkm_memory *memory)
 	struct gk20a_instobj_iommu *node = gk20a_instobj_iommu(memory);
 	struct gk20a_instmem *imem = node->base.imem;
 	struct device *dev = imem->base.subdev.device->dev;
-	struct nvkm_mm_node *r = node->base.mn;
+	struct nvkm_mm_node *r;
 	int i;
 
-	if (unlikely(!r))
+	gk20a_instobj_dtor(&node->base);
+
+	if (unlikely(list_empty(&node->base.mem.regions)))
 		goto out;
 
-	mutex_lock(&imem->lock);
-
-	/* vaddr has already been recycled */
-	if (node->base.vaddr)
-		gk20a_instobj_iommu_recycle_vaddr(node);
-
-	mutex_unlock(&imem->lock);
+	r = list_first_entry(&node->base.mem.regions, struct nvkm_mm_node,
+			     rl_entry);
 
 	/* clear IOMMU bit to unmap pages */
 	r->offset &= ~BIT(imem->iommu_bit - imem->iommu_pgshift);
 
 	/* Unmap pages from GPU address space and free them */
-	for (i = 0; i < node->base.mn->length; i++) {
+	for (i = 0; i < node->base.mem.size; i++) {
 		iommu_unmap(imem->domain,
 			    (r->offset + i) << imem->iommu_pgshift, PAGE_SIZE);
 		dma_unmap_page(dev, node->dma_addrs[i], PAGE_SIZE,
@@ -353,11 +364,12 @@ static const struct nvkm_memory_func
 gk20a_instobj_func_dma = {
 	.dtor = gk20a_instobj_dtor_dma,
 	.target = gk20a_instobj_target,
-	.page = gk20a_instobj_page,
 	.addr = gk20a_instobj_addr,
 	.size = gk20a_instobj_size,
-	.acquire = gk20a_instobj_acquire_dma,
-	.release = gk20a_instobj_release_dma,
+	.acquire = gk20a_instobj_acquire,
+	.release = gk20a_instobj_release,
+	.rd32 = gk20a_instobj_rd32,
+	.wr32 = gk20a_instobj_wr32,
 	.map = gk20a_instobj_map,
 };
 
@@ -365,18 +377,13 @@ static const struct nvkm_memory_func
 gk20a_instobj_func_iommu = {
 	.dtor = gk20a_instobj_dtor_iommu,
 	.target = gk20a_instobj_target,
-	.page = gk20a_instobj_page,
 	.addr = gk20a_instobj_addr,
 	.size = gk20a_instobj_size,
-	.acquire = gk20a_instobj_acquire_iommu,
-	.release = gk20a_instobj_release_iommu,
-	.map = gk20a_instobj_map,
-};
-
-static const struct nvkm_memory_ptrs
-gk20a_instobj_ptrs = {
+	.acquire = gk20a_instobj_acquire,
+	.release = gk20a_instobj_release,
 	.rd32 = gk20a_instobj_rd32,
 	.wr32 = gk20a_instobj_wr32,
+	.map = gk20a_instobj_map,
 };
 
 static int
@@ -392,12 +399,11 @@ gk20a_instobj_ctor_dma(struct gk20a_instmem *imem, u32 npages, u32 align,
 	*_node = &node->base;
 
 	nvkm_memory_ctor(&gk20a_instobj_func_dma, &node->base.memory);
-	node->base.memory.ptrs = &gk20a_instobj_ptrs;
 
-	node->base.vaddr = dma_alloc_attrs(dev, npages << PAGE_SHIFT,
-					   &node->handle, GFP_KERNEL,
-					   imem->attrs);
-	if (!node->base.vaddr) {
+	node->cpuaddr = dma_alloc_attrs(dev, npages << PAGE_SHIFT,
+					&node->handle, GFP_KERNEL,
+					&imem->attrs);
+	if (!node->cpuaddr) {
 		nvkm_error(subdev, "cannot allocate DMA memory\n");
 		return -ENOMEM;
 	}
@@ -413,7 +419,11 @@ gk20a_instobj_ctor_dma(struct gk20a_instmem *imem, u32 npages, u32 align,
 	node->r.offset = node->handle >> 12;
 	node->r.length = (npages << PAGE_SHIFT) >> 12;
 
-	node->base.mn = &node->r;
+	node->base.mem.offset = node->handle;
+
+	INIT_LIST_HEAD(&node->base.mem.regions);
+	list_add_tail(&node->r.rl_entry, &node->base.mem.regions);
+
 	return 0;
 }
 
@@ -439,7 +449,6 @@ gk20a_instobj_ctor_iommu(struct gk20a_instmem *imem, u32 npages, u32 align,
 	node->dma_addrs = (void *)(node->pages + npages);
 
 	nvkm_memory_ctor(&gk20a_instobj_func_iommu, &node->base.memory);
-	node->base.memory.ptrs = &gk20a_instobj_ptrs;
 
 	/* Allocate backing memory */
 	for (i = 0; i < npages; i++) {
@@ -490,7 +499,11 @@ gk20a_instobj_ctor_iommu(struct gk20a_instmem *imem, u32 npages, u32 align,
 	/* IOMMU bit tells that an address is to be resolved through the IOMMU */
 	r->offset |= BIT(imem->iommu_bit - imem->iommu_pgshift);
 
-	node->base.mn = r;
+	node->base.mem.offset = ((u64)r->offset) << imem->iommu_pgshift;
+
+	INIT_LIST_HEAD(&node->base.mem.regions);
+	list_add_tail(&r->rl_entry, &node->base.mem.regions);
+
 	return 0;
 
 release_area:
@@ -538,8 +551,13 @@ gk20a_instobj_new(struct nvkm_instmem *base, u32 size, u32 align, bool zero,
 
 	node->imem = imem;
 
+	/* present memory for being mapped using small pages */
+	node->mem.size = size >> 12;
+	node->mem.memtype = 0;
+	node->mem.page_shift = 12;
+
 	nvkm_debug(subdev, "alloc size: 0x%x, align: 0x%x, gaddr: 0x%llx\n",
-		   size, align, (u64)node->mn->offset << 12);
+		   size, align, node->mem.offset);
 
 	return 0;
 }
@@ -564,6 +582,7 @@ static const struct nvkm_instmem_func
 gk20a_instmem = {
 	.dtor = gk20a_instmem_dtor,
 	.memory_new = gk20a_instobj_new,
+	.persistent = true,
 	.zero = false,
 };
 
@@ -577,7 +596,7 @@ gk20a_instmem_new(struct nvkm_device *device, int index,
 	if (!(imem = kzalloc(sizeof(*imem), GFP_KERNEL)))
 		return -ENOMEM;
 	nvkm_instmem_ctor(&gk20a_instmem, device, index, &imem->base);
-	mutex_init(&imem->lock);
+	spin_lock_init(&imem->lock);
 	*pimem = &imem->base;
 
 	/* do not allow more than 1MB of CPU-mapped instmem */
@@ -590,13 +609,18 @@ gk20a_instmem_new(struct nvkm_device *device, int index,
 		imem->mm = &tdev->iommu.mm;
 		imem->domain = tdev->iommu.domain;
 		imem->iommu_pgshift = tdev->iommu.pgshift;
+		imem->cpu_map = gk20a_instobj_cpu_map_iommu;
 		imem->iommu_bit = tdev->func->iommu_bit;
 
 		nvkm_info(&imem->base.subdev, "using IOMMU\n");
 	} else {
-		imem->attrs = DMA_ATTR_NON_CONSISTENT |
-			      DMA_ATTR_WEAK_ORDERING |
-			      DMA_ATTR_WRITE_COMBINE;
+		init_dma_attrs(&imem->attrs);
+		/* We will access the memory through our own mapping */
+		dma_set_attr(DMA_ATTR_NON_CONSISTENT, &imem->attrs);
+		dma_set_attr(DMA_ATTR_WEAK_ORDERING, &imem->attrs);
+		dma_set_attr(DMA_ATTR_WRITE_COMBINE, &imem->attrs);
+		dma_set_attr(DMA_ATTR_NO_KERNEL_MAPPING, &imem->attrs);
+		imem->cpu_map = gk20a_instobj_cpu_map_dma;
 
 		nvkm_info(&imem->base.subdev, "using DMA API\n");
 	}

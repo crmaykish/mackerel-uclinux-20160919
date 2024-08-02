@@ -1,19 +1,32 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2000-2005 Silicon Graphics, Inc.
  * All Rights Reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it would be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write the Free Software Foundation,
+ * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 #include "xfs.h"
 #include "xfs_fs.h"
-#include "xfs_shared.h"
 #include "xfs_format.h"
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_bit.h"
+#include "xfs_sb.h"
 #include "xfs_mount.h"
 #include "xfs_trans.h"
 #include "xfs_buf_item.h"
 #include "xfs_trans_priv.h"
+#include "xfs_error.h"
 #include "xfs_trace.h"
 #include "xfs_log.h"
 
@@ -47,14 +60,14 @@ xfs_buf_log_format_size(
  */
 STATIC void
 xfs_buf_item_size_segment(
-	struct xfs_buf_log_item		*bip,
-	struct xfs_buf_log_format	*blfp,
-	int				*nvecs,
-	int				*nbytes)
+	struct xfs_buf_log_item	*bip,
+	struct xfs_buf_log_format *blfp,
+	int			*nvecs,
+	int			*nbytes)
 {
-	struct xfs_buf			*bp = bip->bli_buf;
-	int				next_bit;
-	int				last_bit;
+	struct xfs_buf		*bp = bip->bli_buf;
+	int			next_bit;
+	int			last_bit;
 
 	last_bit = xfs_next_bit(blfp->blf_data_map, blfp->blf_map_size, 0);
 	if (last_bit == -1)
@@ -204,12 +217,12 @@ xfs_buf_item_format_segment(
 	uint			offset,
 	struct xfs_buf_log_format *blfp)
 {
-	struct xfs_buf		*bp = bip->bli_buf;
-	uint			base_size;
-	int			first_bit;
-	int			last_bit;
-	int			next_bit;
-	uint			nbits;
+	struct xfs_buf	*bp = bip->bli_buf;
+	uint		base_size;
+	int		first_bit;
+	int		last_bit;
+	int		next_bit;
+	uint		nbits;
 
 	/* copy the flags across from the base format item */
 	blfp->blf_flags = bip->__bli_format.blf_flags;
@@ -309,8 +322,6 @@ xfs_buf_item_format(
 	ASSERT((bip->bli_flags & XFS_BLI_STALE) ||
 	       (xfs_blft_from_flags(&bip->__bli_format) > XFS_BLFT_UNKNOWN_BUF
 	        && xfs_blft_from_flags(&bip->__bli_format) < XFS_BLFT_MAX_BUF));
-	ASSERT(!(bip->bli_flags & XFS_BLI_ORDERED) ||
-	       (bip->bli_flags & XFS_BLI_STALE));
 
 
 	/*
@@ -328,17 +339,27 @@ xfs_buf_item_format(
 	 * occurs during recovery.
 	 */
 	if (bip->bli_flags & XFS_BLI_INODE_BUF) {
-		if (xfs_sb_version_has_v3inode(&lip->li_mountp->m_sb) ||
+		if (xfs_sb_version_hascrc(&lip->li_mountp->m_sb) ||
 		    !((bip->bli_flags & XFS_BLI_INODE_ALLOC_BUF) &&
 		      xfs_log_item_in_current_chkpt(lip)))
 			bip->__bli_format.blf_flags |= XFS_BLF_INODE_BUF;
 		bip->bli_flags &= ~XFS_BLI_INODE_BUF;
 	}
 
+	if ((bip->bli_flags & (XFS_BLI_ORDERED|XFS_BLI_STALE)) ==
+							XFS_BLI_ORDERED) {
+		/*
+		 * The buffer has been logged just to order it.  It is not being
+		 * included in the transaction commit, so don't format it.
+		 */
+		trace_xfs_buf_item_format_ordered(bip);
+		return;
+	}
+
 	for (i = 0; i < bip->bli_format_count; i++) {
 		xfs_buf_item_format_segment(bip, lv, &vecp, offset,
 					    &bip->bli_formats[i]);
-		offset += BBTOB(bp->b_maps[i].bm_len);
+		offset += bp->b_maps[i].bm_len;
 	}
 
 	/*
@@ -392,12 +413,12 @@ xfs_buf_item_unpin(
 	int			remove)
 {
 	struct xfs_buf_log_item	*bip = BUF_ITEM(lip);
-	xfs_buf_t		*bp = bip->bli_buf;
-	struct xfs_ail		*ailp = lip->li_ailp;
-	int			stale = bip->bli_flags & XFS_BLI_STALE;
-	int			freed;
+	xfs_buf_t	*bp = bip->bli_buf;
+	struct xfs_ail	*ailp = lip->li_ailp;
+	int		stale = bip->bli_flags & XFS_BLI_STALE;
+	int		freed;
 
-	ASSERT(bp->b_log_item == bip);
+	ASSERT(bp->b_fspriv == bip);
 	ASSERT(atomic_read(&bip->bli_refcount) > 0);
 
 	trace_xfs_buf_item_unpin(bip);
@@ -410,7 +431,7 @@ xfs_buf_item_unpin(
 	if (freed && stale) {
 		ASSERT(bip->bli_flags & XFS_BLI_STALE);
 		ASSERT(xfs_buf_islocked(bp));
-		ASSERT(bp->b_flags & XBF_STALE);
+		ASSERT(XFS_BUF_ISSTALE(bp));
 		ASSERT(bip->__bli_format.blf_flags & XFS_BLF_CANCEL);
 
 		trace_xfs_buf_item_unpin_stale(bip);
@@ -424,7 +445,7 @@ xfs_buf_item_unpin(
 			 * xfs_trans_uncommit() will try to reference the
 			 * buffer which we no longer have a hold on.
 			 */
-			if (!list_empty(&lip->li_trans))
+			if (lip->li_desc)
 				xfs_trans_del_item(lip);
 
 			/*
@@ -442,14 +463,13 @@ xfs_buf_item_unpin(
 		 */
 		if (bip->bli_flags & XFS_BLI_STALE_INODE) {
 			xfs_buf_do_callbacks(bp);
-			bp->b_log_item = NULL;
-			list_del_init(&bp->b_li_list);
+			bp->b_fspriv = NULL;
 			bp->b_iodone = NULL;
 		} else {
-			spin_lock(&ailp->ail_lock);
+			spin_lock(&ailp->xa_lock);
 			xfs_trans_ail_delete(ailp, lip, SHUTDOWN_LOG_IO_ERROR);
 			xfs_buf_item_relse(bp);
-			ASSERT(bp->b_log_item == NULL);
+			ASSERT(bp->b_fspriv == NULL);
 		}
 		xfs_buf_relse(bp);
 	} else if (freed && remove) {
@@ -473,7 +493,7 @@ xfs_buf_item_unpin(
 		xfs_buf_hold(bp);
 		bp->b_flags |= XBF_ASYNC;
 		xfs_buf_ioerror(bp, -EIO);
-		bp->b_flags &= ~XBF_DONE;
+		XFS_BUF_UNDONE(bp);
 		xfs_buf_stale(bp);
 		xfs_buf_ioend(bp);
 	}
@@ -518,7 +538,7 @@ xfs_buf_item_push(
 	/* has a previous flush failed due to IO errors? */
 	if ((bp->b_flags & XBF_WRITE_FAIL) &&
 	    ___ratelimit(&xfs_buf_write_fail_rl_state, "XFS: Failing async write")) {
-		xfs_warn(bp->b_mount,
+		xfs_warn(bp->b_target->bt_mount,
 "Failing async write on buffer block 0x%llx. Retrying async write.",
 			 (long long)bp->b_bn);
 	}
@@ -527,49 +547,6 @@ xfs_buf_item_push(
 		rval = XFS_ITEM_FLUSHING;
 	xfs_buf_unlock(bp);
 	return rval;
-}
-
-/*
- * Drop the buffer log item refcount and take appropriate action. This helper
- * determines whether the bli must be freed or not, since a decrement to zero
- * does not necessarily mean the bli is unused.
- *
- * Return true if the bli is freed, false otherwise.
- */
-bool
-xfs_buf_item_put(
-	struct xfs_buf_log_item	*bip)
-{
-	struct xfs_log_item	*lip = &bip->bli_item;
-	bool			aborted;
-	bool			dirty;
-
-	/* drop the bli ref and return if it wasn't the last one */
-	if (!atomic_dec_and_test(&bip->bli_refcount))
-		return false;
-
-	/*
-	 * We dropped the last ref and must free the item if clean or aborted.
-	 * If the bli is dirty and non-aborted, the buffer was clean in the
-	 * transaction but still awaiting writeback from previous changes. In
-	 * that case, the bli is freed on buffer writeback completion.
-	 */
-	aborted = test_bit(XFS_LI_ABORTED, &lip->li_flags) ||
-		  XFS_FORCED_SHUTDOWN(lip->li_mountp);
-	dirty = bip->bli_flags & XFS_BLI_DIRTY;
-	if (dirty && !aborted)
-		return false;
-
-	/*
-	 * The bli is aborted or clean. An aborted item may be in the AIL
-	 * regardless of dirty state.  For example, consider an aborted
-	 * transaction that invalidated a dirty bli and cleared the dirty
-	 * state.
-	 */
-	if (aborted)
-		xfs_trans_ail_remove(lip, SHUTDOWN_LOG_IO_ERROR);
-	xfs_buf_item_relse(bip->bli_buf);
-	return true;
 }
 
 /*
@@ -592,57 +569,91 @@ xfs_buf_item_put(
  * free the item.
  */
 STATIC void
-xfs_buf_item_release(
+xfs_buf_item_unlock(
 	struct xfs_log_item	*lip)
 {
 	struct xfs_buf_log_item	*bip = BUF_ITEM(lip);
 	struct xfs_buf		*bp = bip->bli_buf;
-	bool			released;
-	bool			hold = bip->bli_flags & XFS_BLI_HOLD;
-	bool			stale = bip->bli_flags & XFS_BLI_STALE;
-#if defined(DEBUG) || defined(XFS_WARN)
-	bool			ordered = bip->bli_flags & XFS_BLI_ORDERED;
-	bool			dirty = bip->bli_flags & XFS_BLI_DIRTY;
-	bool			aborted = test_bit(XFS_LI_ABORTED,
-						   &lip->li_flags);
-#endif
+	bool			clean;
+	bool			aborted;
+	int			flags;
 
-	trace_xfs_buf_item_release(bip);
-
-	/*
-	 * The bli dirty state should match whether the blf has logged segments
-	 * except for ordered buffers, where only the bli should be dirty.
-	 */
-	ASSERT((!ordered && dirty == xfs_buf_item_dirty_format(bip)) ||
-	       (ordered && dirty && !xfs_buf_item_dirty_format(bip)));
-	ASSERT(!stale || (bip->__bli_format.blf_flags & XFS_BLF_CANCEL));
-
-	/*
-	 * Clear the buffer's association with this transaction and
-	 * per-transaction state from the bli, which has been copied above.
-	 */
+	/* Clear the buffer's association with this transaction. */
 	bp->b_transp = NULL;
+
+	/*
+	 * If this is a transaction abort, don't return early.  Instead, allow
+	 * the brelse to happen.  Normally it would be done for stale
+	 * (cancelled) buffers at unpin time, but we'll never go through the
+	 * pin/unpin cycle if we abort inside commit.
+	 */
+	aborted = (lip->li_flags & XFS_LI_ABORTED) ? true : false;
+	/*
+	 * Before possibly freeing the buf item, copy the per-transaction state
+	 * so we can reference it safely later after clearing it from the
+	 * buffer log item.
+	 */
+	flags = bip->bli_flags;
 	bip->bli_flags &= ~(XFS_BLI_LOGGED | XFS_BLI_HOLD | XFS_BLI_ORDERED);
 
 	/*
-	 * Unref the item and unlock the buffer unless held or stale. Stale
-	 * buffers remain locked until final unpin unless the bli is freed by
-	 * the unref call. The latter implies shutdown because buffer
-	 * invalidation dirties the bli and transaction.
+	 * If the buf item is marked stale, then don't do anything.  We'll
+	 * unlock the buffer and free the buf item when the buffer is unpinned
+	 * for the last time.
 	 */
-	released = xfs_buf_item_put(bip);
-	if (hold || (stale && !released))
-		return;
-	ASSERT(!stale || aborted);
-	xfs_buf_relse(bp);
-}
+	if (flags & XFS_BLI_STALE) {
+		trace_xfs_buf_item_unlock_stale(bip);
+		ASSERT(bip->__bli_format.blf_flags & XFS_BLF_CANCEL);
+		if (!aborted) {
+			atomic_dec(&bip->bli_refcount);
+			return;
+		}
+	}
 
-STATIC void
-xfs_buf_item_committing(
-	struct xfs_log_item	*lip,
-	xfs_lsn_t		commit_lsn)
-{
-	return xfs_buf_item_release(lip);
+	trace_xfs_buf_item_unlock(bip);
+
+	/*
+	 * If the buf item isn't tracking any data, free it, otherwise drop the
+	 * reference we hold to it. If we are aborting the transaction, this may
+	 * be the only reference to the buf item, so we free it anyway
+	 * regardless of whether it is dirty or not. A dirty abort implies a
+	 * shutdown, anyway.
+	 *
+	 * Ordered buffers are dirty but may have no recorded changes, so ensure
+	 * we only release clean items here.
+	 */
+	clean = (flags & XFS_BLI_DIRTY) ? false : true;
+	if (clean) {
+		int i;
+		for (i = 0; i < bip->bli_format_count; i++) {
+			if (!xfs_bitmap_empty(bip->bli_formats[i].blf_data_map,
+				     bip->bli_formats[i].blf_map_size)) {
+				clean = false;
+				break;
+			}
+		}
+	}
+
+	/*
+	 * Clean buffers, by definition, cannot be in the AIL. However, aborted
+	 * buffers may be dirty and hence in the AIL. Therefore if we are
+	 * aborting a buffer and we've just taken the last refernce away, we
+	 * have to check if it is in the AIL before freeing it. We need to free
+	 * it in this case, because an aborted transaction has already shut the
+	 * filesystem down and this is the last chance we will have to do so.
+	 */
+	if (atomic_dec_and_test(&bip->bli_refcount)) {
+		if (clean)
+			xfs_buf_item_relse(bp);
+		else if (aborted) {
+			ASSERT(XFS_FORCED_SHUTDOWN(lip->li_mountp));
+			xfs_trans_ail_remove(lip, SHUTDOWN_LOG_IO_ERROR);
+			xfs_buf_item_relse(bp);
+		}
+	}
+
+	if (!(flags & XFS_BLI_HOLD))
+		xfs_buf_relse(bp);
 }
 
 /*
@@ -677,15 +688,25 @@ xfs_buf_item_committed(
 	return lsn;
 }
 
+STATIC void
+xfs_buf_item_committing(
+	struct xfs_log_item	*lip,
+	xfs_lsn_t		commit_lsn)
+{
+}
+
+/*
+ * This is the ops vector shared by all buf log items.
+ */
 static const struct xfs_item_ops xfs_buf_item_ops = {
 	.iop_size	= xfs_buf_item_size,
 	.iop_format	= xfs_buf_item_format,
 	.iop_pin	= xfs_buf_item_pin,
 	.iop_unpin	= xfs_buf_item_unpin,
-	.iop_release	= xfs_buf_item_release,
-	.iop_committing	= xfs_buf_item_committing,
+	.iop_unlock	= xfs_buf_item_unlock,
 	.iop_committed	= xfs_buf_item_committed,
 	.iop_push	= xfs_buf_item_push,
+	.iop_committing = xfs_buf_item_committing
 };
 
 STATIC int
@@ -702,7 +723,7 @@ xfs_buf_item_get_format(
 	}
 
 	bip->bli_formats = kmem_zalloc(count * sizeof(struct xfs_buf_log_format),
-				0);
+				KM_SLEEP);
 	if (!bip->bli_formats)
 		return -ENOMEM;
 	return 0;
@@ -720,15 +741,18 @@ xfs_buf_item_free_format(
 
 /*
  * Allocate a new buf log item to go with the given buffer.
- * Set the buffer's b_log_item field to point to the new
- * buf log item.
+ * Set the buffer's b_fsprivate field to point to the new
+ * buf log item.  If there are other item's attached to the
+ * buffer (see xfs_buf_attach_iodone() below), then put the
+ * buf log item at the front.
  */
 int
 xfs_buf_item_init(
 	struct xfs_buf	*bp,
 	struct xfs_mount *mp)
 {
-	struct xfs_buf_log_item	*bip = bp->b_log_item;
+	struct xfs_log_item	*lip = bp->b_fspriv;
+	struct xfs_buf_log_item	*bip;
 	int			chunks;
 	int			map_size;
 	int			error;
@@ -736,18 +760,15 @@ xfs_buf_item_init(
 
 	/*
 	 * Check to see if there is already a buf log item for
-	 * this buffer. If we do already have one, there is
+	 * this buffer.  If there is, it is guaranteed to be
+	 * the first.  If we do already have one, there is
 	 * nothing to do here so return.
 	 */
-	ASSERT(bp->b_mount == mp);
-	if (bip) {
-		ASSERT(bip->bli_item.li_type == XFS_LI_BUF);
-		ASSERT(!bp->b_transp);
-		ASSERT(bip->bli_buf == bp);
+	ASSERT(bp->b_target->bt_mount == mp);
+	if (lip != NULL && lip->li_type == XFS_LI_BUF)
 		return 0;
-	}
 
-	bip = kmem_zone_zalloc(xfs_buf_item_zone, 0);
+	bip = kmem_zone_zalloc(xfs_buf_item_zone, KM_SLEEP);
 	xfs_log_item_init(mp, &bip->bli_item, XFS_LI_BUF, &xfs_buf_item_ops);
 	bip->bli_buf = bp;
 
@@ -779,7 +800,13 @@ xfs_buf_item_init(
 		bip->bli_formats[i].blf_map_size = map_size;
 	}
 
-	bp->b_log_item = bip;
+	/*
+	 * Put the buf item into the list of items attached to the
+	 * buffer at the front.
+	 */
+	if (bp->b_fspriv)
+		bip->bli_item.li_bio_list = bp->b_fspriv;
+	bp->b_fspriv = bip;
 	xfs_buf_hold(bp);
 	return 0;
 }
@@ -837,8 +864,8 @@ xfs_buf_item_log_segment(
 	 * of the last bit to be set in this word plus one.
 	 */
 	if (bit) {
-		end_bit = min(bit + bits_to_set, (uint)NBWORD);
-		mask = ((1U << (end_bit - bit)) - 1) << bit;
+		end_bit = MIN(bit + bits_to_set, (uint)NBWORD);
+		mask = ((1 << (end_bit - bit)) - 1) << bit;
 		*wordp |= mask;
 		wordp++;
 		bits_set = end_bit - bit;
@@ -861,7 +888,7 @@ xfs_buf_item_log_segment(
 	 */
 	end_bit = bits_to_set - bits_set;
 	if (end_bit) {
-		mask = (1U << end_bit) - 1;
+		mask = (1 << end_bit) - 1;
 		*wordp |= mask;
 	}
 }
@@ -872,7 +899,7 @@ xfs_buf_item_log_segment(
  */
 void
 xfs_buf_item_log(
-	struct xfs_buf_log_item	*bip,
+	xfs_buf_log_item_t	*bip,
 	uint			first,
 	uint			last)
 {
@@ -888,57 +915,40 @@ xfs_buf_item_log(
 	for (i = 0; i < bip->bli_format_count; i++) {
 		if (start > last)
 			break;
-		end = start + BBTOB(bp->b_maps[i].bm_len) - 1;
-
-		/* skip to the map that includes the first byte to log */
+		end = start + BBTOB(bp->b_maps[i].bm_len);
 		if (first > end) {
 			start += BBTOB(bp->b_maps[i].bm_len);
 			continue;
 		}
-
-		/*
-		 * Trim the range to this segment and mark it in the bitmap.
-		 * Note that we must convert buffer offsets to segment relative
-		 * offsets (e.g., the first byte of each segment is byte 0 of
-		 * that segment).
-		 */
 		if (first < start)
 			first = start;
 		if (end > last)
 			end = last;
-		xfs_buf_item_log_segment(first - start, end - start,
+
+		xfs_buf_item_log_segment(first, end,
 					 &bip->bli_formats[i].blf_data_map[0]);
 
-		start += BBTOB(bp->b_maps[i].bm_len);
+		start += bp->b_maps[i].bm_len;
 	}
 }
 
 
 /*
- * Return true if the buffer has any ranges logged/dirtied by a transaction,
- * false otherwise.
+ * Return 1 if the buffer has been logged or ordered in a transaction (at any
+ * point, not just the current transaction) and 0 if not.
  */
-bool
-xfs_buf_item_dirty_format(
-	struct xfs_buf_log_item	*bip)
+uint
+xfs_buf_item_dirty(
+	xfs_buf_log_item_t	*bip)
 {
-	int			i;
-
-	for (i = 0; i < bip->bli_format_count; i++) {
-		if (!xfs_bitmap_empty(bip->bli_formats[i].blf_data_map,
-			     bip->bli_formats[i].blf_map_size))
-			return true;
-	}
-
-	return false;
+	return (bip->bli_flags & XFS_BLI_DIRTY);
 }
 
 STATIC void
 xfs_buf_item_free(
-	struct xfs_buf_log_item	*bip)
+	xfs_buf_log_item_t	*bip)
 {
 	xfs_buf_item_free_format(bip);
-	kmem_free(bip->bli_item.li_lv_shadow);
 	kmem_zone_free(xfs_buf_item_zone, bip);
 }
 
@@ -953,13 +963,13 @@ void
 xfs_buf_item_relse(
 	xfs_buf_t	*bp)
 {
-	struct xfs_buf_log_item	*bip = bp->b_log_item;
+	xfs_buf_log_item_t	*bip = bp->b_fspriv;
 
 	trace_xfs_buf_item_relse(bp, _RET_IP_);
-	ASSERT(!test_bit(XFS_LI_IN_AIL, &bip->bli_item.li_flags));
+	ASSERT(!(bip->bli_item.li_flags & XFS_LI_IN_AIL));
 
-	bp->b_log_item = NULL;
-	if (list_empty(&bp->b_li_list))
+	bp->b_fspriv = bip->bli_item.li_bio_list;
+	if (bp->b_fspriv == NULL)
 		bp->b_iodone = NULL;
 
 	xfs_buf_rele(bp);
@@ -972,18 +982,28 @@ xfs_buf_item_relse(
  * to be called when the buffer's I/O completes.  If it is not set
  * already, set the buffer's b_iodone() routine to be
  * xfs_buf_iodone_callbacks() and link the log item into the list of
- * items rooted at b_li_list.
+ * items rooted at b_fsprivate.  Items are always added as the second
+ * entry in the list if there is a first, because the buf item code
+ * assumes that the buf log item is first.
  */
 void
 xfs_buf_attach_iodone(
-	struct xfs_buf		*bp,
-	void			(*cb)(struct xfs_buf *, struct xfs_log_item *),
-	struct xfs_log_item	*lip)
+	xfs_buf_t	*bp,
+	void		(*cb)(xfs_buf_t *, xfs_log_item_t *),
+	xfs_log_item_t	*lip)
 {
+	xfs_log_item_t	*head_lip;
+
 	ASSERT(xfs_buf_islocked(bp));
 
 	lip->li_cb = cb;
-	list_add_tail(&lip->li_bio_list, &bp->b_li_list);
+	head_lip = bp->b_fspriv;
+	if (head_lip) {
+		lip->li_bio_list = head_lip->li_bio_list;
+		head_lip->li_bio_list = lip;
+	} else {
+		bp->b_fspriv = lip;
+	}
 
 	ASSERT(bp->b_iodone == NULL ||
 	       bp->b_iodone == xfs_buf_iodone_callbacks);
@@ -993,12 +1013,12 @@ xfs_buf_attach_iodone(
 /*
  * We can have many callbacks on a buffer. Running the callbacks individually
  * can cause a lot of contention on the AIL lock, so we allow for a single
- * callback to be able to scan the remaining items in bp->b_li_list for other
- * items of the same type and callback to be processed in the first call.
+ * callback to be able to scan the remaining lip->li_bio_list for other items
+ * of the same type and callback to be processed in the first call.
  *
  * As a result, the loop walking the callback list below will also modify the
  * list. it removes the first item from the list and then runs the callback.
- * The loop then restarts from the new first item int the list. This allows the
+ * The loop then restarts from the new head of the list. This allows the
  * callback to scan and modify the list attached to the buffer and we don't
  * have to care about maintaining a next item pointer.
  */
@@ -1006,90 +1026,51 @@ STATIC void
 xfs_buf_do_callbacks(
 	struct xfs_buf		*bp)
 {
-	struct xfs_buf_log_item *blip = bp->b_log_item;
 	struct xfs_log_item	*lip;
 
-	/* If there is a buf_log_item attached, run its callback */
-	if (blip) {
-		lip = &blip->bli_item;
-		lip->li_cb(bp, lip);
-	}
-
-	while (!list_empty(&bp->b_li_list)) {
-		lip = list_first_entry(&bp->b_li_list, struct xfs_log_item,
-				       li_bio_list);
-
+	while ((lip = bp->b_fspriv) != NULL) {
+		bp->b_fspriv = lip->li_bio_list;
+		ASSERT(lip->li_cb != NULL);
 		/*
-		 * Remove the item from the list, so we don't have any
+		 * Clear the next pointer so we don't have any
 		 * confusion if the item is added to another buf.
 		 * Don't touch the log item after calling its
 		 * callback, because it could have freed itself.
 		 */
-		list_del_init(&lip->li_bio_list);
+		lip->li_bio_list = NULL;
 		lip->li_cb(bp, lip);
 	}
 }
 
 /*
- * Invoke the error state callback for each log item affected by the failed I/O.
- *
- * If a metadata buffer write fails with a non-permanent error, the buffer is
- * eventually resubmitted and so the completion callbacks are not run. The error
- * state may need to be propagated to the log items attached to the buffer,
- * however, so the next AIL push of the item knows hot to handle it correctly.
+ * This is the iodone() function for buffers which have had callbacks
+ * attached to them by xfs_buf_attach_iodone().  It should remove each
+ * log item from the buffer's list and call the callback of each in turn.
+ * When done, the buffer's fsprivate field is set to NULL and the buffer
+ * is unlocked with a call to iodone().
  */
-STATIC void
-xfs_buf_do_callbacks_fail(
+void
+xfs_buf_iodone_callbacks(
 	struct xfs_buf		*bp)
 {
-	struct xfs_log_item	*lip;
-	struct xfs_ail		*ailp;
-
-	/*
-	 * Buffer log item errors are handled directly by xfs_buf_item_push()
-	 * and xfs_buf_iodone_callback_error, and they have no IO error
-	 * callbacks. Check only for items in b_li_list.
-	 */
-	if (list_empty(&bp->b_li_list))
-		return;
-
-	lip = list_first_entry(&bp->b_li_list, struct xfs_log_item,
-			li_bio_list);
-	ailp = lip->li_ailp;
-	spin_lock(&ailp->ail_lock);
-	list_for_each_entry(lip, &bp->b_li_list, li_bio_list) {
-		if (lip->li_ops->iop_error)
-			lip->li_ops->iop_error(lip, bp);
-	}
-	spin_unlock(&ailp->ail_lock);
-}
-
-static bool
-xfs_buf_iodone_callback_error(
-	struct xfs_buf		*bp)
-{
-	struct xfs_buf_log_item	*bip = bp->b_log_item;
-	struct xfs_log_item	*lip;
-	struct xfs_mount	*mp;
+	struct xfs_log_item	*lip = bp->b_fspriv;
+	struct xfs_mount	*mp = lip->li_mountp;
 	static ulong		lasttime;
 	static xfs_buftarg_t	*lasttarg;
-	struct xfs_error_cfg	*cfg;
 
-	/*
-	 * The failed buffer might not have a buf_log_item attached or the
-	 * log_item list might be empty. Get the mp from the available
-	 * xfs_log_item
-	 */
-	lip = list_first_entry_or_null(&bp->b_li_list, struct xfs_log_item,
-				       li_bio_list);
-	mp = lip ? lip->li_mountp : bip->bli_item.li_mountp;
+	if (likely(!bp->b_error))
+		goto do_callbacks;
 
 	/*
 	 * If we've already decided to shutdown the filesystem because of
 	 * I/O errors, there's no point in giving this a retry.
 	 */
-	if (XFS_FORCED_SHUTDOWN(mp))
-		goto out_stale;
+	if (XFS_FORCED_SHUTDOWN(mp)) {
+		xfs_buf_stale(bp);
+		XFS_BUF_DONE(bp);
+		trace_xfs_buf_item_iodone(bp, _RET_IP_);
+		goto do_callbacks;
+	}
 
 	if (bp->b_target != lasttarg ||
 	    time_after(jiffies, (lasttime + 5*HZ))) {
@@ -1098,102 +1079,47 @@ xfs_buf_iodone_callback_error(
 	}
 	lasttarg = bp->b_target;
 
-	/* synchronous writes will have callers process the error */
-	if (!(bp->b_flags & XBF_ASYNC))
-		goto out_stale;
-
-	trace_xfs_buf_item_iodone_async(bp, _RET_IP_);
-	ASSERT(bp->b_iodone != NULL);
-
-	cfg = xfs_error_get_cfg(mp, XFS_ERR_METADATA, bp->b_error);
-
 	/*
 	 * If the write was asynchronous then no one will be looking for the
-	 * error.  If this is the first failure of this type, clear the error
-	 * state and write the buffer out again. This means we always retry an
-	 * async write failure at least once, but we also need to set the buffer
-	 * up to behave correctly now for repeated failures.
+	 * error.  Clear the error state and write the buffer out again.
+	 *
+	 * XXX: This helps against transient write errors, but we need to find
+	 * a way to shut the filesystem down if the writes keep failing.
+	 *
+	 * In practice we'll shut the filesystem down soon as non-transient
+	 * errors tend to affect the whole device and a failing log write
+	 * will make us give up.  But we really ought to do better here.
 	 */
-	if (!(bp->b_flags & (XBF_STALE | XBF_WRITE_FAIL)) ||
-	     bp->b_last_error != bp->b_error) {
-		bp->b_flags |= (XBF_WRITE | XBF_DONE | XBF_WRITE_FAIL);
-		bp->b_last_error = bp->b_error;
-		if (cfg->retry_timeout != XFS_ERR_RETRY_FOREVER &&
-		    !bp->b_first_retry_time)
-			bp->b_first_retry_time = jiffies;
+	if (XFS_BUF_ISASYNC(bp)) {
+		ASSERT(bp->b_iodone != NULL);
 
-		xfs_buf_ioerror(bp, 0);
-		xfs_buf_submit(bp);
-		return true;
+		trace_xfs_buf_item_iodone_async(bp, _RET_IP_);
+
+		xfs_buf_ioerror(bp, 0); /* errno of 0 unsets the flag */
+
+		if (!(bp->b_flags & (XBF_STALE|XBF_WRITE_FAIL))) {
+			bp->b_flags |= XBF_WRITE | XBF_ASYNC |
+				       XBF_DONE | XBF_WRITE_FAIL;
+			xfs_buf_submit(bp);
+		} else {
+			xfs_buf_relse(bp);
+		}
+
+		return;
 	}
 
 	/*
-	 * Repeated failure on an async write. Take action according to the
-	 * error configuration we have been set up to use.
+	 * If the write of the buffer was synchronous, we want to make
+	 * sure to return the error to the caller of xfs_bwrite().
 	 */
-
-	if (cfg->max_retries != XFS_ERR_RETRY_FOREVER &&
-	    ++bp->b_retries > cfg->max_retries)
-			goto permanent_error;
-	if (cfg->retry_timeout != XFS_ERR_RETRY_FOREVER &&
-	    time_after(jiffies, cfg->retry_timeout + bp->b_first_retry_time))
-			goto permanent_error;
-
-	/* At unmount we may treat errors differently */
-	if ((mp->m_flags & XFS_MOUNT_UNMOUNTING) && mp->m_fail_unmount)
-		goto permanent_error;
-
-	/*
-	 * Still a transient error, run IO completion failure callbacks and let
-	 * the higher layers retry the buffer.
-	 */
-	xfs_buf_do_callbacks_fail(bp);
-	xfs_buf_ioerror(bp, 0);
-	xfs_buf_relse(bp);
-	return true;
-
-	/*
-	 * Permanent error - we need to trigger a shutdown if we haven't already
-	 * to indicate that inconsistency will result from this action.
-	 */
-permanent_error:
-	xfs_force_shutdown(mp, SHUTDOWN_META_IO_ERROR);
-out_stale:
 	xfs_buf_stale(bp);
-	bp->b_flags |= XBF_DONE;
+	XFS_BUF_DONE(bp);
+
 	trace_xfs_buf_error_relse(bp, _RET_IP_);
-	return false;
-}
 
-/*
- * This is the iodone() function for buffers which have had callbacks attached
- * to them by xfs_buf_attach_iodone(). We need to iterate the items on the
- * callback list, mark the buffer as having no more callbacks and then push the
- * buffer through IO completion processing.
- */
-void
-xfs_buf_iodone_callbacks(
-	struct xfs_buf		*bp)
-{
-	/*
-	 * If there is an error, process it. Some errors require us
-	 * to run callbacks after failure processing is done so we
-	 * detect that and take appropriate action.
-	 */
-	if (bp->b_error && xfs_buf_iodone_callback_error(bp))
-		return;
-
-	/*
-	 * Successful IO or permanent error. Either way, we can clear the
-	 * retry state here in preparation for the next error that may occur.
-	 */
-	bp->b_last_error = 0;
-	bp->b_retries = 0;
-	bp->b_first_retry_time = 0;
-
+do_callbacks:
 	xfs_buf_do_callbacks(bp);
-	bp->b_log_item = NULL;
-	list_del_init(&bp->b_li_list);
+	bp->b_fspriv = NULL;
 	bp->b_iodone = NULL;
 	xfs_buf_ioend(bp);
 }
@@ -1225,46 +1151,7 @@ xfs_buf_iodone(
 	 *
 	 * Either way, AIL is useless if we're forcing a shutdown.
 	 */
-	spin_lock(&ailp->ail_lock);
+	spin_lock(&ailp->xa_lock);
 	xfs_trans_ail_delete(ailp, lip, SHUTDOWN_CORRUPT_INCORE);
 	xfs_buf_item_free(BUF_ITEM(lip));
-}
-
-/*
- * Requeue a failed buffer for writeback.
- *
- * We clear the log item failed state here as well, but we have to be careful
- * about reference counts because the only active reference counts on the buffer
- * may be the failed log items. Hence if we clear the log item failed state
- * before queuing the buffer for IO we can release all active references to
- * the buffer and free it, leading to use after free problems in
- * xfs_buf_delwri_queue. It makes no difference to the buffer or log items which
- * order we process them in - the buffer is locked, and we own the buffer list
- * so nothing on them is going to change while we are performing this action.
- *
- * Hence we can safely queue the buffer for IO before we clear the failed log
- * item state, therefore  always having an active reference to the buffer and
- * avoiding the transient zero-reference state that leads to use-after-free.
- *
- * Return true if the buffer was added to the buffer list, false if it was
- * already on the buffer list.
- */
-bool
-xfs_buf_resubmit_failed_buffers(
-	struct xfs_buf		*bp,
-	struct list_head	*buffer_list)
-{
-	struct xfs_log_item	*lip;
-	bool			ret;
-
-	ret = xfs_buf_delwri_queue(bp, buffer_list);
-
-	/*
-	 * XFS_LI_FAILED set/clear is protected by ail_lock, caller of this
-	 * function already have it acquired
-	 */
-	list_for_each_entry(lip, &bp->b_li_list, li_bio_list)
-		xfs_clear_li_failed(lip);
-
-	return ret;
 }

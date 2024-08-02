@@ -1,11 +1,18 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2005-2014 Brocade Communications Systems, Inc.
- * Copyright (c) 2014- QLogic Corporation.
+ * Copyright (c) 2005-2010 Brocade Communications Systems, Inc.
  * All rights reserved
- * www.qlogic.com
+ * www.brocade.com
  *
- * Linux driver for QLogic BR-series Fibre Channel Host Bus Adapter.
+ * Linux driver for Brocade Fibre Channel Host Bus Adapter.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License (GPL) Version 2 as
+ * published by the Free Software Foundation
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
  */
 
 /*
@@ -50,7 +57,7 @@
 #ifdef BFA_DRIVER_VERSION
 #define BFAD_DRIVER_VERSION    BFA_DRIVER_VERSION
 #else
-#define BFAD_DRIVER_VERSION    "3.2.25.1"
+#define BFAD_DRIVER_VERSION    "3.2.23.0"
 #endif
 
 #define BFAD_PROTO_NAME FCPI_NAME
@@ -306,7 +313,7 @@ int		bfad_setup_intr(struct bfad_s *bfad);
 void		bfad_remove_intr(struct bfad_s *bfad);
 void		bfad_update_hal_cfg(struct bfa_iocfc_cfg_s *bfa_cfg);
 bfa_status_t	bfad_hal_mem_alloc(struct bfad_s *bfad);
-void		bfad_bfa_tmo(struct timer_list *t);
+void		bfad_bfa_tmo(unsigned long data);
 void		bfad_init_timer(struct bfad_s *bfad);
 int		bfad_pci_init(struct pci_dev *pdev, struct bfad_s *bfad);
 void		bfad_pci_uninit(struct pci_dev *pdev, struct bfad_s *bfad);

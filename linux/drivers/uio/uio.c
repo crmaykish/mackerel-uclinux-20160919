@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * drivers/uio/uio.c
  *
@@ -10,6 +9,8 @@
  * Userspace IO
  *
  * Base Functions
+ *
+ * Licensed under the GPLv2 only.
  */
 
 #include <linux/module.h>
@@ -19,7 +20,7 @@
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/idr.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/kobject.h>
 #include <linux/cdev.h>
@@ -65,7 +66,7 @@ static ssize_t map_size_show(struct uio_mem *mem, char *buf)
 
 static ssize_t map_offset_show(struct uio_mem *mem, char *buf)
 {
-	return sprintf(buf, "0x%llx\n", (unsigned long long)mem->offs);
+	return sprintf(buf, "0x%llx\n", (unsigned long long)mem->addr & ~PAGE_MASK);
 }
 
 struct map_sysfs_entry {
@@ -214,20 +215,7 @@ static ssize_t name_show(struct device *dev,
 			 struct device_attribute *attr, char *buf)
 {
 	struct uio_device *idev = dev_get_drvdata(dev);
-	int ret;
-
-	mutex_lock(&idev->info_lock);
-	if (!idev->info) {
-		ret = -EINVAL;
-		dev_err(dev, "the device has been unregistered\n");
-		goto out;
-	}
-
-	ret = sprintf(buf, "%s\n", idev->info->name);
-
-out:
-	mutex_unlock(&idev->info_lock);
-	return ret;
+	return sprintf(buf, "%s\n", idev->info->name);
 }
 static DEVICE_ATTR_RO(name);
 
@@ -235,20 +223,7 @@ static ssize_t version_show(struct device *dev,
 			    struct device_attribute *attr, char *buf)
 {
 	struct uio_device *idev = dev_get_drvdata(dev);
-	int ret;
-
-	mutex_lock(&idev->info_lock);
-	if (!idev->info) {
-		ret = -EINVAL;
-		dev_err(dev, "the device has been unregistered\n");
-		goto out;
-	}
-
-	ret = sprintf(buf, "%s\n", idev->info->version);
-
-out:
-	mutex_unlock(&idev->info_lock);
-	return ret;
+	return sprintf(buf, "%s\n", idev->info->version);
 }
 static DEVICE_ATTR_RO(version);
 
@@ -274,8 +249,6 @@ static struct class uio_class = {
 	.dev_groups = uio_groups,
 };
 
-static bool uio_class_registered;
-
 /*
  * device functions
  */
@@ -297,17 +270,13 @@ static int uio_dev_add_attributes(struct uio_device *idev)
 		if (!map_found) {
 			map_found = 1;
 			idev->map_dir = kobject_create_and_add("maps",
-							&idev->dev.kobj);
-			if (!idev->map_dir) {
-				ret = -ENOMEM;
+							&idev->dev->kobj);
+			if (!idev->map_dir)
 				goto err_map;
-			}
 		}
 		map = kzalloc(sizeof(*map), GFP_KERNEL);
-		if (!map) {
-			ret = -ENOMEM;
-			goto err_map;
-		}
+		if (!map)
+			goto err_map_kobj;
 		kobject_init(&map->kobj, &map_attr_type);
 		map->mem = mem;
 		mem->map = map;
@@ -316,7 +285,7 @@ static int uio_dev_add_attributes(struct uio_device *idev)
 			goto err_map_kobj;
 		ret = kobject_uevent(&map->kobj, KOBJ_ADD);
 		if (ret)
-			goto err_map_kobj;
+			goto err_map;
 	}
 
 	for (pi = 0; pi < MAX_UIO_PORT_REGIONS; pi++) {
@@ -326,17 +295,13 @@ static int uio_dev_add_attributes(struct uio_device *idev)
 		if (!portio_found) {
 			portio_found = 1;
 			idev->portio_dir = kobject_create_and_add("portio",
-							&idev->dev.kobj);
-			if (!idev->portio_dir) {
-				ret = -ENOMEM;
+							&idev->dev->kobj);
+			if (!idev->portio_dir)
 				goto err_portio;
-			}
 		}
 		portio = kzalloc(sizeof(*portio), GFP_KERNEL);
-		if (!portio) {
-			ret = -ENOMEM;
-			goto err_portio;
-		}
+		if (!portio)
+			goto err_portio_kobj;
 		kobject_init(&portio->kobj, &portio_attr_type);
 		portio->port = port;
 		port->portio = portio;
@@ -346,7 +311,7 @@ static int uio_dev_add_attributes(struct uio_device *idev)
 			goto err_portio_kobj;
 		ret = kobject_uevent(&portio->kobj, KOBJ_ADD);
 		if (ret)
-			goto err_portio_kobj;
+			goto err_portio;
 	}
 
 	return 0;
@@ -369,7 +334,7 @@ err_map_kobj:
 		kobject_put(&map->kobj);
 	}
 	kobject_put(idev->map_dir);
-	dev_err(&idev->dev, "error creating sysfs files (%d)\n", ret);
+	dev_err(idev->dev, "error creating sysfs files (%d)\n", ret);
 	return ret;
 }
 
@@ -406,17 +371,17 @@ static int uio_get_minor(struct uio_device *idev)
 		idev->minor = retval;
 		retval = 0;
 	} else if (retval == -ENOSPC) {
-		dev_err(&idev->dev, "too many uio devices\n");
+		dev_err(idev->dev, "too many uio devices\n");
 		retval = -EINVAL;
 	}
 	mutex_unlock(&minor_lock);
 	return retval;
 }
 
-static void uio_free_minor(unsigned long minor)
+static void uio_free_minor(struct uio_device *idev)
 {
 	mutex_lock(&minor_lock);
-	idr_remove(&uio_idr, minor);
+	idr_remove(&uio_idr, idev->minor);
 	mutex_unlock(&minor_lock);
 }
 
@@ -442,9 +407,8 @@ EXPORT_SYMBOL_GPL(uio_event_notify);
 static irqreturn_t uio_interrupt(int irq, void *dev_id)
 {
 	struct uio_device *idev = (struct uio_device *)dev_id;
-	irqreturn_t ret;
+	irqreturn_t ret = idev->info->handler(irq, idev->info);
 
-	ret = idev->info->handler(irq, idev->info);
 	if (ret == IRQ_HANDLED)
 		uio_event_notify(idev->info);
 
@@ -464,17 +428,15 @@ static int uio_open(struct inode *inode, struct file *filep)
 
 	mutex_lock(&minor_lock);
 	idev = idr_find(&uio_idr, iminor(inode));
+	mutex_unlock(&minor_lock);
 	if (!idev) {
 		ret = -ENODEV;
-		mutex_unlock(&minor_lock);
 		goto out;
 	}
-	get_device(&idev->dev);
-	mutex_unlock(&minor_lock);
 
 	if (!try_module_get(idev->owner)) {
 		ret = -ENODEV;
-		goto err_module_get;
+		goto out;
 	}
 
 	listener = kmalloc(sizeof(*listener), GFP_KERNEL);
@@ -487,19 +449,11 @@ static int uio_open(struct inode *inode, struct file *filep)
 	listener->event_count = atomic_read(&idev->event);
 	filep->private_data = listener;
 
-	mutex_lock(&idev->info_lock);
-	if (!idev->info) {
-		mutex_unlock(&idev->info_lock);
-		ret = -EINVAL;
-		goto err_infoopen;
-	}
-
-	if (idev->info->open)
+	if (idev->info->open) {
 		ret = idev->info->open(idev->info, inode);
-	mutex_unlock(&idev->info_lock);
-	if (ret)
-		goto err_infoopen;
-
+		if (ret)
+			goto err_infoopen;
+	}
 	return 0;
 
 err_infoopen:
@@ -507,9 +461,6 @@ err_infoopen:
 
 err_alloc_listener:
 	module_put(idev->owner);
-
-err_module_get:
-	put_device(&idev->dev);
 
 out:
 	return ret;
@@ -529,34 +480,25 @@ static int uio_release(struct inode *inode, struct file *filep)
 	struct uio_listener *listener = filep->private_data;
 	struct uio_device *idev = listener->dev;
 
-	mutex_lock(&idev->info_lock);
-	if (idev->info && idev->info->release)
+	if (idev->info->release)
 		ret = idev->info->release(idev->info, inode);
-	mutex_unlock(&idev->info_lock);
 
 	module_put(idev->owner);
 	kfree(listener);
-	put_device(&idev->dev);
 	return ret;
 }
 
-static __poll_t uio_poll(struct file *filep, poll_table *wait)
+static unsigned int uio_poll(struct file *filep, poll_table *wait)
 {
 	struct uio_listener *listener = filep->private_data;
 	struct uio_device *idev = listener->dev;
-	__poll_t ret = 0;
 
-	mutex_lock(&idev->info_lock);
-	if (!idev->info || !idev->info->irq)
-		ret = -EIO;
-	mutex_unlock(&idev->info_lock);
-
-	if (ret)
-		return ret;
+	if (!idev->info->irq)
+		return -EIO;
 
 	poll_wait(filep, &idev->wait, wait);
 	if (listener->event_count != atomic_read(&idev->event))
-		return EPOLLIN | EPOLLRDNORM;
+		return POLLIN | POLLRDNORM;
 	return 0;
 }
 
@@ -566,8 +508,11 @@ static ssize_t uio_read(struct file *filep, char __user *buf,
 	struct uio_listener *listener = filep->private_data;
 	struct uio_device *idev = listener->dev;
 	DECLARE_WAITQUEUE(wait, current);
-	ssize_t retval = 0;
+	ssize_t retval;
 	s32 event_count;
+
+	if (!idev->info->irq)
+		return -EIO;
 
 	if (count != sizeof(s32))
 		return -EINVAL;
@@ -575,14 +520,6 @@ static ssize_t uio_read(struct file *filep, char __user *buf,
 	add_wait_queue(&idev->wait, &wait);
 
 	do {
-		mutex_lock(&idev->info_lock);
-		if (!idev->info || !idev->info->irq) {
-			retval = -EIO;
-			mutex_unlock(&idev->info_lock);
-			break;
-		}
-		mutex_unlock(&idev->info_lock);
-
 		set_current_state(TASK_INTERRUPTIBLE);
 
 		event_count = atomic_read(&idev->event);
@@ -623,32 +560,20 @@ static ssize_t uio_write(struct file *filep, const char __user *buf,
 	ssize_t retval;
 	s32 irq_on;
 
+	if (!idev->info->irq)
+		return -EIO;
+
 	if (count != sizeof(s32))
 		return -EINVAL;
+
+	if (!idev->info->irqcontrol)
+		return -ENOSYS;
 
 	if (copy_from_user(&irq_on, buf, count))
 		return -EFAULT;
 
-	mutex_lock(&idev->info_lock);
-	if (!idev->info) {
-		retval = -EINVAL;
-		goto out;
-	}
-
-	if (!idev->info->irq) {
-		retval = -EIO;
-		goto out;
-	}
-
-	if (!idev->info->irqcontrol) {
-		retval = -ENOSYS;
-		goto out;
-	}
-
 	retval = idev->info->irqcontrol(idev->info, irq_on);
 
-out:
-	mutex_unlock(&idev->info_lock);
 	return retval ? retval : sizeof(s32);
 }
 
@@ -664,26 +589,16 @@ static int uio_find_mem_index(struct vm_area_struct *vma)
 	return -1;
 }
 
-static vm_fault_t uio_vma_fault(struct vm_fault *vmf)
+static int uio_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
-	struct uio_device *idev = vmf->vma->vm_private_data;
+	struct uio_device *idev = vma->vm_private_data;
 	struct page *page;
 	unsigned long offset;
 	void *addr;
-	vm_fault_t ret = 0;
-	int mi;
 
-	mutex_lock(&idev->info_lock);
-	if (!idev->info) {
-		ret = VM_FAULT_SIGBUS;
-		goto out;
-	}
-
-	mi = uio_find_mem_index(vmf->vma);
-	if (mi < 0) {
-		ret = VM_FAULT_SIGBUS;
-		goto out;
-	}
+	int mi = uio_find_mem_index(vma);
+	if (mi < 0)
+		return VM_FAULT_SIGBUS;
 
 	/*
 	 * We need to subtract mi because userspace uses offset = N*PAGE_SIZE
@@ -698,11 +613,7 @@ static vm_fault_t uio_vma_fault(struct vm_fault *vmf)
 		page = vmalloc_to_page(addr);
 	get_page(page);
 	vmf->page = page;
-
-out:
-	mutex_unlock(&idev->info_lock);
-
-	return ret;
+	return 0;
 }
 
 static const struct vm_operations_struct uio_logical_vm_ops = {
@@ -727,7 +638,6 @@ static int uio_mmap_physical(struct vm_area_struct *vma)
 	struct uio_device *idev = vma->vm_private_data;
 	int mi = uio_find_mem_index(vma);
 	struct uio_mem *mem;
-
 	if (mi < 0)
 		return -EINVAL;
 	mem = idev->info->mem + mi;
@@ -738,8 +648,7 @@ static int uio_mmap_physical(struct vm_area_struct *vma)
 		return -EINVAL;
 
 	vma->vm_ops = &uio_physical_vm_ops;
-	if (idev->info->mem[mi].memtype == UIO_MEM_PHYS)
-		vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
 	/*
 	 * We cannot use the vm_iomap_memory() helper here,
@@ -770,47 +679,30 @@ static int uio_mmap(struct file *filep, struct vm_area_struct *vma)
 
 	vma->vm_private_data = idev;
 
-	mutex_lock(&idev->info_lock);
-	if (!idev->info) {
-		ret = -EINVAL;
-		goto out;
-	}
-
 	mi = uio_find_mem_index(vma);
-	if (mi < 0) {
-		ret = -EINVAL;
-		goto out;
-	}
+	if (mi < 0)
+		return -EINVAL;
 
 	requested_pages = vma_pages(vma);
 	actual_pages = ((idev->info->mem[mi].addr & ~PAGE_MASK)
 			+ idev->info->mem[mi].size + PAGE_SIZE -1) >> PAGE_SHIFT;
-	if (requested_pages > actual_pages) {
-		ret = -EINVAL;
-		goto out;
-	}
+	if (requested_pages > actual_pages)
+		return -EINVAL;
 
 	if (idev->info->mmap) {
 		ret = idev->info->mmap(idev->info, vma);
-		goto out;
+		return ret;
 	}
 
 	switch (idev->info->mem[mi].memtype) {
-	case UIO_MEM_IOVA:
-	case UIO_MEM_PHYS:
-		ret = uio_mmap_physical(vma);
-		break;
-	case UIO_MEM_LOGICAL:
-	case UIO_MEM_VIRTUAL:
-		ret = uio_mmap_logical(vma);
-		break;
-	default:
-		ret = -EINVAL;
+		case UIO_MEM_PHYS:
+			return uio_mmap_physical(vma);
+		case UIO_MEM_LOGICAL:
+		case UIO_MEM_VIRTUAL:
+			return uio_mmap_logical(vma);
+		default:
+			return -EINVAL;
 	}
-
- out:
-	mutex_unlock(&idev->info_lock);
-	return ret;
 }
 
 static const struct file_operations uio_fops = {
@@ -880,9 +772,6 @@ static int init_uio_class(void)
 		printk(KERN_ERR "class_register failed for uio\n");
 		goto err_class_register;
 	}
-
-	uio_class_registered = true;
-
 	return 0;
 
 err_class_register:
@@ -893,16 +782,8 @@ exit:
 
 static void release_uio_class(void)
 {
-	uio_class_registered = false;
 	class_unregister(&uio_class);
 	uio_major_cleanup();
-}
-
-static void uio_device_release(struct device *dev)
-{
-	struct uio_device *idev = dev_get_drvdata(dev);
-
-	kfree(idev);
 }
 
 /**
@@ -920,45 +801,33 @@ int __uio_register_device(struct module *owner,
 	struct uio_device *idev;
 	int ret = 0;
 
-	if (!uio_class_registered)
-		return -EPROBE_DEFER;
-
 	if (!parent || !info || !info->name || !info->version)
 		return -EINVAL;
 
 	info->uio_dev = NULL;
 
-	idev = kzalloc(sizeof(*idev), GFP_KERNEL);
+	idev = devm_kzalloc(parent, sizeof(*idev), GFP_KERNEL);
 	if (!idev) {
 		return -ENOMEM;
 	}
 
 	idev->owner = owner;
 	idev->info = info;
-	mutex_init(&idev->info_lock);
 	init_waitqueue_head(&idev->wait);
 	atomic_set(&idev->event, 0);
 
 	ret = uio_get_minor(idev);
-	if (ret) {
-		kfree(idev);
+	if (ret)
 		return ret;
+
+	idev->dev = device_create(&uio_class, parent,
+				  MKDEV(uio_major, idev->minor), idev,
+				  "uio%d", idev->minor);
+	if (IS_ERR(idev->dev)) {
+		printk(KERN_ERR "UIO: device register failed\n");
+		ret = PTR_ERR(idev->dev);
+		goto err_device_create;
 	}
-
-	device_initialize(&idev->dev);
-	idev->dev.devt = MKDEV(uio_major, idev->minor);
-	idev->dev.class = &uio_class;
-	idev->dev.parent = parent;
-	idev->dev.release = uio_device_release;
-	dev_set_drvdata(&idev->dev, idev);
-
-	ret = dev_set_name(&idev->dev, "uio%d", idev->minor);
-	if (ret)
-		goto err_device_create;
-
-	ret = device_add(&idev->dev);
-	if (ret)
-		goto err_device_create;
 
 	ret = uio_dev_add_attributes(idev);
 	if (ret)
@@ -977,10 +846,8 @@ int __uio_register_device(struct module *owner,
 		 */
 		ret = request_irq(info->irq, uio_interrupt,
 				  info->irq_flags, info->name, idev);
-		if (ret) {
-			info->uio_dev = NULL;
+		if (ret)
 			goto err_request_irq;
-		}
 	}
 
 	return 0;
@@ -988,10 +855,9 @@ int __uio_register_device(struct module *owner,
 err_request_irq:
 	uio_dev_del_attributes(idev);
 err_uio_dev_add_attributes:
-	device_del(&idev->dev);
+	device_destroy(&uio_class, MKDEV(uio_major, idev->minor));
 err_device_create:
-	uio_free_minor(idev->minor);
-	put_device(&idev->dev);
+	uio_free_minor(idev);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(__uio_register_device);
@@ -1004,28 +870,20 @@ EXPORT_SYMBOL_GPL(__uio_register_device);
 void uio_unregister_device(struct uio_info *info)
 {
 	struct uio_device *idev;
-	unsigned long minor;
 
 	if (!info || !info->uio_dev)
 		return;
 
 	idev = info->uio_dev;
-	minor = idev->minor;
 
-	mutex_lock(&idev->info_lock);
+	uio_free_minor(idev);
+
 	uio_dev_del_attributes(idev);
 
 	if (info->irq && info->irq != UIO_IRQ_CUSTOM)
 		free_irq(info->irq, idev);
 
-	idev->info = NULL;
-	mutex_unlock(&idev->info_lock);
-
-	wake_up_interruptible(&idev->wait);
-	kill_fasync(&idev->async_queue, SIGIO, POLL_HUP);
-
-	uio_free_minor(minor);
-	device_unregister(&idev->dev);
+	device_destroy(&uio_class, MKDEV(uio_major, idev->minor));
 
 	return;
 }

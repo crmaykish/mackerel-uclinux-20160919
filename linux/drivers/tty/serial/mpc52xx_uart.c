@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Driver for the PSC of the Freescale MPC52xx PSCs configured as UARTs.
  *
@@ -24,6 +23,10 @@
  *                    Grant Likely <grant.likely@secretlab.ca>
  * Copyright (C) 2004-2006 Sylvain Munaut <tnt@246tNt.com>
  * Copyright (C) 2003 MontaVista, Software, Inc.
+ *
+ * This file is licensed under the terms of the GNU General Public License
+ * version 2. This program is licensed "as is" without any warranty of any
+ * kind, whether express or implied.
  */
 
 #undef DEBUG
@@ -343,7 +346,7 @@ static irqreturn_t mpc52xx_psc_handle_irq(struct uart_port *port)
 	return mpc5xxx_uart_process_int(port);
 }
 
-static const struct psc_ops mpc52xx_psc_ops = {
+static struct psc_ops mpc52xx_psc_ops = {
 	.fifo_init = mpc52xx_psc_fifo_init,
 	.raw_rx_rdy = mpc52xx_psc_raw_rx_rdy,
 	.raw_tx_rdy = mpc52xx_psc_raw_tx_rdy,
@@ -373,7 +376,7 @@ static const struct psc_ops mpc52xx_psc_ops = {
 	.get_mr1 = mpc52xx_psc_get_mr1,
 };
 
-static const struct psc_ops mpc5200b_psc_ops = {
+static struct psc_ops mpc5200b_psc_ops = {
 	.fifo_init = mpc52xx_psc_fifo_init,
 	.raw_rx_rdy = mpc52xx_psc_raw_rx_rdy,
 	.raw_tx_rdy = mpc52xx_psc_raw_tx_rdy,
@@ -966,7 +969,7 @@ static u8 mpc5125_psc_get_mr1(struct uart_port *port)
 	return in_8(&PSC_5125(port)->mr1);
 }
 
-static const struct psc_ops mpc5125_psc_ops = {
+static struct psc_ops mpc5125_psc_ops = {
 	.fifo_init = mpc5125_psc_fifo_init,
 	.raw_rx_rdy = mpc5125_psc_raw_rx_rdy,
 	.raw_tx_rdy = mpc5125_psc_raw_tx_rdy,
@@ -1001,7 +1004,7 @@ static const struct psc_ops mpc5125_psc_ops = {
 	.get_mr1 = mpc5125_psc_get_mr1,
 };
 
-static const struct psc_ops mpc512x_psc_ops = {
+static struct psc_ops mpc512x_psc_ops = {
 	.fifo_init = mpc512x_psc_fifo_init,
 	.raw_rx_rdy = mpc512x_psc_raw_rx_rdy,
 	.raw_tx_rdy = mpc512x_psc_raw_tx_rdy,
@@ -1344,7 +1347,7 @@ mpc52xx_uart_verify_port(struct uart_port *port, struct serial_struct *ser)
 }
 
 
-static const struct uart_ops mpc52xx_uart_ops = {
+static struct uart_ops mpc52xx_uart_ops = {
 	.tx_empty	= mpc52xx_uart_tx_empty,
 	.set_mctrl	= mpc52xx_uart_set_mctrl,
 	.get_mctrl	= mpc52xx_uart_get_mctrl,
@@ -1631,8 +1634,8 @@ mpc52xx_console_setup(struct console *co, char *options)
 		return -EINVAL;
 	}
 
-	pr_debug("Console on ttyPSC%x is %pOF\n",
-		 co->index, mpc52xx_uart_nodes[co->index]);
+	pr_debug("Console on ttyPSC%x is %s\n",
+		 co->index, mpc52xx_uart_nodes[co->index]->full_name);
 
 	/* Fetch register locations */
 	ret = of_address_to_resource(np, 0, &res);
@@ -1752,8 +1755,8 @@ static int mpc52xx_uart_of_probe(struct platform_device *op)
 			break;
 	if (idx >= MPC52xx_PSC_MAXNUM)
 		return -EINVAL;
-	pr_debug("Found %pOF assigned to ttyPSC%x\n",
-		 mpc52xx_uart_nodes[idx], idx);
+	pr_debug("Found %s assigned to ttyPSC%x\n",
+		 mpc52xx_uart_nodes[idx]->full_name, idx);
 
 	/* set the uart clock to the input clock of the psc, the different
 	 * prescalers are taken into account in the set_baudrate() methods
@@ -1878,8 +1881,8 @@ mpc52xx_uart_of_enumerate(void)
 
 	for (i = 0; i < MPC52xx_PSC_MAXNUM; i++) {
 		if (mpc52xx_uart_nodes[i])
-			pr_debug("%pOF assigned to ttyPSC%x\n",
-				 mpc52xx_uart_nodes[i], i);
+			pr_debug("%s assigned to ttyPSC%x\n",
+				 mpc52xx_uart_nodes[i]->full_name, i);
 	}
 }
 

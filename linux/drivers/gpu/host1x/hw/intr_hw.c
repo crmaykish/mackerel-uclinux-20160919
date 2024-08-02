@@ -1,9 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Tegra host1x Interrupt Management
  *
  * Copyright (C) 2010 Google, Inc.
  * Copyright (c) 2010-2013, NVIDIA Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/interrupt.h>
@@ -22,26 +33,26 @@ static void host1x_intr_syncpt_handle(struct host1x_syncpt *syncpt)
 	unsigned int id = syncpt->id;
 	struct host1x *host = syncpt->host;
 
-	host1x_sync_writel(host, BIT(id % 32),
-		HOST1X_SYNC_SYNCPT_THRESH_INT_DISABLE(id / 32));
-	host1x_sync_writel(host, BIT(id % 32),
-		HOST1X_SYNC_SYNCPT_THRESH_CPU0_INT_STATUS(id / 32));
+	host1x_sync_writel(host, BIT_MASK(id),
+		HOST1X_SYNC_SYNCPT_THRESH_INT_DISABLE(BIT_WORD(id)));
+	host1x_sync_writel(host, BIT_MASK(id),
+		HOST1X_SYNC_SYNCPT_THRESH_CPU0_INT_STATUS(BIT_WORD(id)));
 
-	schedule_work(&syncpt->intr.work);
+	queue_work(host->intr_wq, &syncpt->intr.work);
 }
 
 static irqreturn_t syncpt_thresh_isr(int irq, void *dev_id)
 {
 	struct host1x *host = dev_id;
 	unsigned long reg;
-	unsigned int i, id;
+	int i, id;
 
 	for (i = 0; i < DIV_ROUND_UP(host->info->nb_pts, 32); i++) {
 		reg = host1x_sync_readl(host,
 			HOST1X_SYNC_SYNCPT_THRESH_CPU0_INT_STATUS(i));
-		for_each_set_bit(id, &reg, 32) {
+		for_each_set_bit(id, &reg, BITS_PER_LONG) {
 			struct host1x_syncpt *syncpt =
-				host->syncpt + (i * 32 + id);
+				host->syncpt + (i * BITS_PER_LONG + id);
 			host1x_intr_syncpt_handle(syncpt);
 		}
 	}
@@ -51,7 +62,7 @@ static irqreturn_t syncpt_thresh_isr(int irq, void *dev_id)
 
 static void _host1x_intr_disable_all_syncpt_intrs(struct host1x *host)
 {
-	unsigned int i;
+	u32 i;
 
 	for (i = 0; i < DIV_ROUND_UP(host->info->nb_pts, 32); ++i) {
 		host1x_sync_writel(host, 0xffffffffu,
@@ -61,9 +72,24 @@ static void _host1x_intr_disable_all_syncpt_intrs(struct host1x *host)
 	}
 }
 
-static void intr_hw_init(struct host1x *host, u32 cpm)
+static int _host1x_intr_init_host_sync(struct host1x *host, u32 cpm,
+	void (*syncpt_thresh_work)(struct work_struct *))
 {
-#if HOST1X_HW < 6
+	int i, err;
+
+	host1x_hw_intr_disable_all_syncpt_intrs(host);
+
+	for (i = 0; i < host->info->nb_pts; i++)
+		INIT_WORK(&host->syncpt[i].intr.work, syncpt_thresh_work);
+
+	err = devm_request_irq(host->dev, host->intr_syncpt_irq,
+			       syncpt_thresh_isr, IRQF_SHARED,
+			       "host1x_syncpt", host);
+	if (IS_ERR_VALUE(err)) {
+		WARN_ON(1);
+		return err;
+	}
+
 	/* disable the ip_busy_timeout. this prevents write drops */
 	host1x_sync_writel(host, 0, HOST1X_SYNC_IP_BUSY_TIMEOUT);
 
@@ -75,66 +101,34 @@ static void intr_hw_init(struct host1x *host, u32 cpm)
 
 	/* update host clocks per usec */
 	host1x_sync_writel(host, cpm, HOST1X_SYNC_USEC_CLK);
-#endif
-}
-
-static int
-_host1x_intr_init_host_sync(struct host1x *host, u32 cpm,
-			    void (*syncpt_thresh_work)(struct work_struct *))
-{
-	unsigned int i;
-	int err;
-
-	host1x_hw_intr_disable_all_syncpt_intrs(host);
-
-	for (i = 0; i < host->info->nb_pts; i++)
-		INIT_WORK(&host->syncpt[i].intr.work, syncpt_thresh_work);
-
-	err = devm_request_irq(host->dev, host->intr_syncpt_irq,
-			       syncpt_thresh_isr, IRQF_SHARED,
-			       "host1x_syncpt", host);
-	if (err < 0) {
-		WARN_ON(1);
-		return err;
-	}
-
-	intr_hw_init(host, cpm);
 
 	return 0;
 }
 
 static void _host1x_intr_set_syncpt_threshold(struct host1x *host,
-					      unsigned int id,
-					      u32 thresh)
+	u32 id, u32 thresh)
 {
 	host1x_sync_writel(host, thresh, HOST1X_SYNC_SYNCPT_INT_THRESH(id));
 }
 
-static void _host1x_intr_enable_syncpt_intr(struct host1x *host,
-					    unsigned int id)
+static void _host1x_intr_enable_syncpt_intr(struct host1x *host, u32 id)
 {
-	host1x_sync_writel(host, BIT(id % 32),
-		HOST1X_SYNC_SYNCPT_THRESH_INT_ENABLE_CPU0(id / 32));
+	host1x_sync_writel(host, BIT_MASK(id),
+		HOST1X_SYNC_SYNCPT_THRESH_INT_ENABLE_CPU0(BIT_WORD(id)));
 }
 
-static void _host1x_intr_disable_syncpt_intr(struct host1x *host,
-					     unsigned int id)
+static void _host1x_intr_disable_syncpt_intr(struct host1x *host, u32 id)
 {
-	host1x_sync_writel(host, BIT(id % 32),
-		HOST1X_SYNC_SYNCPT_THRESH_INT_DISABLE(id / 32));
-	host1x_sync_writel(host, BIT(id % 32),
-		HOST1X_SYNC_SYNCPT_THRESH_CPU0_INT_STATUS(id / 32));
+	host1x_sync_writel(host, BIT_MASK(id),
+		HOST1X_SYNC_SYNCPT_THRESH_INT_DISABLE(BIT_WORD(id)));
+	host1x_sync_writel(host, BIT_MASK(id),
+		HOST1X_SYNC_SYNCPT_THRESH_CPU0_INT_STATUS(BIT_WORD(id)));
 }
 
 static int _host1x_free_syncpt_irq(struct host1x *host)
 {
-	unsigned int i;
-
 	devm_free_irq(host->dev, host->intr_syncpt_irq, host);
-
-	for (i = 0; i < host->info->nb_pts; i++)
-		cancel_work_sync(&host->syncpt[i].intr.work);
-
+	flush_workqueue(host->intr_wq);
 	return 0;
 }
 

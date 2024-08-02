@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for Samsung S5K5BAF UXGA 1/5" 2M CMOS Image Sensor
  * with embedded SoC ISP.
@@ -8,6 +7,10 @@
  *
  * Based on S5K6AA driver authored by Sylwester Nawrocki
  * Copyright (C) 2013, Samsung Electronics Co., Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -27,7 +30,7 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
-#include <media/v4l2-fwnode.h>
+#include <media/v4l2-of.h>
 
 static int debug;
 module_param(debug, int, 0644);
@@ -235,7 +238,7 @@ struct s5k5baf_gpio {
 
 enum s5k5baf_gpio_id {
 	STBY,
-	RSET,
+	RST,
 	NUM_GPIOS,
 };
 
@@ -370,7 +373,7 @@ static int s5k5baf_fw_parse(struct device *dev, struct s5k5baf_fw **fw,
 	data += S5K5BAG_FW_TAG_LEN;
 	count -= S5K5BAG_FW_TAG_LEN;
 
-	d = devm_kcalloc(dev, count, sizeof(u16), GFP_KERNEL);
+	d = devm_kzalloc(dev, count * sizeof(u16), GFP_KERNEL);
 	if (!d)
 		return -ENOMEM;
 
@@ -405,7 +408,7 @@ static inline struct v4l2_subdev *ctrl_to_sd(struct v4l2_ctrl *ctrl)
 
 static inline bool s5k5baf_is_cis_subdev(struct v4l2_subdev *sd)
 {
-	return sd->entity.function == MEDIA_ENT_F_CAM_SENSOR;
+	return sd->entity.type == MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
 }
 
 static inline struct s5k5baf *to_s5k5baf(struct v4l2_subdev *sd)
@@ -763,7 +766,7 @@ static int s5k5baf_hw_set_video_bus(struct s5k5baf *state)
 {
 	u16 en_pkts;
 
-	if (state->bus_type == V4L2_MBUS_CSI2_DPHY)
+	if (state->bus_type == V4L2_MBUS_CSI2)
 		en_pkts = EN_PACKETS_CSI2;
 	else
 		en_pkts = 0;
@@ -970,7 +973,7 @@ static int s5k5baf_power_on(struct s5k5baf *state)
 
 	s5k5baf_gpio_deassert(state, STBY);
 	usleep_range(50, 100);
-	s5k5baf_gpio_deassert(state, RSET);
+	s5k5baf_gpio_deassert(state, RST);
 	return 0;
 
 err_reg_dis:
@@ -988,7 +991,7 @@ static int s5k5baf_power_off(struct s5k5baf *state)
 	state->apply_cfg = 0;
 	state->apply_crop = 0;
 
-	s5k5baf_gpio_assert(state, RSET);
+	s5k5baf_gpio_assert(state, RST);
 	s5k5baf_gpio_assert(state, STBY);
 
 	if (!IS_ERR(state->clock))
@@ -1371,7 +1374,7 @@ static int s5k5baf_get_selection(struct v4l2_subdev *sd,
 				 struct v4l2_subdev_pad_config *cfg,
 				 struct v4l2_subdev_selection *sel)
 {
-	enum selection_rect rtype;
+	static enum selection_rect rtype;
 	struct s5k5baf *state = to_s5k5baf(sd);
 
 	rtype = s5k5baf_get_sel_rect(sel->pad, sel->target);
@@ -1753,7 +1756,7 @@ static int s5k5baf_registered(struct v4l2_subdev *sd)
 		v4l2_err(sd, "failed to register subdev %s\n",
 			 state->cis_sd.name);
 	else
-		ret = media_create_pad_link(&state->cis_sd.entity, PAD_CIS,
+		ret = media_entity_create_link(&state->cis_sd.entity, PAD_CIS,
 					       &state->sd.entity, PAD_CIS,
 					       MEDIA_LNK_FL_IMMUTABLE |
 					       MEDIA_LNK_FL_ENABLED);
@@ -1838,7 +1841,7 @@ static int s5k5baf_parse_device_node(struct s5k5baf *state, struct device *dev)
 {
 	struct device_node *node = dev->of_node;
 	struct device_node *node_ep;
-	struct v4l2_fwnode_endpoint ep = { .bus_type = 0 };
+	struct v4l2_of_endpoint ep;
 	int ret;
 
 	if (!node) {
@@ -1860,26 +1863,24 @@ static int s5k5baf_parse_device_node(struct s5k5baf *state, struct device *dev)
 
 	node_ep = of_graph_get_next_endpoint(node, NULL);
 	if (!node_ep) {
-		dev_err(dev, "no endpoint defined at node %pOF\n", node);
+		dev_err(dev, "no endpoint defined at node %s\n",
+			node->full_name);
 		return -EINVAL;
 	}
 
-	ret = v4l2_fwnode_endpoint_parse(of_fwnode_handle(node_ep), &ep);
+	v4l2_of_parse_endpoint(node_ep, &ep);
 	of_node_put(node_ep);
-	if (ret)
-		return ret;
-
 	state->bus_type = ep.bus_type;
 
 	switch (state->bus_type) {
-	case V4L2_MBUS_CSI2_DPHY:
+	case V4L2_MBUS_CSI2:
 		state->nlanes = ep.bus.mipi_csi2.num_data_lanes;
 		break;
 	case V4L2_MBUS_PARALLEL:
 		break;
 	default:
-		dev_err(dev, "unsupported bus in endpoint defined at node %pOF\n",
-			node);
+		dev_err(dev, "unsupported bus in endpoint defined at node %s\n",
+			node->full_name);
 		return -EINVAL;
 	}
 
@@ -1903,8 +1904,8 @@ static int s5k5baf_configure_subdevs(struct s5k5baf *state,
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 
 	state->cis_pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
-	ret = media_entity_pads_init(&sd->entity, NUM_CIS_PADS, &state->cis_pad);
+	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
+	ret = media_entity_init(&sd->entity, NUM_CIS_PADS, &state->cis_pad, 0);
 	if (ret < 0)
 		goto err;
 
@@ -1918,8 +1919,8 @@ static int s5k5baf_configure_subdevs(struct s5k5baf *state,
 
 	state->pads[PAD_CIS].flags = MEDIA_PAD_FL_SINK;
 	state->pads[PAD_OUT].flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.function = MEDIA_ENT_F_V4L2_SUBDEV_UNKNOWN;
-	ret = media_entity_pads_init(&sd->entity, NUM_ISP_PADS, state->pads);
+	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV;
+	ret = media_entity_init(&sd->entity, NUM_ISP_PADS, state->pads, 0);
 
 	if (!ret)
 		return 0;
@@ -1946,7 +1947,8 @@ static int s5k5baf_configure_regulators(struct s5k5baf *state)
 	return ret;
 }
 
-static int s5k5baf_probe(struct i2c_client *c)
+static int s5k5baf_probe(struct i2c_client *c,
+			const struct i2c_device_id *id)
 {
 	struct s5k5baf *state;
 	int ret;
@@ -2045,7 +2047,7 @@ static struct i2c_driver s5k5baf_i2c_driver = {
 		.of_match_table = s5k5baf_of_match,
 		.name = S5K5BAF_DRIVER_NAME
 	},
-	.probe_new	= s5k5baf_probe,
+	.probe		= s5k5baf_probe,
 	.remove		= s5k5baf_remove,
 	.id_table	= s5k5baf_id,
 };

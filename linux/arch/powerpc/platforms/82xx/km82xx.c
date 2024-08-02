@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Keymile km82xx support
  * Copyright 2008-2011 DENX Software Engineering GmbH
@@ -7,6 +6,11 @@
  * based on code from:
  * Copyright 2007 Freescale Semiconductor, Inc.
  * Author: Scott Wood <scottwood@freescale.com>
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #include <linux/init.h>
@@ -194,7 +198,8 @@ machine_device_initcall(km82xx, declare_of_platform_devices);
  */
 static int __init km82xx_probe(void)
 {
-	return of_machine_is_compatible("keymile,km82xx");
+	unsigned long root = of_get_flat_dt_root();
+	return of_flat_dt_is_compatible(root, "keymile,km82xx");
 }
 
 define_machine(km82xx)

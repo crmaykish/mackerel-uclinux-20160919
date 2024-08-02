@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (C) 1995, 1996, 1997 Olaf Kirch <okir@monad.swb.de>
  *
@@ -8,10 +7,8 @@
 #ifndef _LINUX_NFSD_NFSFH_H
 #define _LINUX_NFSD_NFSFH_H
 
-#include <linux/crc32.h>
 #include <linux/sunrpc/svc.h>
 #include <uapi/linux/nfsd/nfsfh.h>
-#include <linux/iversion.h>
 
 static inline __u32 ino_t_to_u32(ino_t ino)
 {
@@ -208,28 +205,6 @@ static inline bool fh_fsid_match(struct knfsd_fh *fh1, struct knfsd_fh *fh2)
 	return true;
 }
 
-#ifdef CONFIG_CRC32
-/**
- * knfsd_fh_hash - calculate the crc32 hash for the filehandle
- * @fh - pointer to filehandle
- *
- * returns a crc32 hash for the filehandle that is compatible with
- * the one displayed by "wireshark".
- */
-
-static inline u32
-knfsd_fh_hash(struct knfsd_fh *fh)
-{
-	return ~crc32_le(0xFFFFFFFF, (unsigned char *)&fh->fh_base, fh->fh_size);
-}
-#else
-static inline u32
-knfsd_fh_hash(struct knfsd_fh *fh)
-{
-	return 0;
-}
-#endif
-
 #ifdef CONFIG_NFSD_V3
 /*
  * The wcc data stored in current_fh should be cleared
@@ -243,30 +218,24 @@ fh_clear_wcc(struct svc_fh *fhp)
 }
 
 /*
- * We could use i_version alone as the change attribute.  However,
- * i_version can go backwards after a reboot.  On its own that doesn't
- * necessarily cause a problem, but if i_version goes backwards and then
- * is incremented again it could reuse a value that was previously used
- * before boot, and a client who queried the two values might
- * incorrectly assume nothing changed.
- *
- * By using both ctime and the i_version counter we guarantee that as
- * long as time doesn't go backwards we never reuse an old value.
+ * Fill in the pre_op attr for the wcc data
  */
-static inline u64 nfsd4_change_attribute(struct kstat *stat,
-					 struct inode *inode)
+static inline void
+fill_pre_wcc(struct svc_fh *fhp)
 {
-	u64 chattr;
+	struct inode    *inode;
 
-	chattr =  stat->ctime.tv_sec;
-	chattr <<= 30;
-	chattr += stat->ctime.tv_nsec;
-	chattr += inode_query_iversion(inode);
-	return chattr;
+	inode = d_inode(fhp->fh_dentry);
+	if (!fhp->fh_pre_saved) {
+		fhp->fh_pre_mtime = inode->i_mtime;
+		fhp->fh_pre_ctime = inode->i_ctime;
+		fhp->fh_pre_size  = inode->i_size;
+		fhp->fh_pre_change = inode->i_version;
+		fhp->fh_pre_saved = true;
+	}
 }
 
-extern void fill_pre_wcc(struct svc_fh *fhp);
-extern void fill_post_wcc(struct svc_fh *fhp);
+extern void fill_post_wcc(struct svc_fh *);
 #else
 #define fh_clear_wcc(ignored)
 #define fill_pre_wcc(ignored)
@@ -296,7 +265,7 @@ fh_lock_nested(struct svc_fh *fhp, unsigned int subclass)
 	}
 
 	inode = d_inode(dentry);
-	inode_lock_nested(inode, subclass);
+	mutex_lock_nested(&inode->i_mutex, subclass);
 	fill_pre_wcc(fhp);
 	fhp->fh_locked = true;
 }
@@ -315,7 +284,7 @@ fh_unlock(struct svc_fh *fhp)
 {
 	if (fhp->fh_locked) {
 		fill_post_wcc(fhp);
-		inode_unlock(d_inode(fhp->fh_dentry));
+		mutex_unlock(&d_inode(fhp->fh_dentry)->i_mutex);
 		fhp->fh_locked = false;
 	}
 }

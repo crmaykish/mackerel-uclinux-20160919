@@ -1,20 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * dice_stream.c - a part of driver for DICE based devices
  *
  * Copyright (c) Clemens Ladisch <clemens@ladisch.de>
  * Copyright (c) 2014 Takashi Sakamoto <o-takashi@sakamocchi.jp>
+ *
+ * Licensed under the terms of the GNU General Public License, version 2.
  */
 
 #include "dice.h"
 
 #define	CALLBACK_TIMEOUT	200
-#define NOTIFICATION_TIMEOUT_MS	(2 * MSEC_PER_SEC)
-
-struct reg_params {
-	unsigned int count;
-	unsigned int size;
-};
 
 const unsigned int snd_dice_rates[SND_DICE_RATES_COUNT] = {
 	/* mode 0 */
@@ -30,18 +25,8 @@ const unsigned int snd_dice_rates[SND_DICE_RATES_COUNT] = {
 };
 
 int snd_dice_stream_get_rate_mode(struct snd_dice *dice, unsigned int rate,
-				  enum snd_dice_rate_mode *mode)
+				  unsigned int *mode)
 {
-	/* Corresponding to each entry in snd_dice_rates. */
-	static const enum snd_dice_rate_mode modes[] = {
-		[0] = SND_DICE_RATE_MODE_LOW,
-		[1] = SND_DICE_RATE_MODE_LOW,
-		[2] = SND_DICE_RATE_MODE_LOW,
-		[3] = SND_DICE_RATE_MODE_MIDDLE,
-		[4] = SND_DICE_RATE_MODE_MIDDLE,
-		[5] = SND_DICE_RATE_MODE_HIGH,
-		[6] = SND_DICE_RATE_MODE_HIGH,
-	};
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(snd_dice_rates); i++) {
@@ -50,138 +35,98 @@ int snd_dice_stream_get_rate_mode(struct snd_dice *dice, unsigned int rate,
 		if (snd_dice_rates[i] != rate)
 			continue;
 
-		*mode = modes[i];
+		*mode = (i - 1) / 2;
 		return 0;
 	}
-
 	return -EINVAL;
 }
 
-/*
- * This operation has an effect to synchronize GLOBAL_STATUS/GLOBAL_SAMPLE_RATE
- * to GLOBAL_STATUS. Especially, just after powering on, these are different.
- */
-static int ensure_phase_lock(struct snd_dice *dice, unsigned int rate)
+static void release_resources(struct snd_dice *dice,
+			      struct fw_iso_resources *resources)
 {
-	__be32 reg, nominal;
-	u32 data;
-	int i;
+	__be32 channel;
+
+	/* Reset channel number */
+	channel = cpu_to_be32((u32)-1);
+	if (resources == &dice->tx_resources)
+		snd_dice_transaction_write_tx(dice, TX_ISOCHRONOUS,
+					      &channel, sizeof(channel));
+	else
+		snd_dice_transaction_write_rx(dice, RX_ISOCHRONOUS,
+					      &channel, sizeof(channel));
+
+	fw_iso_resources_free(resources);
+}
+
+static int keep_resources(struct snd_dice *dice,
+			  struct fw_iso_resources *resources,
+			  unsigned int max_payload_bytes)
+{
+	__be32 channel;
 	int err;
 
-	err = snd_dice_transaction_read_global(dice, GLOBAL_CLOCK_SELECT,
-					       &reg, sizeof(reg));
+	err = fw_iso_resources_allocate(resources, max_payload_bytes,
+				fw_parent_device(dice->unit)->max_speed);
 	if (err < 0)
-		return err;
+		goto end;
 
-	data = be32_to_cpu(reg);
-
-	data &= ~CLOCK_RATE_MASK;
-	for (i = 0; i < ARRAY_SIZE(snd_dice_rates); ++i) {
-		if (snd_dice_rates[i] == rate)
-			break;
-	}
-	if (i == ARRAY_SIZE(snd_dice_rates))
-		return -EINVAL;
-	data |= i << CLOCK_RATE_SHIFT;
-
-	if (completion_done(&dice->clock_accepted))
-		reinit_completion(&dice->clock_accepted);
-
-	reg = cpu_to_be32(data);
-	err = snd_dice_transaction_write_global(dice, GLOBAL_CLOCK_SELECT,
-						&reg, sizeof(reg));
+	/* Set channel number */
+	channel = cpu_to_be32(resources->channel);
+	if (resources == &dice->tx_resources)
+		err = snd_dice_transaction_write_tx(dice, TX_ISOCHRONOUS,
+						    &channel, sizeof(channel));
+	else
+		err = snd_dice_transaction_write_rx(dice, RX_ISOCHRONOUS,
+						    &channel, sizeof(channel));
 	if (err < 0)
-		return err;
-
-	if (wait_for_completion_timeout(&dice->clock_accepted,
-			msecs_to_jiffies(NOTIFICATION_TIMEOUT_MS)) == 0) {
-		/*
-		 * Old versions of Dice firmware transfer no notification when
-		 * the same clock status as current one is set. In this case,
-		 * just check current clock status.
-		 */
-		err = snd_dice_transaction_read_global(dice, GLOBAL_STATUS,
-						&nominal, sizeof(nominal));
-		if (err < 0)
-			return err;
-		if (!(be32_to_cpu(nominal) & STATUS_SOURCE_LOCKED))
-			return -ETIMEDOUT;
-	}
-
-	return 0;
+		release_resources(dice, resources);
+end:
+	return err;
 }
 
-static int get_register_params(struct snd_dice *dice,
-			       struct reg_params *tx_params,
-			       struct reg_params *rx_params)
+static void stop_stream(struct snd_dice *dice, struct amdtp_stream *stream)
 {
-	__be32 reg[2];
-	int err;
+	amdtp_stream_pcm_abort(stream);
+	amdtp_stream_stop(stream);
 
-	err = snd_dice_transaction_read_tx(dice, TX_NUMBER, reg, sizeof(reg));
-	if (err < 0)
-		return err;
-	tx_params->count =
-			min_t(unsigned int, be32_to_cpu(reg[0]), MAX_STREAMS);
-	tx_params->size = be32_to_cpu(reg[1]) * 4;
-
-	err = snd_dice_transaction_read_rx(dice, RX_NUMBER, reg, sizeof(reg));
-	if (err < 0)
-		return err;
-	rx_params->count =
-			min_t(unsigned int, be32_to_cpu(reg[0]), MAX_STREAMS);
-	rx_params->size = be32_to_cpu(reg[1]) * 4;
-
-	return 0;
+	if (stream == &dice->tx_stream)
+		release_resources(dice, &dice->tx_resources);
+	else
+		release_resources(dice, &dice->rx_resources);
 }
 
-static void release_resources(struct snd_dice *dice)
+static int start_stream(struct snd_dice *dice, struct amdtp_stream *stream,
+			unsigned int rate)
 {
-	int i;
-
-	for (i = 0; i < MAX_STREAMS; ++i) {
-		fw_iso_resources_free(&dice->tx_resources[i]);
-		fw_iso_resources_free(&dice->rx_resources[i]);
-	}
-}
-
-static void stop_streams(struct snd_dice *dice, enum amdtp_stream_direction dir,
-			 struct reg_params *params)
-{
-	__be32 reg;
-	unsigned int i;
-
-	for (i = 0; i < params->count; i++) {
-		reg = cpu_to_be32((u32)-1);
-		if (dir == AMDTP_IN_STREAM) {
-			snd_dice_transaction_write_tx(dice,
-					params->size * i + TX_ISOCHRONOUS,
-					&reg, sizeof(reg));
-		} else {
-			snd_dice_transaction_write_rx(dice,
-					params->size * i + RX_ISOCHRONOUS,
-					&reg, sizeof(reg));
-		}
-	}
-}
-
-static int keep_resources(struct snd_dice *dice, struct amdtp_stream *stream,
-			  struct fw_iso_resources *resources, unsigned int rate,
-			  unsigned int pcm_chs, unsigned int midi_ports)
-{
+	struct fw_iso_resources *resources;
+	unsigned int i, mode, pcm_chs, midi_ports;
 	bool double_pcm_frames;
-	unsigned int i;
 	int err;
 
-	// At 176.4/192.0 kHz, Dice has a quirk to transfer two PCM frames in
-	// one data block of AMDTP packet. Thus sampling transfer frequency is
-	// a half of PCM sampling frequency, i.e. PCM frames at 192.0 kHz are
-	// transferred on AMDTP packets at 96 kHz. Two successive samples of a
-	// channel are stored consecutively in the packet. This quirk is called
-	// as 'Dual Wire'.
-	// For this quirk, blocking mode is required and PCM buffer size should
-	// be aligned to SYT_INTERVAL.
-	double_pcm_frames = rate > 96000;
+	err = snd_dice_stream_get_rate_mode(dice, rate, &mode);
+	if (err < 0)
+		goto end;
+	if (stream == &dice->tx_stream) {
+		resources = &dice->tx_resources;
+		pcm_chs = dice->tx_channels[mode];
+		midi_ports = dice->tx_midi_ports[mode];
+	} else {
+		resources = &dice->rx_resources;
+		pcm_chs = dice->rx_channels[mode];
+		midi_ports = dice->rx_midi_ports[mode];
+	}
+
+	/*
+	 * At 176.4/192.0 kHz, Dice has a quirk to transfer two PCM frames in
+	 * one data block of AMDTP packet. Thus sampling transfer frequency is
+	 * a half of PCM sampling frequency, i.e. PCM frames at 192.0 kHz are
+	 * transferred on AMDTP packets at 96 kHz. Two successive samples of a
+	 * channel are stored consecutively in the packet. This quirk is called
+	 * as 'Dual Wire'.
+	 * For this quirk, blocking mode is required and PCM buffer size should
+	 * be aligned to SYT_INTERVAL.
+	 */
+	double_pcm_frames = mode > 1;
 	if (double_pcm_frames) {
 		rate /= 2;
 		pcm_chs *= 2;
@@ -190,7 +135,7 @@ static int keep_resources(struct snd_dice *dice, struct amdtp_stream *stream,
 	err = amdtp_am824_set_parameters(stream, rate, pcm_chs, midi_ports,
 					 double_pcm_frames);
 	if (err < 0)
-		return err;
+		goto end;
 
 	if (double_pcm_frames) {
 		pcm_chs /= 2;
@@ -202,314 +147,158 @@ static int keep_resources(struct snd_dice *dice, struct amdtp_stream *stream,
 		}
 	}
 
-	return fw_iso_resources_allocate(resources,
-				amdtp_stream_get_max_payload(stream),
-				fw_parent_device(dice->unit)->max_speed);
-}
-
-static int keep_dual_resources(struct snd_dice *dice, unsigned int rate,
-			       enum amdtp_stream_direction dir,
-			       struct reg_params *params)
-{
-	enum snd_dice_rate_mode mode;
-	int i;
-	int err;
-
-	err = snd_dice_stream_get_rate_mode(dice, rate, &mode);
-	if (err < 0)
-		return err;
-
-	for (i = 0; i < params->count; ++i) {
-		__be32 reg[2];
-		struct amdtp_stream *stream;
-		struct fw_iso_resources *resources;
-		unsigned int pcm_cache;
-		unsigned int midi_cache;
-		unsigned int pcm_chs;
-		unsigned int midi_ports;
-
-		if (dir == AMDTP_IN_STREAM) {
-			stream = &dice->tx_stream[i];
-			resources = &dice->tx_resources[i];
-
-			pcm_cache = dice->tx_pcm_chs[i][mode];
-			midi_cache = dice->tx_midi_ports[i];
-			err = snd_dice_transaction_read_tx(dice,
-					params->size * i + TX_NUMBER_AUDIO,
-					reg, sizeof(reg));
-		} else {
-			stream = &dice->rx_stream[i];
-			resources = &dice->rx_resources[i];
-
-			pcm_cache = dice->rx_pcm_chs[i][mode];
-			midi_cache = dice->rx_midi_ports[i];
-			err = snd_dice_transaction_read_rx(dice,
-					params->size * i + RX_NUMBER_AUDIO,
-					reg, sizeof(reg));
-		}
-		if (err < 0)
-			return err;
-		pcm_chs = be32_to_cpu(reg[0]);
-		midi_ports = be32_to_cpu(reg[1]);
-
-		// These are important for developer of this driver.
-		if (pcm_chs != pcm_cache || midi_ports != midi_cache) {
-			dev_info(&dice->unit->device,
-				 "cache mismatch: pcm: %u:%u, midi: %u:%u\n",
-				 pcm_chs, pcm_cache, midi_ports, midi_cache);
-			return -EPROTO;
-		}
-
-		err = keep_resources(dice, stream, resources, rate, pcm_chs,
-				     midi_ports);
-		if (err < 0)
-			return err;
+	err = keep_resources(dice, resources,
+			     amdtp_stream_get_max_payload(stream));
+	if (err < 0) {
+		dev_err(&dice->unit->device,
+			"fail to keep isochronous resources\n");
+		goto end;
 	}
 
-	return 0;
-}
-
-static void finish_session(struct snd_dice *dice, struct reg_params *tx_params,
-			   struct reg_params *rx_params)
-{
-	stop_streams(dice, AMDTP_IN_STREAM, tx_params);
-	stop_streams(dice, AMDTP_OUT_STREAM, rx_params);
-
-	snd_dice_transaction_clear_enable(dice);
-}
-
-int snd_dice_stream_reserve_duplex(struct snd_dice *dice, unsigned int rate)
-{
-	unsigned int curr_rate;
-	int err;
-
-	// Check sampling transmission frequency.
-	err = snd_dice_transaction_get_rate(dice, &curr_rate);
+	err = amdtp_stream_start(stream, resources->channel,
+				 fw_parent_device(dice->unit)->max_speed);
 	if (err < 0)
-		return err;
-	if (rate == 0)
-		rate = curr_rate;
-
-	if (dice->substreams_counter == 0 || curr_rate != rate) {
-		struct reg_params tx_params, rx_params;
-
-		amdtp_domain_stop(&dice->domain);
-
-		err = get_register_params(dice, &tx_params, &rx_params);
-		if (err < 0)
-			return err;
-		finish_session(dice, &tx_params, &rx_params);
-
-		release_resources(dice);
-
-		// Just after owning the unit (GLOBAL_OWNER), the unit can
-		// return invalid stream formats. Selecting clock parameters
-		// have an effect for the unit to refine it.
-		err = ensure_phase_lock(dice, rate);
-		if (err < 0)
-			return err;
-
-		// After changing sampling transfer frequency, the value of
-		// register can be changed.
-		err = get_register_params(dice, &tx_params, &rx_params);
-		if (err < 0)
-			return err;
-
-		err = keep_dual_resources(dice, rate, AMDTP_IN_STREAM,
-					  &tx_params);
-		if (err < 0)
-			goto error;
-
-		err = keep_dual_resources(dice, rate, AMDTP_OUT_STREAM,
-					  &rx_params);
-		if (err < 0)
-			goto error;
-	}
-
-	return 0;
-error:
-	release_resources(dice);
+		release_resources(dice, resources);
+end:
 	return err;
 }
 
-static int start_streams(struct snd_dice *dice, enum amdtp_stream_direction dir,
-			 unsigned int rate, struct reg_params *params)
+static int get_sync_mode(struct snd_dice *dice, enum cip_flags *sync_mode)
 {
-	unsigned int max_speed = fw_parent_device(dice->unit)->max_speed;
-	int i;
+	u32 source;
 	int err;
 
-	for (i = 0; i < params->count; i++) {
-		struct amdtp_stream *stream;
-		struct fw_iso_resources *resources;
-		__be32 reg;
+	err = snd_dice_transaction_get_clock_source(dice, &source);
+	if (err < 0)
+		goto end;
 
-		if (dir == AMDTP_IN_STREAM) {
-			stream = dice->tx_stream + i;
-			resources = dice->tx_resources + i;
-		} else {
-			stream = dice->rx_stream + i;
-			resources = dice->rx_resources + i;
-		}
-
-		reg = cpu_to_be32(resources->channel);
-		if (dir == AMDTP_IN_STREAM) {
-			err = snd_dice_transaction_write_tx(dice,
-					params->size * i + TX_ISOCHRONOUS,
-					&reg, sizeof(reg));
-		} else {
-			err = snd_dice_transaction_write_rx(dice,
-					params->size * i + RX_ISOCHRONOUS,
-					&reg, sizeof(reg));
-		}
-		if (err < 0)
-			return err;
-
-		if (dir == AMDTP_IN_STREAM) {
-			reg = cpu_to_be32(max_speed);
-			err = snd_dice_transaction_write_tx(dice,
-					params->size * i + TX_SPEED,
-					&reg, sizeof(reg));
-			if (err < 0)
-				return err;
-		}
-
-		err = amdtp_domain_add_stream(&dice->domain, stream,
-					      resources->channel, max_speed);
-		if (err < 0)
-			return err;
+	switch (source) {
+	/* So-called 'SYT Match' modes, sync_to_syt value of packets received */
+	case CLOCK_SOURCE_ARX4:	/* in 4th stream */
+	case CLOCK_SOURCE_ARX3:	/* in 3rd stream */
+	case CLOCK_SOURCE_ARX2:	/* in 2nd stream */
+		err = -ENOSYS;
+		break;
+	case CLOCK_SOURCE_ARX1:	/* in 1st stream, which this driver uses */
+		*sync_mode = 0;
+		break;
+	default:
+		*sync_mode = CIP_SYNC_TO_DEVICE;
+		break;
 	}
-
-	return 0;
+end:
+	return err;
 }
 
-/*
- * MEMO: After this function, there're two states of streams:
- *  - None streams are running.
- *  - All streams are running.
- */
-int snd_dice_stream_start_duplex(struct snd_dice *dice)
+int snd_dice_stream_start_duplex(struct snd_dice *dice, unsigned int rate)
 {
-	unsigned int generation = dice->rx_resources[0].generation;
-	struct reg_params tx_params, rx_params;
-	unsigned int i;
-	unsigned int rate;
-	enum snd_dice_rate_mode mode;
-	int err;
+	struct amdtp_stream *master, *slave;
+	unsigned int curr_rate;
+	enum cip_flags sync_mode;
+	int err = 0;
 
 	if (dice->substreams_counter == 0)
-		return -EIO;
+		goto end;
 
-	err = get_register_params(dice, &tx_params, &rx_params);
+	err = get_sync_mode(dice, &sync_mode);
 	if (err < 0)
-		return err;
+		goto end;
+	if (sync_mode == CIP_SYNC_TO_DEVICE) {
+		master = &dice->tx_stream;
+		slave  = &dice->rx_stream;
+	} else {
+		master = &dice->rx_stream;
+		slave  = &dice->tx_stream;
+	}
 
-	// Check error of packet streaming.
-	for (i = 0; i < MAX_STREAMS; ++i) {
-		if (amdtp_streaming_error(&dice->tx_stream[i]) ||
-		    amdtp_streaming_error(&dice->rx_stream[i])) {
-			amdtp_domain_stop(&dice->domain);
-			finish_session(dice, &tx_params, &rx_params);
-			break;
+	/* Some packet queueing errors. */
+	if (amdtp_streaming_error(master) || amdtp_streaming_error(slave))
+		stop_stream(dice, master);
+
+	/* Stop stream if rate is different. */
+	err = snd_dice_transaction_get_rate(dice, &curr_rate);
+	if (err < 0) {
+		dev_err(&dice->unit->device,
+			"fail to get sampling rate\n");
+		goto end;
+	}
+	if (rate == 0)
+		rate = curr_rate;
+	if (rate != curr_rate)
+		stop_stream(dice, master);
+
+	if (!amdtp_stream_running(master)) {
+		stop_stream(dice, slave);
+		snd_dice_transaction_clear_enable(dice);
+
+		amdtp_stream_set_sync(sync_mode, master, slave);
+
+		err = snd_dice_transaction_set_rate(dice, rate);
+		if (err < 0) {
+			dev_err(&dice->unit->device,
+				"fail to set sampling rate\n");
+			goto end;
 		}
-	}
 
-	if (generation != fw_parent_device(dice->unit)->card->generation) {
-		for (i = 0; i < MAX_STREAMS; ++i) {
-			if (i < tx_params.count)
-				fw_iso_resources_update(dice->tx_resources + i);
-			if (i < rx_params.count)
-				fw_iso_resources_update(dice->rx_resources + i);
+		/* Start both streams. */
+		err = start_stream(dice, master, rate);
+		if (err < 0) {
+			dev_err(&dice->unit->device,
+				"fail to start AMDTP master stream\n");
+			goto end;
 		}
-	}
-
-	// Check required streams are running or not.
-	err = snd_dice_transaction_get_rate(dice, &rate);
-	if (err < 0)
-		return err;
-	err = snd_dice_stream_get_rate_mode(dice, rate, &mode);
-	if (err < 0)
-		return err;
-	for (i = 0; i < MAX_STREAMS; ++i) {
-		if (dice->tx_pcm_chs[i][mode] > 0 &&
-		    !amdtp_stream_running(&dice->tx_stream[i]))
-			break;
-		if (dice->rx_pcm_chs[i][mode] > 0 &&
-		    !amdtp_stream_running(&dice->rx_stream[i]))
-			break;
-	}
-	if (i < MAX_STREAMS) {
-		// Start both streams.
-		err = start_streams(dice, AMDTP_IN_STREAM, rate, &tx_params);
-		if (err < 0)
-			goto error;
-
-		err = start_streams(dice, AMDTP_OUT_STREAM, rate, &rx_params);
-		if (err < 0)
-			goto error;
-
+		err = start_stream(dice, slave, rate);
+		if (err < 0) {
+			dev_err(&dice->unit->device,
+				"fail to start AMDTP slave stream\n");
+			stop_stream(dice, master);
+			goto end;
+		}
 		err = snd_dice_transaction_set_enable(dice);
 		if (err < 0) {
 			dev_err(&dice->unit->device,
 				"fail to enable interface\n");
-			goto error;
+			stop_stream(dice, master);
+			stop_stream(dice, slave);
+			goto end;
 		}
 
-		err = amdtp_domain_start(&dice->domain);
-		if (err < 0)
-			goto error;
-
-		for (i = 0; i < MAX_STREAMS; i++) {
-			if ((i < tx_params.count &&
-			    !amdtp_stream_wait_callback(&dice->tx_stream[i],
-							CALLBACK_TIMEOUT)) ||
-			    (i < rx_params.count &&
-			     !amdtp_stream_wait_callback(&dice->rx_stream[i],
-							 CALLBACK_TIMEOUT))) {
-				err = -ETIMEDOUT;
-				goto error;
-			}
+		/* Wait first callbacks */
+		if (!amdtp_stream_wait_callback(master, CALLBACK_TIMEOUT) ||
+		    !amdtp_stream_wait_callback(slave, CALLBACK_TIMEOUT)) {
+			snd_dice_transaction_clear_enable(dice);
+			stop_stream(dice, master);
+			stop_stream(dice, slave);
+			err = -ETIMEDOUT;
 		}
 	}
-
-	return 0;
-error:
-	amdtp_domain_stop(&dice->domain);
-	finish_session(dice, &tx_params, &rx_params);
+end:
 	return err;
 }
 
-/*
- * MEMO: After this function, there're two states of streams:
- *  - None streams are running.
- *  - All streams are running.
- */
 void snd_dice_stream_stop_duplex(struct snd_dice *dice)
 {
-	struct reg_params tx_params, rx_params;
+	if (dice->substreams_counter > 0)
+		return;
 
-	if (dice->substreams_counter == 0) {
-		if (get_register_params(dice, &tx_params, &rx_params) >= 0)
-			finish_session(dice, &tx_params, &rx_params);
+	snd_dice_transaction_clear_enable(dice);
 
-		amdtp_domain_stop(&dice->domain);
-		release_resources(dice);
-	}
+	stop_stream(dice, &dice->tx_stream);
+	stop_stream(dice, &dice->rx_stream);
 }
 
-static int init_stream(struct snd_dice *dice, enum amdtp_stream_direction dir,
-		       unsigned int index)
+static int init_stream(struct snd_dice *dice, struct amdtp_stream *stream)
 {
-	struct amdtp_stream *stream;
-	struct fw_iso_resources *resources;
 	int err;
+	struct fw_iso_resources *resources;
+	enum amdtp_stream_direction dir;
 
-	if (dir == AMDTP_IN_STREAM) {
-		stream = &dice->tx_stream[index];
-		resources = &dice->tx_resources[index];
+	if (stream == &dice->tx_stream) {
+		resources = &dice->tx_resources;
+		dir = AMDTP_IN_STREAM;
 	} else {
-		stream = &dice->rx_stream[index];
-		resources = &dice->rx_resources[index];
+		resources = &dice->rx_resources;
+		dir = AMDTP_OUT_STREAM;
 	}
 
 	err = fw_iso_resources_init(resources, dice->unit);
@@ -530,20 +319,14 @@ end:
  * This function should be called before starting streams or after stopping
  * streams.
  */
-static void destroy_stream(struct snd_dice *dice,
-			   enum amdtp_stream_direction dir,
-			   unsigned int index)
+static void destroy_stream(struct snd_dice *dice, struct amdtp_stream *stream)
 {
-	struct amdtp_stream *stream;
 	struct fw_iso_resources *resources;
 
-	if (dir == AMDTP_IN_STREAM) {
-		stream = &dice->tx_stream[index];
-		resources = &dice->tx_resources[index];
-	} else {
-		stream = &dice->rx_stream[index];
-		resources = &dice->rx_resources[index];
-	}
+	if (stream == &dice->tx_stream)
+		resources = &dice->tx_resources;
+	else
+		resources = &dice->rx_resources;
 
 	amdtp_stream_destroy(stream);
 	fw_iso_resources_destroy(resources);
@@ -551,55 +334,33 @@ static void destroy_stream(struct snd_dice *dice,
 
 int snd_dice_stream_init_duplex(struct snd_dice *dice)
 {
-	int i, err;
+	int err;
 
-	for (i = 0; i < MAX_STREAMS; i++) {
-		err = init_stream(dice, AMDTP_IN_STREAM, i);
-		if (err < 0) {
-			for (; i >= 0; i--)
-				destroy_stream(dice, AMDTP_IN_STREAM, i);
-			goto end;
-		}
-	}
+	dice->substreams_counter = 0;
 
-	for (i = 0; i < MAX_STREAMS; i++) {
-		err = init_stream(dice, AMDTP_OUT_STREAM, i);
-		if (err < 0) {
-			for (; i >= 0; i--)
-				destroy_stream(dice, AMDTP_OUT_STREAM, i);
-			for (i = 0; i < MAX_STREAMS; i++)
-				destroy_stream(dice, AMDTP_IN_STREAM, i);
-			goto end;
-		}
-	}
+	err = init_stream(dice, &dice->tx_stream);
+	if (err < 0)
+		goto end;
 
-	err = amdtp_domain_init(&dice->domain);
-	if (err < 0) {
-		for (i = 0; i < MAX_STREAMS; ++i) {
-			destroy_stream(dice, AMDTP_OUT_STREAM, i);
-			destroy_stream(dice, AMDTP_IN_STREAM, i);
-		}
-	}
+	err = init_stream(dice, &dice->rx_stream);
+	if (err < 0)
+		destroy_stream(dice, &dice->tx_stream);
 end:
 	return err;
 }
 
 void snd_dice_stream_destroy_duplex(struct snd_dice *dice)
 {
-	unsigned int i;
+	snd_dice_transaction_clear_enable(dice);
 
-	for (i = 0; i < MAX_STREAMS; i++) {
-		destroy_stream(dice, AMDTP_IN_STREAM, i);
-		destroy_stream(dice, AMDTP_OUT_STREAM, i);
-	}
+	destroy_stream(dice, &dice->tx_stream);
+	destroy_stream(dice, &dice->rx_stream);
 
-	amdtp_domain_destroy(&dice->domain);
+	dice->substreams_counter = 0;
 }
 
 void snd_dice_stream_update_duplex(struct snd_dice *dice)
 {
-	struct reg_params tx_params, rx_params;
-
 	/*
 	 * On a bus reset, the DICE firmware disables streaming and then goes
 	 * off contemplating its own navel for hundreds of milliseconds before
@@ -610,75 +371,11 @@ void snd_dice_stream_update_duplex(struct snd_dice *dice)
 	 */
 	dice->global_enabled = false;
 
-	if (get_register_params(dice, &tx_params, &rx_params) == 0) {
-		amdtp_domain_stop(&dice->domain);
+	stop_stream(dice, &dice->rx_stream);
+	stop_stream(dice, &dice->tx_stream);
 
-		stop_streams(dice, AMDTP_IN_STREAM, &tx_params);
-		stop_streams(dice, AMDTP_OUT_STREAM, &rx_params);
-	}
-}
-
-int snd_dice_stream_detect_current_formats(struct snd_dice *dice)
-{
-	unsigned int rate;
-	enum snd_dice_rate_mode mode;
-	__be32 reg[2];
-	struct reg_params tx_params, rx_params;
-	int i;
-	int err;
-
-	/* If extended protocol is available, detect detail spec. */
-	err = snd_dice_detect_extension_formats(dice);
-	if (err >= 0)
-		return err;
-
-	/*
-	 * Available stream format is restricted at current mode of sampling
-	 * clock.
-	 */
-	err = snd_dice_transaction_get_rate(dice, &rate);
-	if (err < 0)
-		return err;
-
-	err = snd_dice_stream_get_rate_mode(dice, rate, &mode);
-	if (err < 0)
-		return err;
-
-	/*
-	 * Just after owning the unit (GLOBAL_OWNER), the unit can return
-	 * invalid stream formats. Selecting clock parameters have an effect
-	 * for the unit to refine it.
-	 */
-	err = ensure_phase_lock(dice, rate);
-	if (err < 0)
-		return err;
-
-	err = get_register_params(dice, &tx_params, &rx_params);
-	if (err < 0)
-		return err;
-
-	for (i = 0; i < tx_params.count; ++i) {
-		err = snd_dice_transaction_read_tx(dice,
-				tx_params.size * i + TX_NUMBER_AUDIO,
-				reg, sizeof(reg));
-		if (err < 0)
-			return err;
-		dice->tx_pcm_chs[i][mode] = be32_to_cpu(reg[0]);
-		dice->tx_midi_ports[i] = max_t(unsigned int,
-				be32_to_cpu(reg[1]), dice->tx_midi_ports[i]);
-	}
-	for (i = 0; i < rx_params.count; ++i) {
-		err = snd_dice_transaction_read_rx(dice,
-				rx_params.size * i + RX_NUMBER_AUDIO,
-				reg, sizeof(reg));
-		if (err < 0)
-			return err;
-		dice->rx_pcm_chs[i][mode] = be32_to_cpu(reg[0]);
-		dice->rx_midi_ports[i] = max_t(unsigned int,
-				be32_to_cpu(reg[1]), dice->rx_midi_ports[i]);
-	}
-
-	return 0;
+	fw_iso_resources_update(&dice->rx_resources);
+	fw_iso_resources_update(&dice->tx_resources);
 }
 
 static void dice_lock_changed(struct snd_dice *dice)

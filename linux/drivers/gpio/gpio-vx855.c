@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * Linux GPIOlib driver for the VIA VX855 integrated southbridge GPIO
  *
@@ -6,10 +5,27 @@
  * Copyright (C) 2010 One Laptop per Child
  * Author: Harald Welte <HaraldWelte@viatech.com>
  * All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of
+ * the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
+ * MA 02111-1307 USA
+ *
  */
+
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
@@ -80,7 +96,7 @@ static inline u_int32_t gpio_o_bit(int i)
 static int vx855gpio_direction_input(struct gpio_chip *gpio,
 				     unsigned int nr)
 {
-	struct vx855_gpio *vg = gpiochip_get_data(gpio);
+	struct vx855_gpio *vg = container_of(gpio, struct vx855_gpio, gpio);
 	unsigned long flags;
 	u_int32_t reg_out;
 
@@ -104,7 +120,7 @@ static int vx855gpio_direction_input(struct gpio_chip *gpio,
 
 static int vx855gpio_get(struct gpio_chip *gpio, unsigned int nr)
 {
-	struct vx855_gpio *vg = gpiochip_get_data(gpio);
+	struct vx855_gpio *vg = container_of(gpio, struct vx855_gpio, gpio);
 	u_int32_t reg_in;
 	int ret = 0;
 
@@ -130,7 +146,7 @@ static int vx855gpio_get(struct gpio_chip *gpio, unsigned int nr)
 static void vx855gpio_set(struct gpio_chip *gpio, unsigned int nr,
 			  int val)
 {
-	struct vx855_gpio *vg = gpiochip_get_data(gpio);
+	struct vx855_gpio *vg = container_of(gpio, struct vx855_gpio, gpio);
 	unsigned long flags;
 	u_int32_t reg_out;
 
@@ -170,29 +186,6 @@ static int vx855gpio_direction_output(struct gpio_chip *gpio,
 	return 0;
 }
 
-static int vx855gpio_set_config(struct gpio_chip *gpio, unsigned int nr,
-				unsigned long config)
-{
-	enum pin_config_param param = pinconf_to_config_param(config);
-
-	/* The GPI cannot be single-ended */
-	if (nr < NR_VX855_GPI)
-		return -EINVAL;
-
-	/* The GPO's are push-pull */
-	if (nr < NR_VX855_GPInO) {
-		if (param != PIN_CONFIG_DRIVE_PUSH_PULL)
-			return -ENOTSUPP;
-		return 0;
-	}
-
-	/* The GPIO's are open drain */
-	if (param != PIN_CONFIG_DRIVE_OPEN_DRAIN)
-		return -ENOTSUPP;
-
-	return 0;
-}
-
 static const char *vx855gpio_names[NR_VX855_GP] = {
 	"VX855_GPI0", "VX855_GPI1", "VX855_GPI2", "VX855_GPI3", "VX855_GPI4",
 	"VX855_GPI5", "VX855_GPI6", "VX855_GPI7", "VX855_GPI8", "VX855_GPI9",
@@ -216,7 +209,6 @@ static void vx855gpio_gpio_setup(struct vx855_gpio *vg)
 	c->direction_output = vx855gpio_direction_output;
 	c->get = vx855gpio_get;
 	c->set = vx855gpio_set;
-	c->set_config = vx855gpio_set_config,
 	c->dbg_show = NULL;
 	c->base = 0;
 	c->ngpio = NR_VX855_GP;
@@ -267,7 +259,16 @@ static int vx855gpio_probe(struct platform_device *pdev)
 
 	vx855gpio_gpio_setup(vg);
 
-	return devm_gpiochip_add_data(&pdev->dev, &vg->gpio, vg);
+	return gpiochip_add(&vg->gpio);
+}
+
+static int vx855gpio_remove(struct platform_device *pdev)
+{
+	struct vx855_gpio *vg = platform_get_drvdata(pdev);
+
+	gpiochip_remove(&vg->gpio);
+
+	return 0;
 }
 
 static struct platform_driver vx855gpio_driver = {
@@ -275,6 +276,7 @@ static struct platform_driver vx855gpio_driver = {
 		.name	= MODULE_NAME,
 	},
 	.probe		= vx855gpio_probe,
+	.remove		= vx855gpio_remove,
 };
 
 module_platform_driver(vx855gpio_driver);

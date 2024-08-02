@@ -11,7 +11,6 @@
  */
 
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
 #include <linux/export.h>
@@ -20,13 +19,19 @@
 
 #include <asm/traps.h>
 #include <asm/sections.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 static DEFINE_SPINLOCK(die_lock);
 
 static void _send_sig(int signo, int code, unsigned long addr)
 {
-	force_sig_fault(signo, code, (void __user *) addr);
+	siginfo_t info;
+
+	info.si_signo = signo;
+	info.si_errno = 0;
+	info.si_code = code;
+	info.si_addr = (void __user *) addr;
+	force_sig_info(signo, &info, current);
 }
 
 void die(const char *str, struct pt_regs *regs, long err)
@@ -37,10 +42,10 @@ void die(const char *str, struct pt_regs *regs, long err)
 	show_regs(regs);
 	spin_unlock_irq(&die_lock);
 	/*
-	 * make_task_dead() should take care of panic'ing from an interrupt
+	 * do_exit() should take care of panic'ing from an interrupt
 	 * context so we don't handle it here
 	 */
-	make_task_dead(err);
+	do_exit(err);
 }
 
 void _exception(int signo, struct pt_regs *regs, int code, unsigned long addr)

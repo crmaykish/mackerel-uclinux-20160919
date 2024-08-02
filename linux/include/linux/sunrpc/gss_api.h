@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * linux/include/linux/sunrpc/gss_api.h
  *
@@ -22,7 +21,6 @@
 struct gss_ctx {
 	struct gss_api_mech	*mech_type;
 	void			*internal_ctx_id;
-	unsigned int		slack, align;
 };
 
 #define GSS_C_NO_BUFFER		((struct xdr_netobj) 0)
@@ -68,7 +66,6 @@ u32 gss_wrap(
 u32 gss_unwrap(
 		struct gss_ctx		*ctx_id,
 		int			offset,
-		int			len,
 		struct xdr_buf		*inbuf);
 u32 gss_delete_sec_context(
 		struct gss_ctx		**ctx_id);
@@ -76,7 +73,6 @@ u32 gss_delete_sec_context(
 rpc_authflavor_t gss_svc_to_pseudoflavor(struct gss_api_mech *, u32 qop,
 					u32 service);
 u32 gss_pseudoflavor_to_service(struct gss_api_mech *, u32 pseudoflavor);
-bool gss_pseudoflavor_to_datatouch(struct gss_api_mech *, u32 pseudoflavor);
 char *gss_service_to_auth_domain_name(struct gss_api_mech *, u32 service);
 
 struct pf_desc {
@@ -85,8 +81,6 @@ struct pf_desc {
 	u32	service;
 	char	*name;
 	char	*auth_domain_name;
-	struct auth_domain *domain;
-	bool	datatouch;
 };
 
 /* Different mechanisms (e.g., krb5 or spkm3) may implement gss-api, and
@@ -130,7 +124,6 @@ struct gss_api_ops {
 	u32 (*gss_unwrap)(
 			struct gss_ctx		*ctx_id,
 			int			offset,
-			int			len,
 			struct xdr_buf		*buf);
 	void (*gss_delete_sec_context)(
 			void			*internal_ctx_id);

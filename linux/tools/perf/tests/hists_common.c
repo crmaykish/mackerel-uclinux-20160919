@@ -1,17 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0
-#include <inttypes.h>
+#include "perf.h"
 #include "util/debug.h"
-#include "util/dso.h"
-#include "util/event.h" // struct perf_sample
-#include "util/map.h"
 #include "util/symbol.h"
 #include "util/sort.h"
 #include "util/evsel.h"
+#include "util/evlist.h"
 #include "util/machine.h"
 #include "util/thread.h"
 #include "tests/hists_common.h"
-#include <linux/kernel.h>
-#include <linux/perf_event.h>
 
 static struct {
 	u32 pid;
@@ -105,11 +100,9 @@ struct machine *setup_fake_machine(struct machines *machines)
 	}
 
 	for (i = 0; i < ARRAY_SIZE(fake_mmap_info); i++) {
-		struct perf_sample sample = {
-			.cpumode = PERF_RECORD_MISC_USER,
-		};
 		union perf_event fake_mmap_event = {
 			.mmap = {
+				.header = { .misc = PERF_RECORD_MISC_USER, },
 				.pid = fake_mmap_info[i].pid,
 				.tid = fake_mmap_info[i].pid,
 				.start = fake_mmap_info[i].start,
@@ -121,7 +114,7 @@ struct machine *setup_fake_machine(struct machines *machines)
 		strcpy(fake_mmap_event.mmap.filename,
 		       fake_mmap_info[i].filename);
 
-		machine__process_mmap_event(machine, &fake_mmap_event, &sample);
+		machine__process_mmap_event(machine, &fake_mmap_event, NULL);
 	}
 
 	for (i = 0; i < ARRAY_SIZE(fake_symbols); i++) {
@@ -133,20 +126,20 @@ struct machine *setup_fake_machine(struct machines *machines)
 			goto out;
 
 		/* emulate dso__load() */
-		dso__set_loaded(dso);
+		dso__set_loaded(dso, MAP__FUNCTION);
 
 		for (k = 0; k < fake_symbols[i].nr_syms; k++) {
 			struct symbol *sym;
 			struct fake_sym *fsym = &fake_symbols[i].syms[k];
 
 			sym = symbol__new(fsym->start, fsym->length,
-					  STB_GLOBAL, STT_FUNC, fsym->name);
+					  STB_GLOBAL, fsym->name);
 			if (sym == NULL) {
 				dso__put(dso);
 				goto out;
 			}
 
-			symbols__insert(&dso->symbols, sym);
+			symbols__insert(&dso->symbols[MAP__FUNCTION], sym);
 		}
 
 		dso__put(dso);
@@ -157,22 +150,23 @@ struct machine *setup_fake_machine(struct machines *machines)
 out:
 	pr_debug("Not enough memory for machine setup\n");
 	machine__delete_threads(machine);
+	machine__delete(machine);
 	return NULL;
 }
 
 void print_hists_in(struct hists *hists)
 {
 	int i = 0;
-	struct rb_root_cached *root;
+	struct rb_root *root;
 	struct rb_node *node;
 
-	if (hists__has(hists, need_collapse))
+	if (sort__need_collapse)
 		root = &hists->entries_collapsed;
 	else
 		root = hists->entries_in;
 
 	pr_info("----- %s --------\n", __func__);
-	node = rb_first_cached(root);
+	node = rb_first(root);
 	while (node) {
 		struct hist_entry *he;
 
@@ -193,13 +187,13 @@ void print_hists_in(struct hists *hists)
 void print_hists_out(struct hists *hists)
 {
 	int i = 0;
-	struct rb_root_cached *root;
+	struct rb_root *root;
 	struct rb_node *node;
 
 	root = &hists->entries;
 
 	pr_info("----- %s --------\n", __func__);
-	node = rb_first_cached(root);
+	node = rb_first(root);
 	while (node) {
 		struct hist_entry *he;
 

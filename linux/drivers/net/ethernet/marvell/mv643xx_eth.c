@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for Marvell Discovery (MV643XX) and Marvell Orion ethernet ports
  * Copyright (C) 2002 Matthew Dharm <mdharm@momenco.com>
@@ -22,6 +21,19 @@
  *			   Lennert Buytenhek <buytenh@marvell.com>
  *
  * Copyright (C) 2013 Michael Stapelberg <michael@stapelberg.de>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -53,9 +65,12 @@
 #include <linux/of_net.h>
 #include <linux/of_mdio.h>
 
+#ifdef CONFIG_LEDMAN
+#include <linux/ledman.h>
+#endif
+
 static char mv643xx_eth_driver_name[] = "mv643xx_eth";
 static char mv643xx_eth_driver_version[] = "1.4";
-
 
 /*
  * Registers shared between all ports.
@@ -108,6 +123,7 @@ static char mv643xx_eth_driver_version[] = "1.4";
 #define TXQ_COMMAND			0x0048
 #define TXQ_FIX_PRIO_CONF		0x004c
 #define PORT_SERIAL_CONTROL1		0x004c
+#define  RGMII_ENABLE			0x00000008
 #define  CLK125_BYPASS_EN		0x00000010
 #define TX_BW_RATE			0x0050
 #define TX_BW_MTU			0x0058
@@ -170,6 +186,8 @@ static char mv643xx_eth_driver_version[] = "1.4";
 #define DEFAULT_RX_QUEUE_SIZE	128
 #define DEFAULT_TX_QUEUE_SIZE	512
 #define SKB_DMA_REALIGN		((PAGE_SIZE - NET_SKB_PAD) % SMP_CACHE_BYTES)
+
+#define TSO_HEADER_SIZE		128
 
 /* Max number of allowed TCP segments for software TSO */
 #define MV643XX_MAX_TSO_SEGS 100
@@ -370,6 +388,8 @@ struct mv643xx_eth_private {
 
 	struct net_device *dev;
 
+	struct phy_device *phy;
+
 	struct timer_list mib_counters_timer;
 	spinlock_t mib_counters_lock;
 	struct mib_counters mib_counters;
@@ -384,6 +404,7 @@ struct mv643xx_eth_private {
 	u8 work_tx_end;
 	u8 work_rx;
 	u8 work_rx_refill;
+	u8 mac_link;
 
 	int skb_size;
 
@@ -406,6 +427,7 @@ struct mv643xx_eth_private {
 	int txq_count;
 	struct tx_queue txq[8];
 
+	int id;
 	/*
 	 * Hardware-specific parameters.
 	 */
@@ -659,7 +681,7 @@ static inline unsigned int has_tiny_unaligned_frags(struct sk_buff *skb)
 	for (frag = 0; frag < skb_shinfo(skb)->nr_frags; frag++) {
 		const skb_frag_t *fragp = &skb_shinfo(skb)->frags[frag];
 
-		if (skb_frag_size(fragp) <= 8 && skb_frag_off(fragp) & 7)
+		if (skb_frag_size(fragp) <= 8 && fragp->page_offset & 7)
 			return 1;
 	}
 
@@ -746,10 +768,10 @@ txq_put_data_tso(struct net_device *dev, struct tx_queue *txq,
 
 	if (length <= 8 && (uintptr_t)data & 0x7) {
 		/* Copy unaligned small data fragment to TSO header data area */
-		memcpy(txq->tso_hdrs + tx_index * TSO_HEADER_SIZE,
+		memcpy(txq->tso_hdrs + txq->tx_curr_desc * TSO_HEADER_SIZE,
 		       data, length);
 		desc->buf_ptr = txq->tso_hdrs_dma
-			+ tx_index * TSO_HEADER_SIZE;
+			+ txq->tx_curr_desc * TSO_HEADER_SIZE;
 	} else {
 		/* Alignment is okay, map buffer and hand off to hardware */
 		txq->tx_desc_mapping[tx_index] = DESC_DMA_MAP_SINGLE;
@@ -1109,7 +1131,7 @@ static int txq_reclaim(struct tx_queue *txq, int budget, int force)
 			struct sk_buff *skb = __skb_dequeue(&txq->tx_skb);
 
 			if (!WARN_ON(!skb))
-				dev_consume_skb_any(skb);
+				dev_kfree_skb(skb);
 		}
 
 		if (cmd_sts & ERROR_SUMMARY) {
@@ -1215,12 +1237,29 @@ static void mv643xx_eth_adjust_link(struct net_device *dev)
 {
 	struct mv643xx_eth_private *mp = netdev_priv(dev);
 	u32 pscr = rdlp(mp, PORT_SERIAL_CONTROL);
+	u32 pscr1 = rdlp(mp, PORT_SERIAL_CONTROL1);
 	u32 autoneg_disable = FORCE_LINK_PASS |
 	             DISABLE_AUTO_NEG_SPEED_GMII |
 		     DISABLE_AUTO_NEG_FOR_FLOW_CTRL |
 		     DISABLE_AUTO_NEG_FOR_DUPLEX;
 
-	if (dev->phydev->autoneg == AUTONEG_ENABLE) {
+	/*
+	 * If we are in RGMII mode then we cannot use the internal
+	 * autonegotiate modes - they only work properly when in GMII/MII
+	 * modes. But we can let the phy autonegotiate, and then just use
+	 * the normal phy poll to pick up link/state changes.
+	 */
+	if (pscr1 & RGMII_ENABLE) {
+		if (mp->phy->link != mp->mac_link) {
+			if (mp->phy->link == 0) {
+				pscr &= ~DO_NOT_FORCE_LINK_FAIL;
+				autoneg_disable &= ~FORCE_LINK_PASS;
+			}
+			mp->work_link = 1;
+			mp->mac_link = mp->phy->link;
+			napi_schedule(&mp->napi);
+		}
+	} else if (mp->phy->autoneg == AUTONEG_ENABLE) {
 		/* enable auto negotiation */
 		pscr &= ~autoneg_disable;
 		goto out_write;
@@ -1228,7 +1267,7 @@ static void mv643xx_eth_adjust_link(struct net_device *dev)
 
 	pscr |= autoneg_disable;
 
-	if (dev->phydev->speed == SPEED_1000) {
+	if (mp->phy->speed == SPEED_1000) {
 		/* force gigabit, half duplex not supported */
 		pscr |= SET_GMII_SPEED_TO_1000;
 		pscr |= SET_FULL_DUPLEX_MODE;
@@ -1237,12 +1276,12 @@ static void mv643xx_eth_adjust_link(struct net_device *dev)
 
 	pscr &= ~SET_GMII_SPEED_TO_1000;
 
-	if (dev->phydev->speed == SPEED_100)
+	if (mp->phy->speed == SPEED_100)
 		pscr |= SET_MII_SPEED_TO_100;
 	else
 		pscr &= ~SET_MII_SPEED_TO_100;
 
-	if (dev->phydev->duplex == DUPLEX_FULL)
+	if (mp->phy->duplex == DUPLEX_FULL)
 		pscr |= SET_FULL_DUPLEX_MODE;
 	else
 		pscr &= ~SET_FULL_DUPLEX_MODE;
@@ -1250,6 +1289,250 @@ static void mv643xx_eth_adjust_link(struct net_device *dev)
 out_write:
 	wrlp(mp, PORT_SERIAL_CONTROL, pscr);
 }
+
+#ifdef CONFIG_MACH_UTM400
+
+#define	FAKE_ADDR	0x12 /* fake addr we use for switch on ge00, really on 2 */
+#define	REAL_ADDR	0x13 /* real addr for real PHY on ge01 */
+
+/*
+ *	The Marvel 88e6064 switch attached to egiga0 on the McAfee UTM400
+ *	board needs some extra code to access its registers. It uses an
+ *	address/data register pair at PHY addr 0x02 but if you try and talk to it
+ *	like a PHY it doesn't work.  We fake putting it at PHY addr 4 so that
+ *	we can remap it via 2 and the CPU polling doesn't hurt our indirect
+ *	addressing accesses.
+ *
+ *	convert the usual mii-tool/ethtool register requests accordingly
+ */
+
+#define	UTM400_READ_REG(addr, reg)	(0x9800 | (((addr)&0x1f) << 5) | ((reg)&0x1f))
+#define	UTM400_WRITE_REG(addr, reg)	(0x9400 | (((addr)&0x1f) << 5) | ((reg)&0x1f))
+#define	UTM400_MK_REGADDR(addr, reg)	(0x8000 | ((addr) << 8) | reg)
+#define	UTM400_REGADDR(reg)				(((reg) >> 8) & 0x1f)
+
+static int utm400_smi_bus_read(struct mii_bus *bus, int addr, int reg)
+{
+	int rc;
+
+	if (addr == REAL_ADDR) {
+		rc = smi_bus_read(bus, addr, reg);
+		return rc;
+	}
+
+	if (addr != FAKE_ADDR) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_smi_bus_read addr != 0x%x\n",
+				FAKE_ADDR);
+		return -ENODEV;
+	}
+
+	/* write the address register */
+	if ((reg & 0x8000) == 0) {
+		rc = smi_bus_write(bus, 0x02, 0, UTM400_READ_REG(0x1a, reg));
+	} else {
+		rc = smi_bus_write(bus, 0x02, 0,
+				UTM400_READ_REG(UTM400_REGADDR(reg), reg & 0x1f));
+	}
+	if (rc) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_smi_bus_read fail write "
+				"addr (bus=%p, addr=0x%x, reg=0x%x) errno=%d\n",
+				bus, addr, reg, rc);
+		return 0xffff;
+	}
+
+	/* check for busy bit */
+	while (((rc = smi_bus_read(bus, 0x02, 0)) & 0x8000) && rc >= 0)
+		/* wait */;
+	if (rc < 0) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_smi_bus_read fail busy "
+				"bit (bus=%p, addr=0x%x, reg=0x%x) errno=%d\n",
+				bus, addr, reg, rc);
+		return 0xffff;
+	}
+
+	/* Read the data register */
+	return smi_bus_read(bus, 0x02, 1);
+}
+
+static int utm400_smi_bus_write(struct mii_bus *bus, int addr, int reg, u16 val)
+{
+	int rc;
+
+	if (addr == REAL_ADDR)
+		return smi_bus_write(bus, addr, reg, val);
+
+	if (addr != FAKE_ADDR) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_smi_bus_write addr != 0x%x\n",
+				FAKE_ADDR);
+		return -ENODEV;
+	}
+
+	/* Write out the data register first */
+	rc = smi_bus_write(bus, 0x02, 1, val);
+	if (rc) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_smi_bus_write fail data reg "
+				"(bus=%p, addr=0x%x, reg=0x%x) errno=%d\n", bus, addr, reg, rc);
+		return rc;
+	}
+
+	/* write the address register */
+	if ((reg & 0x8000) == 0) {
+		rc = smi_bus_write(bus, 0x02, 0, UTM400_WRITE_REG(0x1a, reg));
+	} else {
+		rc = smi_bus_write(bus, 0x02, 0,
+				UTM400_WRITE_REG(UTM400_REGADDR(reg), reg & 0x1f));
+	}
+	if (rc) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_smi_bus_write fail addr reg "
+				"(bus=%p, addr=0x%x, reg=0x%x) errno=%d\n", bus, addr, reg, rc);
+		return rc;
+	}
+
+	/* check for busy bit */
+	while (((rc = smi_bus_read(bus, 0x02, 0)) & 0x8000) && rc >= 0)
+		/* wait */;
+
+	if (rc < 0)
+		printk(KERN_WARNING "mv643xx_eth: utm400_smi_bus_write fail busy bit "
+				"(bus=%p, addr=0x%x, reg=0x%x) errno=%d\n", bus, addr, reg, rc);
+
+	return 0;
+}
+
+static int utm400_read_port_phy(struct mii_bus *bus, int port, int reg)
+{
+	int rc;
+
+	/* write the global 2 command register */
+	rc = utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(0x1c, 24),
+			UTM400_READ_REG(port, reg));
+	if (rc) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_read_port_phy fail write "
+				"addr (bus=%p, port=0x%x, reg=0x%x) errno=%d\n",
+				bus, port, reg, rc);
+		return 0xffff;
+	}
+
+	/* check for busy bit */
+	while (((rc = utm400_smi_bus_read(bus, FAKE_ADDR, UTM400_MK_REGADDR(0x1c, 24))) &
+			0x8000) && rc >= 0)
+		/* wait */;
+	if (rc < 0) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_read_port_phy fail busy "
+				"bit (bus=%p, port=0x%x, reg=0x%x) errno=%d\n",
+				bus, port, reg, rc);
+		return 0xffff;
+	}
+
+	/* Read the data register */
+	return utm400_smi_bus_read(bus, FAKE_ADDR, UTM400_MK_REGADDR(0x1c, 25));
+}
+
+static int utm400_write_port_phy(struct mii_bus *bus, int port, int reg,
+		u16 val)
+{
+	int rc;
+
+	/* Write out the data register first */
+	rc = utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(0x1c, 25), val);
+	if (rc) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_write_port_phy fail data reg "
+				"(bus=%p, port=0x%x, reg=0x%x) errno=%d\n", bus, port, reg, rc);
+		return rc;
+	}
+
+	rc = utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(0x1c, 24),
+			UTM400_WRITE_REG(port, reg));
+	if (rc) {
+		printk(KERN_WARNING "mv643xx_eth: utm400_write_port_phy fail addr reg "
+				"(bus=%p, port=0x%x, reg=0x%x) errno=%d\n", bus, port, reg, rc);
+		return rc;
+	}
+
+	/* check for busy bit */
+	while (((rc = utm400_smi_bus_read(bus, FAKE_ADDR, UTM400_MK_REGADDR(0x1c, 24))) &
+			0x8000) && rc >= 0)
+		/* wait */;
+
+	if (rc < 0)
+		printk(KERN_WARNING "mv643xx_eth: utm400_write_port_phy fail busy bit "
+				"(bus=%p, port=0x%x, reg=0x%x) errno=%d\n", bus, port, reg, rc);
+
+	return 0;
+}
+
+static void utm400_marvel_switch_init(struct mii_bus *bus)
+{
+	/* First, set the switch ports so they only forward to 
+	 * the rgmii port. This is done using the VLAN table
+	 * register bits, and for the switch ports, only setting
+	 * the bit for the rgmii port, and for the rgmii port,
+	 * setting all bits bar itself.
+	 */
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(32+0x10, 6), 0x400);
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(32+0x11, 6), 0x400);
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(32+0x12, 6), 0x400);
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(32+0x13, 6), 0x400);
+	/* then enable forwarding on the ports including the rgmii port */
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(32+0x10, 4), 0x7f);
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(32+0x11, 4), 0x7f);
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(32+0x12, 4), 0x7f);
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(32+0x13, 4), 0x7f);
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(32+0x1a, 4), 0x7f);
+	/* Enable all ports, except the RGMII port */
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(0x1a,    6), 0x3FF);     
+
+	/* Hard set link for the rgmii port to the 88e6064 core */
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(0x1a,    1), 0x003e);
+
+	/* set RX/TX clock delay */
+	utm400_smi_bus_write(bus, FAKE_ADDR, UTM400_MK_REGADDR(22, 26),
+			0x600 | utm400_smi_bus_read(bus,FAKE_ADDR, UTM400_MK_REGADDR(22,26)));
+}
+
+static int utm400_phy_mii_ioctl(
+	struct phy_device *phydev,
+	struct mii_ioctl_data *mii_data,
+	int cmd)
+{
+	int sav_phy_id = mii_data->phy_id;
+
+	if (mii_data->phy_id > FAKE_ADDR ||
+			(mii_data->phy_id == FAKE_ADDR && mii_data->reg_num >= 32))
+		return phy_mii_ioctl(phydev, mii_data, cmd);
+
+	if (mii_data->phy_id == FAKE_ADDR)
+		mii_data->phy_id = 0;
+
+	switch (cmd) {
+	case SIOCGMIIREG:
+		mii_data->val_out = utm400_read_port_phy(phydev->bus,
+								mii_data->phy_id, mii_data->reg_num);
+		break;
+	case SIOCSMIIREG:
+		mii_data->val_out = utm400_write_port_phy(phydev->bus,
+								mii_data->phy_id, mii_data->reg_num,
+								mii_data->val_in);
+		break;
+	default:
+		phy_mii_ioctl(phydev, mii_data, cmd);
+		break;
+	}
+
+	if (sav_phy_id == FAKE_ADDR)
+		mii_data->phy_id = sav_phy_id;
+
+	return 0;
+}
+
+/*
+ * take over all bus operations and forward the ones we don't want
+ */
+#define	smi_bus_read utm400_smi_bus_read
+#define	smi_bus_write utm400_smi_bus_write
+#define phy_mii_ioctl utm400_phy_mii_ioctl
+
+#endif /* CONFIG_MACH_UTM400 */
 
 /* statistics ***************************************************************/
 static struct net_device_stats *mv643xx_eth_get_stats(struct net_device *dev)
@@ -1334,9 +1617,9 @@ static void mib_counters_update(struct mv643xx_eth_private *mp)
 	spin_unlock_bh(&mp->mib_counters_lock);
 }
 
-static void mib_counters_timer_wrapper(struct timer_list *t)
+static void mib_counters_timer_wrapper(unsigned long _mp)
 {
-	struct mv643xx_eth_private *mp = from_timer(mp, t, mib_counters_timer);
+	struct mv643xx_eth_private *mp = (void *)_mp;
 	mib_counters_update(mp);
 	mod_timer(&mp->mib_counters_timer, jiffies + 30 * HZ);
 }
@@ -1365,7 +1648,6 @@ static unsigned int get_rx_coal(struct mv643xx_eth_private *mp)
 		temp = (val & 0x003fff00) >> 8;
 
 	temp *= 64000000;
-	temp += mp->t_clk / 2;
 	do_div(temp, mp->t_clk);
 
 	return (unsigned int)temp;
@@ -1402,7 +1684,6 @@ static unsigned int get_tx_coal(struct mv643xx_eth_private *mp)
 
 	temp = (rdlp(mp, TX_FIFO_URGENT_THRESHOLD) & 0x3fff0) >> 4;
 	temp *= 64000000;
-	temp += mp->t_clk / 2;
 	do_div(temp, mp->t_clk);
 
 	return (unsigned int)temp;
@@ -1483,59 +1764,55 @@ static const struct mv643xx_eth_stats mv643xx_eth_stats[] = {
 };
 
 static int
-mv643xx_eth_get_link_ksettings_phy(struct mv643xx_eth_private *mp,
-				   struct ethtool_link_ksettings *cmd)
+mv643xx_eth_get_settings_phy(struct mv643xx_eth_private *mp,
+			     struct ethtool_cmd *cmd)
 {
-	struct net_device *dev = mp->dev;
+	int err;
 
-	phy_ethtool_ksettings_get(dev->phydev, cmd);
+	err = phy_read_status(mp->phy);
+	if (err == 0)
+		err = phy_ethtool_gset(mp->phy, cmd);
 
 	/*
 	 * The MAC does not support 1000baseT_Half.
 	 */
-	linkmode_clear_bit(ETHTOOL_LINK_MODE_1000baseT_Half_BIT,
-			   cmd->link_modes.supported);
-	linkmode_clear_bit(ETHTOOL_LINK_MODE_1000baseT_Half_BIT,
-			   cmd->link_modes.advertising);
+	cmd->supported &= ~SUPPORTED_1000baseT_Half;
+	cmd->advertising &= ~ADVERTISED_1000baseT_Half;
 
-	return 0;
+	return err;
 }
 
 static int
-mv643xx_eth_get_link_ksettings_phyless(struct mv643xx_eth_private *mp,
-				       struct ethtool_link_ksettings *cmd)
+mv643xx_eth_get_settings_phyless(struct mv643xx_eth_private *mp,
+				 struct ethtool_cmd *cmd)
 {
 	u32 port_status;
-	u32 supported, advertising;
 
 	port_status = rdlp(mp, PORT_STATUS);
 
-	supported = SUPPORTED_MII;
-	advertising = ADVERTISED_MII;
+	cmd->supported = SUPPORTED_MII;
+	cmd->advertising = ADVERTISED_MII;
 	switch (port_status & PORT_SPEED_MASK) {
 	case PORT_SPEED_10:
-		cmd->base.speed = SPEED_10;
+		ethtool_cmd_speed_set(cmd, SPEED_10);
 		break;
 	case PORT_SPEED_100:
-		cmd->base.speed = SPEED_100;
+		ethtool_cmd_speed_set(cmd, SPEED_100);
 		break;
 	case PORT_SPEED_1000:
-		cmd->base.speed = SPEED_1000;
+		ethtool_cmd_speed_set(cmd, SPEED_1000);
 		break;
 	default:
-		cmd->base.speed = -1;
+		cmd->speed = -1;
 		break;
 	}
-	cmd->base.duplex = (port_status & FULL_DUPLEX) ?
-		DUPLEX_FULL : DUPLEX_HALF;
-	cmd->base.port = PORT_MII;
-	cmd->base.phy_address = 0;
-	cmd->base.autoneg = AUTONEG_DISABLE;
-
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.supported,
-						supported);
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.advertising,
-						advertising);
+	cmd->duplex = (port_status & FULL_DUPLEX) ? DUPLEX_FULL : DUPLEX_HALF;
+	cmd->port = PORT_MII;
+	cmd->phy_address = 0;
+	cmd->transceiver = XCVR_INTERNAL;
+	cmd->autoneg = AUTONEG_DISABLE;
+	cmd->maxtxpkt = 1;
+	cmd->maxrxpkt = 1;
 
 	return 0;
 }
@@ -1543,21 +1820,23 @@ mv643xx_eth_get_link_ksettings_phyless(struct mv643xx_eth_private *mp,
 static void
 mv643xx_eth_get_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
 {
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
 	wol->supported = 0;
 	wol->wolopts = 0;
-	if (dev->phydev)
-		phy_ethtool_get_wol(dev->phydev, wol);
+	if (mp->phy)
+		phy_ethtool_get_wol(mp->phy, wol);
 }
 
 static int
 mv643xx_eth_set_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
 {
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
 	int err;
 
-	if (!dev->phydev)
+	if (mp->phy == NULL)
 		return -EOPNOTSUPP;
 
-	err = phy_ethtool_set_wol(dev->phydev, wol);
+	err = phy_ethtool_set_wol(mp->phy, wol);
 	/* Given that mv643xx_eth works without the marvell-specific PHY driver,
 	 * this debugging hint is useful to have.
 	 */
@@ -1567,38 +1846,43 @@ mv643xx_eth_set_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
 }
 
 static int
-mv643xx_eth_get_link_ksettings(struct net_device *dev,
-			       struct ethtool_link_ksettings *cmd)
+mv643xx_eth_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 {
 	struct mv643xx_eth_private *mp = netdev_priv(dev);
 
-	if (dev->phydev)
-		return mv643xx_eth_get_link_ksettings_phy(mp, cmd);
+#ifdef CONFIG_MACH_UTM400
+	if (mp->id == 0)
+		return mv643xx_eth_get_settings_phyless(mp, cmd);
 	else
-		return mv643xx_eth_get_link_ksettings_phyless(mp, cmd);
+#endif
+	if (mp->phy != NULL)
+		return mv643xx_eth_get_settings_phy(mp, cmd);
+	else
+		return mv643xx_eth_get_settings_phyless(mp, cmd);
 }
 
 static int
-mv643xx_eth_set_link_ksettings(struct net_device *dev,
-			       const struct ethtool_link_ksettings *cmd)
+mv643xx_eth_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 {
-	struct ethtool_link_ksettings c = *cmd;
-	u32 advertising;
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
 	int ret;
 
-	if (!dev->phydev)
+#ifdef CONFIG_MACH_UTM400
+	if (mp->id == 0) {
+		printk(KERN_WARNING "mv643xx_eth: mv643xx_eth_set_settings on "
+				"port without real PHY\n");
+		return -EINVAL;
+	}
+#endif
+	if (mp->phy == NULL)
 		return -EINVAL;
 
 	/*
 	 * The MAC does not support 1000baseT_Half.
 	 */
-	ethtool_convert_link_mode_to_legacy_u32(&advertising,
-						c.link_modes.advertising);
-	advertising &= ~ADVERTISED_1000baseT_Half;
-	ethtool_convert_legacy_u32_to_link_mode(c.link_modes.advertising,
-						advertising);
+	cmd->advertising &= ~ADVERTISED_1000baseT_Half;
 
-	ret = phy_ethtool_ksettings_set(dev->phydev, &c);
+	ret = phy_ethtool_sset(mp->phy, cmd);
 	if (!ret)
 		mv643xx_eth_adjust_link(dev);
 	return ret;
@@ -1613,6 +1897,21 @@ static void mv643xx_eth_get_drvinfo(struct net_device *dev,
 		sizeof(drvinfo->version));
 	strlcpy(drvinfo->fw_version, "N/A", sizeof(drvinfo->fw_version));
 	strlcpy(drvinfo->bus_info, "platform", sizeof(drvinfo->bus_info));
+}
+
+static int mv643xx_eth_nway_reset(struct net_device *dev)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+
+	if (mp->id == 0) {
+		printk(KERN_WARNING "mv643xx_eth: mv643xx_eth_set_settings on "
+				"port without real PHY\n");
+		return -EINVAL;
+	}
+	if (mp->phy == NULL)
+		return -EINVAL;
+
+	return genphy_restart_aneg(mp->phy);
 }
 
 static int
@@ -1737,8 +2036,10 @@ static int mv643xx_eth_get_sset_count(struct net_device *dev, int sset)
 }
 
 static const struct ethtool_ops mv643xx_eth_ethtool_ops = {
+	.get_settings		= mv643xx_eth_get_settings,
+	.set_settings		= mv643xx_eth_set_settings,
 	.get_drvinfo		= mv643xx_eth_get_drvinfo,
-	.nway_reset		= phy_ethtool_nway_reset,
+	.nway_reset		= mv643xx_eth_nway_reset,
 	.get_link		= ethtool_op_get_link,
 	.get_coalesce		= mv643xx_eth_get_coalesce,
 	.set_coalesce		= mv643xx_eth_set_coalesce,
@@ -1750,8 +2051,6 @@ static const struct ethtool_ops mv643xx_eth_ethtool_ops = {
 	.get_ts_info		= ethtool_op_get_ts_info,
 	.get_wol                = mv643xx_eth_get_wol,
 	.set_wol                = mv643xx_eth_set_wol,
-	.get_link_ksettings	= mv643xx_eth_get_link_ksettings,
-	.set_link_ksettings	= mv643xx_eth_set_link_ksettings,
 };
 
 
@@ -2005,7 +2304,7 @@ static void rxq_deinit(struct rx_queue *rxq)
 
 	for (i = 0; i < rxq->rx_ring_size; i++) {
 		if (rxq->rx_skb[i]) {
-			dev_consume_skb_any(rxq->rx_skb[i]);
+			dev_kfree_skb(rxq->rx_skb[i]);
 			rxq->rx_desc_count--;
 		}
 	}
@@ -2193,7 +2492,23 @@ static void handle_link_event(struct mv643xx_eth_private *mp)
 	int duplex;
 	int fc;
 
-	port_status = rdlp(mp, PORT_STATUS);
+	/*
+	 * Do not use the PORT_STATUS register if in RGMII mode. We use what
+	 * the phy actually reported back to us.
+	 */
+	if (rdlp(mp, PORT_SERIAL_CONTROL1) & RGMII_ENABLE) {
+		port_status = (mp->phy->link) ? LINK_UP : 0;
+		port_status |= (mp->phy->duplex) ? FULL_DUPLEX : 0;
+		if (mp->phy->speed == 1000)
+			port_status |= PORT_SPEED_1000;
+		if (mp->phy->speed == 100)
+			port_status |= PORT_SPEED_100;
+		if (mp->phy->speed == 10)
+			port_status |= PORT_SPEED_10;
+	} else {
+		port_status = rdlp(mp, PORT_STATUS);
+	}
+
 	if (!(port_status & LINK_UP)) {
 		if (netif_carrier_ok(dev)) {
 			int i;
@@ -2292,40 +2607,46 @@ static int mv643xx_eth_poll(struct napi_struct *napi, int budget)
 		}
 	}
 
+#ifdef CONFIG_LEDMAN
+	if (work_done)
+		ledman_cmdset(LEDMAN_ETH);
+#endif
+
 	if (work_done < budget) {
 		if (mp->oom)
 			mod_timer(&mp->rx_oom, jiffies + (HZ / 10));
-		napi_complete_done(napi, work_done);
+		napi_complete(napi);
 		wrlp(mp, INT_MASK, mp->int_mask);
 	}
 
 	return work_done;
 }
 
-static inline void oom_timer_wrapper(struct timer_list *t)
+static inline void oom_timer_wrapper(unsigned long data)
 {
-	struct mv643xx_eth_private *mp = from_timer(mp, t, rx_oom);
+	struct mv643xx_eth_private *mp = (void *)data;
 
 	napi_schedule(&mp->napi);
 }
 
 static void port_start(struct mv643xx_eth_private *mp)
 {
-	struct net_device *dev = mp->dev;
 	u32 pscr;
 	int i;
 
 	/*
 	 * Perform PHY reset, if there is a PHY.
 	 */
-	if (dev->phydev) {
-		struct ethtool_link_ksettings cmd;
+#ifdef CONFIG_MACH_UTM400
+	if (mp->id != 0)
+#endif
+	if (mp->phy != NULL) {
+		struct ethtool_cmd cmd;
 
-		mv643xx_eth_get_link_ksettings(dev, &cmd);
-		phy_init_hw(dev->phydev);
-		mv643xx_eth_set_link_ksettings(
-			dev, (const struct ethtool_link_ksettings *)&cmd);
-		phy_start(dev->phydev);
+		mv643xx_eth_get_settings(mp->dev, &cmd);
+		phy_init_hw(mp->phy);
+		mv643xx_eth_set_settings(mp->dev, &cmd);
+		phy_start(mp->phy);
 	}
 
 	/*
@@ -2337,8 +2658,12 @@ static void port_start(struct mv643xx_eth_private *mp)
 	wrlp(mp, PORT_SERIAL_CONTROL, pscr);
 
 	pscr |= DO_NOT_FORCE_LINK_FAIL;
-	if (!dev->phydev)
+	if (mp->phy == NULL)
 		pscr |= FORCE_LINK_PASS;
+#if defined(CONFIG_MACH_UTM300) || defined(CONFIG_MACH_UTM400)
+	if (mp->id == 0)
+		pscr |= FORCE_LINK_PASS;
+#endif
 	wrlp(mp, PORT_SERIAL_CONTROL, pscr);
 
 	/*
@@ -2476,7 +2801,6 @@ out_free:
 	for (i = 0; i < mp->rxq_count; i++)
 		rxq_deinit(mp->rxq + i);
 out:
-	napi_disable(&mp->napi);
 	free_irq(dev->irq, dev);
 
 	return err;
@@ -2522,8 +2846,8 @@ static int mv643xx_eth_stop(struct net_device *dev)
 	del_timer_sync(&mp->rx_oom);
 
 	netif_carrier_off(dev);
-	if (dev->phydev)
-		phy_stop(dev->phydev);
+	if (mp->phy)
+		phy_stop(mp->phy);
 	free_irq(dev->irq, dev);
 
 	port_reset(mp);
@@ -2541,12 +2865,13 @@ static int mv643xx_eth_stop(struct net_device *dev)
 
 static int mv643xx_eth_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
 	int ret;
 
-	if (!dev->phydev)
+	if (mp->phy == NULL)
 		return -ENOTSUPP;
 
-	ret = phy_mii_ioctl(dev->phydev, ifr, cmd);
+	ret = phy_mii_ioctl(mp->phy, ifr, cmd);
 	if (!ret)
 		mv643xx_eth_adjust_link(dev);
 	return ret;
@@ -2555,6 +2880,9 @@ static int mv643xx_eth_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 static int mv643xx_eth_change_mtu(struct net_device *dev, int new_mtu)
 {
 	struct mv643xx_eth_private *mp = netdev_priv(dev);
+
+	if (new_mtu < 64 || new_mtu > 9500)
+		return -EINVAL;
 
 	dev->mtu = new_mtu;
 	mv643xx_eth_recalc_skb_size(mp);
@@ -2690,7 +3018,7 @@ static const struct of_device_id mv643xx_eth_shared_ids[] = {
 MODULE_DEVICE_TABLE(of, mv643xx_eth_shared_ids);
 #endif
 
-#if defined(CONFIG_OF_IRQ) && !defined(CONFIG_MV64X60)
+#if defined(CONFIG_OF) && !defined(CONFIG_MV64X60)
 #define mv643xx_eth_property(_np, _name, _v)				\
 	do {								\
 		u32 tmp;						\
@@ -2714,18 +3042,18 @@ static int mv643xx_eth_shared_of_add_port(struct platform_device *pdev,
 	ppd.shared = pdev;
 
 	memset(&res, 0, sizeof(res));
-	if (of_irq_to_resource(pnp, 0, &res) <= 0) {
-		dev_err(&pdev->dev, "missing interrupt on %pOFn\n", pnp);
+	if (!of_irq_to_resource(pnp, 0, &res)) {
+		dev_err(&pdev->dev, "missing interrupt on %s\n", pnp->name);
 		return -EINVAL;
 	}
 
 	if (of_property_read_u32(pnp, "reg", &ppd.port_number)) {
-		dev_err(&pdev->dev, "missing reg property on %pOFn\n", pnp);
+		dev_err(&pdev->dev, "missing reg property on %s\n", pnp->name);
 		return -EINVAL;
 	}
 
 	if (ppd.port_number >= 3) {
-		dev_err(&pdev->dev, "invalid reg property on %pOFn\n", pnp);
+		dev_err(&pdev->dev, "invalid reg property on %s\n", pnp->name);
 		return -EINVAL;
 	}
 
@@ -2738,8 +3066,8 @@ static int mv643xx_eth_shared_of_add_port(struct platform_device *pdev,
 	}
 
 	mac_addr = of_get_mac_address(pnp);
-	if (!IS_ERR(mac_addr))
-		ether_addr_copy(ppd.mac_addr, mac_addr);
+	if (mac_addr)
+		memcpy(ppd.mac_addr, mac_addr, ETH_ALEN);
 
 	mv643xx_eth_property(pnp, "tx-queue-size", ppd.tx_queue_size);
 	mv643xx_eth_property(pnp, "tx-sram-addr", ppd.tx_sram_addr);
@@ -2868,7 +3196,7 @@ static int mv643xx_eth_shared_probe(struct platform_device *pdev)
 
 	ret = mv643xx_eth_shared_of_probe(pdev);
 	if (ret)
-		goto err_put_clk;
+		return ret;
 	pd = dev_get_platdata(&pdev->dev);
 
 	msp->tx_csum_limit = (pd != NULL && pd->tx_csum_limit) ?
@@ -2876,11 +3204,6 @@ static int mv643xx_eth_shared_probe(struct platform_device *pdev)
 	infer_hw_params(msp);
 
 	return 0;
-
-err_put_clk:
-	if (!IS_ERR(msp->clk))
-		clk_disable_unprepare(msp->clk);
-	return ret;
 }
 
 static int mv643xx_eth_shared_remove(struct platform_device *pdev)
@@ -2957,22 +3280,6 @@ static void set_params(struct mv643xx_eth_private *mp,
 	mp->txq_count = pd->tx_queue_count ? : 1;
 }
 
-static int get_phy_mode(struct mv643xx_eth_private *mp)
-{
-	struct device *dev = mp->dev->dev.parent;
-	int iface = -1;
-
-	if (dev->of_node)
-		iface = of_get_phy_mode(dev->of_node);
-
-	/* Historical default if unspecified. We could also read/write
-	 * the interface state in the PSC1
-	 */
-	if (iface < 0)
-		iface = PHY_INTERFACE_MODE_GMII;
-	return iface;
-}
-
 static struct phy_device *phy_scan(struct mv643xx_eth_private *mp,
 				   int phy_addr)
 {
@@ -2999,11 +3306,15 @@ static struct phy_device *phy_scan(struct mv643xx_eth_private *mp,
 				"orion-mdio-mii", addr);
 
 		phydev = phy_connect(mp->dev, phy_id, mv643xx_eth_adjust_link,
-				     get_phy_mode(mp));
+				PHY_INTERFACE_MODE_GMII);
 		if (!IS_ERR(phydev)) {
 			phy_addr_set(mp, addr);
 			break;
 		}
+#ifdef CONFIG_MACH_UTM400
+		if (phydev != NULL && addr == FAKE_ADDR)
+			utm400_marvel_switch_init(bus);
+#endif
 	}
 
 	return phydev;
@@ -3011,19 +3322,16 @@ static struct phy_device *phy_scan(struct mv643xx_eth_private *mp,
 
 static void phy_init(struct mv643xx_eth_private *mp, int speed, int duplex)
 {
-	struct net_device *dev = mp->dev;
-	struct phy_device *phy = dev->phydev;
+	struct phy_device *phy = mp->phy;
 
 	if (speed == 0) {
 		phy->autoneg = AUTONEG_ENABLE;
 		phy->speed = 0;
 		phy->duplex = 0;
-		linkmode_copy(phy->advertising, phy->supported);
-		linkmode_set_bit(ETHTOOL_LINK_MODE_Autoneg_BIT,
-				 phy->advertising);
+		phy->advertising = phy->supported | ADVERTISED_Autoneg;
 	} else {
 		phy->autoneg = AUTONEG_DISABLE;
-		linkmode_zero(phy->advertising);
+		phy->advertising = 0;
 		phy->speed = speed;
 		phy->duplex = duplex;
 	}
@@ -3032,7 +3340,6 @@ static void phy_init(struct mv643xx_eth_private *mp, int speed, int duplex)
 
 static void init_pscr(struct mv643xx_eth_private *mp, int speed, int duplex)
 {
-	struct net_device *dev = mp->dev;
 	u32 pscr;
 
 	pscr = rdlp(mp, PORT_SERIAL_CONTROL);
@@ -3042,7 +3349,11 @@ static void init_pscr(struct mv643xx_eth_private *mp, int speed, int duplex)
 	}
 
 	pscr = MAX_RX_PACKET_9700BYTE | SERIAL_PORT_CONTROL_RESERVED;
-	if (!dev->phydev) {
+	if (mp->phy == NULL
+#if defined(CONFIG_MACH_UTM300) || defined(CONFIG_MACH_UTM400)
+			|| mp->id == 0
+#endif
+			) {
 		pscr |= DISABLE_AUTO_NEG_SPEED_GMII;
 		if (speed == SPEED_1000)
 			pscr |= SET_GMII_SPEED_TO_1000;
@@ -3081,7 +3392,6 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 	struct mv643xx_eth_platform_data *pd;
 	struct mv643xx_eth_private *mp;
 	struct net_device *dev;
-	struct phy_device *phydev = NULL;
 	struct resource *res;
 	int err;
 
@@ -3100,13 +3410,13 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 	if (!dev)
 		return -ENOMEM;
 
-	SET_NETDEV_DEV(dev, &pdev->dev);
 	mp = netdev_priv(dev);
 	platform_set_drvdata(pdev, mp);
 
 	mp->shared = platform_get_drvdata(pd->shared);
 	mp->base = mp->shared->base + 0x0400 + (pd->port_number << 10);
 	mp->port_num = pd->port_number;
+	mp->id = pdev->id;
 
 	mp->dev = dev;
 
@@ -3138,18 +3448,18 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 
 	err = 0;
 	if (pd->phy_node) {
-		phydev = of_phy_connect(mp->dev, pd->phy_node,
-					mv643xx_eth_adjust_link, 0,
-					get_phy_mode(mp));
-		if (!phydev)
+		mp->phy = of_phy_connect(mp->dev, pd->phy_node,
+					 mv643xx_eth_adjust_link, 0,
+					 PHY_INTERFACE_MODE_GMII);
+		if (!mp->phy)
 			err = -ENODEV;
 		else
-			phy_addr_set(mp, phydev->mdio.addr);
+			phy_addr_set(mp, mp->phy->addr);
 	} else if (pd->phy_addr != MV643XX_ETH_PHY_NONE) {
-		phydev = phy_scan(mp, pd->phy_addr);
+		mp->phy = phy_scan(mp, pd->phy_addr);
 
-		if (IS_ERR(phydev))
-			err = PTR_ERR(phydev);
+		if (IS_ERR(mp->phy))
+			err = PTR_ERR(mp->phy);
 		else
 			phy_init(mp, pd->speed, pd->duplex);
 	}
@@ -3167,7 +3477,8 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 
 	mib_counters_clear(mp);
 
-	timer_setup(&mp->mib_counters_timer, mib_counters_timer_wrapper, 0);
+	setup_timer(&mp->mib_counters_timer, mib_counters_timer_wrapper,
+		    (unsigned long)mp);
 	mp->mib_counters_timer.expires = jiffies + 30 * HZ;
 
 	spin_lock_init(&mp->mib_counters_lock);
@@ -3176,7 +3487,7 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 
 	netif_napi_add(dev, &mp->napi, mv643xx_eth_poll, NAPI_POLL_WEIGHT);
 
-	timer_setup(&mp->rx_oom, oom_timer_wrapper, 0);
+	setup_timer(&mp->rx_oom, oom_timer_wrapper, (unsigned long)mp);
 
 
 	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
@@ -3197,9 +3508,7 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 	dev->priv_flags |= IFF_UNICAST_FLT;
 	dev->gso_max_segs = MV643XX_MAX_TSO_SEGS;
 
-	/* MTU range: 64 - 9500 */
-	dev->min_mtu = 64;
-	dev->max_mtu = 9500;
+	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	if (mp->shared->win_protect)
 		wrl(mp, WINDOW_PROTECT(mp->port_num), mp->shared->win_protect);
@@ -3234,11 +3543,10 @@ out:
 static int mv643xx_eth_remove(struct platform_device *pdev)
 {
 	struct mv643xx_eth_private *mp = platform_get_drvdata(pdev);
-	struct net_device *dev = mp->dev;
 
 	unregister_netdev(mp->dev);
-	if (dev->phydev)
-		phy_disconnect(dev->phydev);
+	if (mp->phy != NULL)
+		phy_disconnect(mp->phy);
 	cancel_work_sync(&mp->tx_timeout_task);
 
 	if (!IS_ERR(mp->clk))
@@ -3270,20 +3578,25 @@ static struct platform_driver mv643xx_eth_driver = {
 	},
 };
 
-static struct platform_driver * const drivers[] = {
-	&mv643xx_eth_shared_driver,
-	&mv643xx_eth_driver,
-};
-
 static int __init mv643xx_eth_init_module(void)
 {
-	return platform_register_drivers(drivers, ARRAY_SIZE(drivers));
+	int rc;
+
+	rc = platform_driver_register(&mv643xx_eth_shared_driver);
+	if (!rc) {
+		rc = platform_driver_register(&mv643xx_eth_driver);
+		if (rc)
+			platform_driver_unregister(&mv643xx_eth_shared_driver);
+	}
+
+	return rc;
 }
 module_init(mv643xx_eth_init_module);
 
 static void __exit mv643xx_eth_cleanup_module(void)
 {
-	platform_unregister_drivers(drivers, ARRAY_SIZE(drivers));
+	platform_driver_unregister(&mv643xx_eth_driver);
+	platform_driver_unregister(&mv643xx_eth_shared_driver);
 }
 module_exit(mv643xx_eth_cleanup_module);
 

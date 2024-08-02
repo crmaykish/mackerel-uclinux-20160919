@@ -1,8 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for BCM963xx builtin Ethernet mac
  *
  * Copyright (C) 2008 Maxime Bizon <mbizon@freebox.fr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 #include <linux/init.h>
 #include <linux/interrupt.h>
@@ -282,13 +295,16 @@ static int bcm_enet_refill_rx(struct net_device *dev)
 /*
  * timer callback to defer refill rx queue in case we're OOM
  */
-static void bcm_enet_refill_rx_timer(struct timer_list *t)
+static void bcm_enet_refill_rx_timer(unsigned long data)
 {
-	struct bcm_enet_priv *priv = from_timer(priv, t, rx_timeout);
-	struct net_device *dev = priv->net_dev;
+	struct net_device *dev;
+	struct bcm_enet_priv *priv;
+
+	dev = (struct net_device *)data;
+	priv = netdev_priv(dev);
 
 	spin_lock(&priv->rx_lock);
-	bcm_enet_refill_rx(dev);
+	bcm_enet_refill_rx((struct net_device *)data);
 	spin_unlock(&priv->rx_lock);
 }
 
@@ -495,7 +511,7 @@ static int bcm_enet_poll(struct napi_struct *napi, int budget)
 
 	/* no more packet in rx/tx queue, remove device from poll
 	 * queue */
-	napi_complete_done(napi, rx_work_done);
+	napi_complete(napi);
 
 	/* restore rx/tx interrupt */
 	enet_dmac_writel(priv, priv->dma_chan_int_mask,
@@ -555,13 +571,12 @@ static irqreturn_t bcm_enet_isr_dma(int irq, void *dev_id)
 /*
  * tx request callback
  */
-static netdev_tx_t
-bcm_enet_start_xmit(struct sk_buff *skb, struct net_device *dev)
+static int bcm_enet_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct bcm_enet_priv *priv;
 	struct bcm_enet_desc *desc;
 	u32 len_stat;
-	netdev_tx_t ret;
+	int ret;
 
 	priv = netdev_priv(dev);
 
@@ -594,7 +609,8 @@ bcm_enet_start_xmit(struct sk_buff *skb, struct net_device *dev)
 			dev_kfree_skb(skb);
 			skb = nskb;
 		}
-		data = skb_put_zero(skb, needed);
+		data = skb_put(skb, needed);
+		memset(data, 0, needed);
 	}
 
 	/* point to the next available desc */
@@ -775,7 +791,7 @@ static void bcm_enet_adjust_phy_link(struct net_device *dev)
 	int status_changed;
 
 	priv = netdev_priv(dev);
-	phydev = dev->phydev;
+	phydev = priv->phydev;
 	status_changed = 0;
 
 	if (priv->old_link != phydev->link) {
@@ -801,7 +817,7 @@ static void bcm_enet_adjust_phy_link(struct net_device *dev)
 			rx_pause_en = 1;
 			tx_pause_en = 1;
 		} else if (!priv->pause_auto) {
-			/* pause setting overridden by user */
+			/* pause setting overrided by user */
 			rx_pause_en = priv->pause_rx;
 			tx_pause_en = priv->pause_tx;
 		} else {
@@ -878,18 +894,27 @@ static int bcm_enet_open(struct net_device *dev)
 		}
 
 		/* mask with MAC supported features */
-		phy_support_sym_pause(phydev);
-		phy_set_max_speed(phydev, SPEED_100);
-		phy_set_sym_pause(phydev, priv->pause_rx, priv->pause_rx,
-				  priv->pause_auto);
+		phydev->supported &= (SUPPORTED_10baseT_Half |
+				      SUPPORTED_10baseT_Full |
+				      SUPPORTED_100baseT_Half |
+				      SUPPORTED_100baseT_Full |
+				      SUPPORTED_Autoneg |
+				      SUPPORTED_Pause |
+				      SUPPORTED_MII);
+		phydev->advertising = phydev->supported;
 
-		phy_attached_info(phydev);
+		if (priv->pause_auto && priv->pause_rx && priv->pause_tx)
+			phydev->advertising |= SUPPORTED_Pause;
+		else
+			phydev->advertising &= ~SUPPORTED_Pause;
+
+		dev_info(kdev, "attached PHY at address %d [%s]\n",
+			 phydev->addr, phydev->drv->name);
 
 		priv->old_link = 0;
 		priv->old_duplex = -1;
 		priv->old_pause = -1;
-	} else {
-		phydev = NULL;
+		priv->phydev = phydev;
 	}
 
 	/* mask all interrupts and request them */
@@ -923,7 +948,7 @@ static int bcm_enet_open(struct net_device *dev)
 
 	/* allocate rx dma ring */
 	size = priv->rx_ring_size * sizeof(struct bcm_enet_desc);
-	p = dma_alloc_coherent(kdev, size, &priv->rx_desc_dma, GFP_KERNEL);
+	p = dma_zalloc_coherent(kdev, size, &priv->rx_desc_dma, GFP_KERNEL);
 	if (!p) {
 		ret = -ENOMEM;
 		goto out_freeirq_tx;
@@ -934,7 +959,7 @@ static int bcm_enet_open(struct net_device *dev)
 
 	/* allocate tx dma ring */
 	size = priv->tx_ring_size * sizeof(struct bcm_enet_desc);
-	p = dma_alloc_coherent(kdev, size, &priv->tx_desc_dma, GFP_KERNEL);
+	p = dma_zalloc_coherent(kdev, size, &priv->tx_desc_dma, GFP_KERNEL);
 	if (!p) {
 		ret = -ENOMEM;
 		goto out_free_rx_ring;
@@ -1038,8 +1063,7 @@ static int bcm_enet_open(struct net_device *dev)
 	val = enet_readl(priv, ENET_CTL_REG);
 	val |= ENET_CTL_ENABLE_MASK;
 	enet_writel(priv, val, ENET_CTL_REG);
-	if (priv->dma_has_sram)
-		enet_dma_writel(priv, ENETDMA_CFG_EN_MASK, ENETDMA_CFG_REG);
+	enet_dma_writel(priv, ENETDMA_CFG_EN_MASK, ENETDMA_CFG_REG);
 	enet_dmac_writel(priv, priv->dma_chan_en_mask,
 			 ENETDMAC_CHANCFG, priv->rx_chan);
 
@@ -1061,8 +1085,8 @@ static int bcm_enet_open(struct net_device *dev)
 	enet_dmac_writel(priv, priv->dma_chan_int_mask,
 			 ENETDMAC_IRMASK, priv->tx_chan);
 
-	if (phydev)
-		phy_start(phydev);
+	if (priv->has_phy)
+		phy_start(priv->phydev);
 	else
 		bcm_enet_adjust_link(dev);
 
@@ -1104,8 +1128,7 @@ out_freeirq:
 	free_irq(dev->irq, dev);
 
 out_phy_disconnect:
-	if (phydev)
-		phy_disconnect(phydev);
+	phy_disconnect(priv->phydev);
 
 	return ret;
 }
@@ -1168,7 +1191,7 @@ static int bcm_enet_stop(struct net_device *dev)
 	netif_stop_queue(dev);
 	napi_disable(&priv->napi);
 	if (priv->has_phy)
-		phy_stop(dev->phydev);
+		phy_stop(priv->phydev);
 	del_timer_sync(&priv->rx_timeout);
 
 	/* mask all interrupts */
@@ -1212,8 +1235,10 @@ static int bcm_enet_stop(struct net_device *dev)
 	free_irq(dev->irq, dev);
 
 	/* release phy */
-	if (priv->has_phy)
-		phy_disconnect(dev->phydev);
+	if (priv->has_phy) {
+		phy_disconnect(priv->phydev);
+		priv->phydev = NULL;
+	}
 
 	return 0;
 }
@@ -1412,69 +1437,65 @@ static int bcm_enet_nway_reset(struct net_device *dev)
 	struct bcm_enet_priv *priv;
 
 	priv = netdev_priv(dev);
-	if (priv->has_phy)
-		return phy_ethtool_nway_reset(dev);
+	if (priv->has_phy) {
+		if (!priv->phydev)
+			return -ENODEV;
+		return genphy_restart_aneg(priv->phydev);
+	}
 
 	return -EOPNOTSUPP;
 }
 
-static int bcm_enet_get_link_ksettings(struct net_device *dev,
-				       struct ethtool_link_ksettings *cmd)
+static int bcm_enet_get_settings(struct net_device *dev,
+				 struct ethtool_cmd *cmd)
 {
 	struct bcm_enet_priv *priv;
-	u32 supported, advertising;
 
 	priv = netdev_priv(dev);
 
+	cmd->maxrxpkt = 0;
+	cmd->maxtxpkt = 0;
+
 	if (priv->has_phy) {
-		if (!dev->phydev)
+		if (!priv->phydev)
 			return -ENODEV;
-
-		phy_ethtool_ksettings_get(dev->phydev, cmd);
-
-		return 0;
+		return phy_ethtool_gset(priv->phydev, cmd);
 	} else {
-		cmd->base.autoneg = 0;
-		cmd->base.speed = (priv->force_speed_100) ?
-			SPEED_100 : SPEED_10;
-		cmd->base.duplex = (priv->force_duplex_full) ?
+		cmd->autoneg = 0;
+		ethtool_cmd_speed_set(cmd, ((priv->force_speed_100)
+					    ? SPEED_100 : SPEED_10));
+		cmd->duplex = (priv->force_duplex_full) ?
 			DUPLEX_FULL : DUPLEX_HALF;
-		supported = ADVERTISED_10baseT_Half |
+		cmd->supported = ADVERTISED_10baseT_Half  |
 			ADVERTISED_10baseT_Full |
 			ADVERTISED_100baseT_Half |
 			ADVERTISED_100baseT_Full;
-		advertising = 0;
-		ethtool_convert_legacy_u32_to_link_mode(
-			cmd->link_modes.supported, supported);
-		ethtool_convert_legacy_u32_to_link_mode(
-			cmd->link_modes.advertising, advertising);
-		cmd->base.port = PORT_MII;
+		cmd->advertising = 0;
+		cmd->port = PORT_MII;
+		cmd->transceiver = XCVR_EXTERNAL;
 	}
 	return 0;
 }
 
-static int bcm_enet_set_link_ksettings(struct net_device *dev,
-				       const struct ethtool_link_ksettings *cmd)
+static int bcm_enet_set_settings(struct net_device *dev,
+				 struct ethtool_cmd *cmd)
 {
 	struct bcm_enet_priv *priv;
 
 	priv = netdev_priv(dev);
 	if (priv->has_phy) {
-		if (!dev->phydev)
+		if (!priv->phydev)
 			return -ENODEV;
-		return phy_ethtool_ksettings_set(dev->phydev, cmd);
+		return phy_ethtool_sset(priv->phydev, cmd);
 	} else {
 
-		if (cmd->base.autoneg ||
-		    (cmd->base.speed != SPEED_100 &&
-		     cmd->base.speed != SPEED_10) ||
-		    cmd->base.port != PORT_MII)
+		if (cmd->autoneg ||
+		    (cmd->speed != SPEED_100 && cmd->speed != SPEED_10) ||
+		    cmd->port != PORT_MII)
 			return -EINVAL;
 
-		priv->force_speed_100 =
-			(cmd->base.speed == SPEED_100) ? 1 : 0;
-		priv->force_duplex_full =
-			(cmd->base.duplex == DUPLEX_FULL) ? 1 : 0;
+		priv->force_speed_100 = (cmd->speed == SPEED_100) ? 1 : 0;
+		priv->force_duplex_full = (cmd->duplex == DUPLEX_FULL) ? 1 : 0;
 
 		if (netif_running(dev))
 			bcm_enet_adjust_link(dev);
@@ -1568,14 +1589,14 @@ static const struct ethtool_ops bcm_enet_ethtool_ops = {
 	.get_sset_count		= bcm_enet_get_sset_count,
 	.get_ethtool_stats      = bcm_enet_get_ethtool_stats,
 	.nway_reset		= bcm_enet_nway_reset,
+	.get_settings		= bcm_enet_get_settings,
+	.set_settings		= bcm_enet_set_settings,
 	.get_drvinfo		= bcm_enet_get_drvinfo,
 	.get_link		= ethtool_op_get_link,
 	.get_ringparam		= bcm_enet_get_ringparam,
 	.set_ringparam		= bcm_enet_set_ringparam,
 	.get_pauseparam		= bcm_enet_get_pauseparam,
 	.set_pauseparam		= bcm_enet_set_pauseparam,
-	.get_link_ksettings	= bcm_enet_get_link_ksettings,
-	.set_link_ksettings	= bcm_enet_set_link_ksettings,
 };
 
 static int bcm_enet_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
@@ -1584,9 +1605,9 @@ static int bcm_enet_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 
 	priv = netdev_priv(dev);
 	if (priv->has_phy) {
-		if (!dev->phydev)
+		if (!priv->phydev)
 			return -ENODEV;
-		return phy_mii_ioctl(dev->phydev, rq, cmd);
+		return phy_mii_ioctl(priv->phydev, rq, cmd);
 	} else {
 		struct mii_if_info mii;
 
@@ -1601,18 +1622,19 @@ static int bcm_enet_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 }
 
 /*
- * adjust mtu, can't be called while device is running
+ * calculate actual hardware mtu
  */
-static int bcm_enet_change_mtu(struct net_device *dev, int new_mtu)
+static int compute_hw_mtu(struct bcm_enet_priv *priv, int mtu)
 {
-	struct bcm_enet_priv *priv = netdev_priv(dev);
-	int actual_mtu = new_mtu;
+	int actual_mtu;
 
-	if (netif_running(dev))
-		return -EBUSY;
+	actual_mtu = mtu;
 
 	/* add ethernet header + vlan tag size */
 	actual_mtu += VLAN_ETH_HLEN;
+
+	if (actual_mtu < 64 || actual_mtu > BCMENET_MAX_MTU)
+		return -EINVAL;
 
 	/*
 	 * setup maximum size before we get overflow mark in
@@ -1628,7 +1650,22 @@ static int bcm_enet_change_mtu(struct net_device *dev, int new_mtu)
 	 */
 	priv->rx_skb_size = ALIGN(actual_mtu + ETH_FCS_LEN,
 				  priv->dma_maxburst * 4);
+	return 0;
+}
 
+/*
+ * adjust mtu, can't be called while device is running
+ */
+static int bcm_enet_change_mtu(struct net_device *dev, int new_mtu)
+{
+	int ret;
+
+	if (netif_running(dev))
+		return -EBUSY;
+
+	ret = compute_hw_mtu(netdev_priv(dev), new_mtu);
+	if (ret)
+		return ret;
 	dev->mtu = new_mtu;
 	return 0;
 }
@@ -1693,12 +1730,15 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	struct bcm_enet_priv *priv;
 	struct net_device *dev;
 	struct bcm63xx_enet_platform_data *pd;
-	struct resource *res_irq, *res_irq_rx, *res_irq_tx;
+	struct resource *res_mem, *res_irq, *res_irq_rx, *res_irq_tx;
 	struct mii_bus *bus;
+	const char *clk_name;
 	int i, ret;
 
+	/* stop if shared driver failed, assume driver->probe will be
+	 * called in the same order we register devices (correct ?) */
 	if (!bcm_enet_shared_base[0])
-		return -EPROBE_DEFER;
+		return -ENODEV;
 
 	res_irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 	res_irq_rx = platform_get_resource(pdev, IORESOURCE_IRQ, 1);
@@ -1715,11 +1755,12 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	priv->enet_is_sw = false;
 	priv->dma_maxburst = BCMENET_DMA_MAXBURST;
 
-	ret = bcm_enet_change_mtu(dev, dev->mtu);
+	ret = compute_hw_mtu(priv, dev->mtu);
 	if (ret)
 		goto out;
 
-	priv->base = devm_platform_ioremap_resource(pdev, 0);
+	res_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	priv->base = devm_ioremap_resource(&pdev->dev, res_mem);
 	if (IS_ERR(priv->base)) {
 		ret = PTR_ERR(priv->base);
 		goto out;
@@ -1728,15 +1769,25 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	dev->irq = priv->irq = res_irq->start;
 	priv->irq_rx = res_irq_rx->start;
 	priv->irq_tx = res_irq_tx->start;
+	priv->mac_id = pdev->id;
 
-	priv->mac_clk = devm_clk_get(&pdev->dev, "enet");
+	/* get rx & tx dma channel id for this mac */
+	if (priv->mac_id == 0) {
+		priv->rx_chan = 0;
+		priv->tx_chan = 1;
+		clk_name = "enet0";
+	} else {
+		priv->rx_chan = 2;
+		priv->tx_chan = 3;
+		clk_name = "enet1";
+	}
+
+	priv->mac_clk = clk_get(&pdev->dev, clk_name);
 	if (IS_ERR(priv->mac_clk)) {
 		ret = PTR_ERR(priv->mac_clk);
 		goto out;
 	}
-	ret = clk_prepare_enable(priv->mac_clk);
-	if (ret)
-		goto out;
+	clk_prepare_enable(priv->mac_clk);
 
 	/* initialize default and fetch platform data */
 	priv->rx_ring_size = BCMENET_DEF_RX_DESC;
@@ -1760,21 +1811,17 @@ static int bcm_enet_probe(struct platform_device *pdev)
 		priv->dma_chan_width = pd->dma_chan_width;
 		priv->dma_has_sram = pd->dma_has_sram;
 		priv->dma_desc_shift = pd->dma_desc_shift;
-		priv->rx_chan = pd->rx_chan;
-		priv->tx_chan = pd->tx_chan;
 	}
 
-	if (priv->has_phy && !priv->use_external_mii) {
+	if (priv->mac_id == 0 && priv->has_phy && !priv->use_external_mii) {
 		/* using internal PHY, enable clock */
-		priv->phy_clk = devm_clk_get(&pdev->dev, "ephy");
+		priv->phy_clk = clk_get(&pdev->dev, "ephy");
 		if (IS_ERR(priv->phy_clk)) {
 			ret = PTR_ERR(priv->phy_clk);
 			priv->phy_clk = NULL;
-			goto out_disable_clk_mac;
+			goto out_put_clk_mac;
 		}
-		ret = clk_prepare_enable(priv->phy_clk);
-		if (ret)
-			goto out_disable_clk_mac;
+		clk_prepare_enable(priv->phy_clk);
 	}
 
 	/* do minimal hardware init to be able to probe mii bus */
@@ -1795,15 +1842,24 @@ static int bcm_enet_probe(struct platform_device *pdev)
 		bus->priv = priv;
 		bus->read = bcm_enet_mdio_read_phylib;
 		bus->write = bcm_enet_mdio_write_phylib;
-		sprintf(bus->id, "%s-%d", pdev->name, pdev->id);
+		sprintf(bus->id, "%s-%d", pdev->name, priv->mac_id);
 
 		/* only probe bus where we think the PHY is, because
 		 * the mdio read operation return 0 instead of 0xffff
 		 * if a slave is not present on hw */
 		bus->phy_mask = ~(1 << priv->phy_id);
 
+		bus->irq = devm_kzalloc(&pdev->dev, sizeof(int) * PHY_MAX_ADDR,
+					GFP_KERNEL);
+		if (!bus->irq) {
+			ret = -ENOMEM;
+			goto out_free_mdio;
+		}
+
 		if (priv->has_phy_interrupt)
 			bus->irq[priv->phy_id] = priv->phy_interrupt;
+		else
+			bus->irq[priv->phy_id] = PHY_POLL;
 
 		ret = mdiobus_register(bus);
 		if (ret) {
@@ -1813,7 +1869,7 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	} else {
 
 		/* run platform code to initialize PHY device */
-		if (pd && pd->mii_config &&
+		if (pd->mii_config &&
 		    pd->mii_config(dev, 1, bcm_enet_mdio_read_mii,
 				   bcm_enet_mdio_write_mii)) {
 			dev_err(&pdev->dev, "unable to configure mdio bus\n");
@@ -1824,7 +1880,9 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	spin_lock_init(&priv->rx_lock);
 
 	/* init rx timeout (used for oom) */
-	timer_setup(&priv->rx_timeout, bcm_enet_refill_rx_timer, 0);
+	init_timer(&priv->rx_timeout);
+	priv->rx_timeout.function = bcm_enet_refill_rx_timer;
+	priv->rx_timeout.data = (unsigned long)dev;
 
 	/* init the mib update lock&work */
 	mutex_init(&priv->mib_update_lock);
@@ -1839,9 +1897,6 @@ static int bcm_enet_probe(struct platform_device *pdev)
 	netif_napi_add(dev, &priv->napi, bcm_enet_poll, 16);
 
 	dev->ethtool_ops = &bcm_enet_ethtool_ops;
-	/* MTU range: 46 - 2028 */
-	dev->min_mtu = ETH_ZLEN - ETH_HLEN;
-	dev->max_mtu = BCMENET_MAX_MTU - VLAN_ETH_HLEN;
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	ret = register_netdev(dev);
@@ -1866,10 +1921,14 @@ out_free_mdio:
 out_uninit_hw:
 	/* turn off mdc clock */
 	enet_writel(priv, 0, ENET_MIISC_REG);
-	clk_disable_unprepare(priv->phy_clk);
+	if (priv->phy_clk) {
+		clk_disable_unprepare(priv->phy_clk);
+		clk_put(priv->phy_clk);
+	}
 
-out_disable_clk_mac:
+out_put_clk_mac:
 	clk_disable_unprepare(priv->mac_clk);
+	clk_put(priv->mac_clk);
 out:
 	free_netdev(dev);
 	return ret;
@@ -1905,8 +1964,12 @@ static int bcm_enet_remove(struct platform_device *pdev)
 	}
 
 	/* disable hw block clocks */
-	clk_disable_unprepare(priv->phy_clk);
+	if (priv->phy_clk) {
+		clk_disable_unprepare(priv->phy_clk);
+		clk_put(priv->phy_clk);
+	}
 	clk_disable_unprepare(priv->mac_clk);
+	clk_put(priv->mac_clk);
 
 	free_netdev(dev);
 	return 0;
@@ -1978,9 +2041,9 @@ static inline int bcm_enet_port_is_rgmii(int portid)
 /*
  * enet sw PHY polling
  */
-static void swphy_poll_timer(struct timer_list *t)
+static void swphy_poll_timer(unsigned long data)
 {
-	struct bcm_enet_priv *priv = from_timer(priv, t, swphy_poll);
+	struct bcm_enet_priv *priv = (struct bcm_enet_priv *)data;
 	unsigned int i;
 
 	for (i = 0; i < priv->num_ports; i++) {
@@ -2113,6 +2176,7 @@ static int bcm_enetsw_open(struct net_device *dev)
 		goto out_freeirq_tx;
 	}
 
+	memset(p, 0, size);
 	priv->rx_desc_alloc_size = size;
 	priv->rx_desc_cpu = p;
 
@@ -2125,10 +2189,11 @@ static int bcm_enetsw_open(struct net_device *dev)
 		goto out_free_rx_ring;
 	}
 
+	memset(p, 0, size);
 	priv->tx_desc_alloc_size = size;
 	priv->tx_desc_cpu = p;
 
-	priv->tx_skb = kcalloc(priv->tx_ring_size, sizeof(struct sk_buff *),
+	priv->tx_skb = kzalloc(sizeof(struct sk_buff *) * priv->tx_ring_size,
 			       GFP_KERNEL);
 	if (!priv->tx_skb) {
 		dev_err(kdev, "cannot allocate rx skb queue\n");
@@ -2142,7 +2207,7 @@ static int bcm_enetsw_open(struct net_device *dev)
 	spin_lock_init(&priv->tx_lock);
 
 	/* init & fill rx ring with skbs */
-	priv->rx_skb = kcalloc(priv->rx_ring_size, sizeof(struct sk_buff *),
+	priv->rx_skb = kzalloc(sizeof(struct sk_buff *) * priv->rx_ring_size,
 			       GFP_KERNEL);
 	if (!priv->rx_skb) {
 		dev_err(kdev, "cannot allocate rx skb queue\n");
@@ -2287,8 +2352,11 @@ static int bcm_enetsw_open(struct net_device *dev)
 	}
 
 	/* start phy polling timer */
-	timer_setup(&priv->swphy_poll, swphy_poll_timer, 0);
-	mod_timer(&priv->swphy_poll, jiffies);
+	init_timer(&priv->swphy_poll);
+	priv->swphy_poll.function = swphy_poll_timer;
+	priv->swphy_poll.data = (unsigned long)priv;
+	priv->swphy_poll.expires = jiffies;
+	add_timer(&priv->swphy_poll);
 	return 0;
 
 out:
@@ -2626,7 +2694,7 @@ static int bcm_enetsw_set_ringparam(struct net_device *dev,
 	return 0;
 }
 
-static const struct ethtool_ops bcm_enetsw_ethtool_ops = {
+static struct ethtool_ops bcm_enetsw_ethtool_ops = {
 	.get_strings		= bcm_enetsw_get_strings,
 	.get_sset_count		= bcm_enetsw_get_sset_count,
 	.get_ethtool_stats      = bcm_enetsw_get_ethtool_stats,
@@ -2644,8 +2712,11 @@ static int bcm_enetsw_probe(struct platform_device *pdev)
 	struct resource *res_mem;
 	int ret, irq_rx, irq_tx;
 
+	/* stop if shared driver failed, assume driver->probe will be
+	 * called in the same order we register devices (correct ?)
+	 */
 	if (!bcm_enet_shared_base[0])
-		return -EPROBE_DEFER;
+		return -ENODEV;
 
 	res_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	irq_rx = platform_get_irq(pdev, 0);
@@ -2658,6 +2729,7 @@ static int bcm_enetsw_probe(struct platform_device *pdev)
 	if (!dev)
 		return -ENOMEM;
 	priv = netdev_priv(dev);
+	memset(priv, 0, sizeof(*priv));
 
 	/* initialize default and fetch platform data */
 	priv->enet_is_sw = true;
@@ -2679,31 +2751,37 @@ static int bcm_enetsw_probe(struct platform_device *pdev)
 		priv->dma_chan_width = pd->dma_chan_width;
 	}
 
-	ret = bcm_enet_change_mtu(dev, dev->mtu);
+	ret = compute_hw_mtu(priv, dev->mtu);
 	if (ret)
 		goto out;
 
-	priv->base = devm_ioremap_resource(&pdev->dev, res_mem);
-	if (IS_ERR(priv->base)) {
-		ret = PTR_ERR(priv->base);
+	if (!request_mem_region(res_mem->start, resource_size(res_mem),
+				"bcm63xx_enetsw")) {
+		ret = -EBUSY;
 		goto out;
 	}
 
-	priv->mac_clk = devm_clk_get(&pdev->dev, "enetsw");
+	priv->base = ioremap(res_mem->start, resource_size(res_mem));
+	if (priv->base == NULL) {
+		ret = -ENOMEM;
+		goto out_release_mem;
+	}
+
+	priv->mac_clk = clk_get(&pdev->dev, "enetsw");
 	if (IS_ERR(priv->mac_clk)) {
 		ret = PTR_ERR(priv->mac_clk);
-		goto out;
+		goto out_unmap;
 	}
-	ret = clk_prepare_enable(priv->mac_clk);
-	if (ret)
-		goto out;
+	clk_enable(priv->mac_clk);
 
 	priv->rx_chan = 0;
 	priv->tx_chan = 1;
 	spin_lock_init(&priv->rx_lock);
 
 	/* init rx timeout (used for oom) */
-	timer_setup(&priv->rx_timeout, bcm_enet_refill_rx_timer, 0);
+	init_timer(&priv->rx_timeout);
+	priv->rx_timeout.function = bcm_enet_refill_rx_timer;
+	priv->rx_timeout.data = (unsigned long)dev;
 
 	/* register netdevice */
 	dev->netdev_ops = &bcm_enetsw_ops;
@@ -2715,7 +2793,7 @@ static int bcm_enetsw_probe(struct platform_device *pdev)
 
 	ret = register_netdev(dev);
 	if (ret)
-		goto out_disable_clk;
+		goto out_put_clk;
 
 	netif_carrier_off(dev);
 	platform_set_drvdata(pdev, dev);
@@ -2724,8 +2802,14 @@ static int bcm_enetsw_probe(struct platform_device *pdev)
 
 	return 0;
 
-out_disable_clk:
-	clk_disable_unprepare(priv->mac_clk);
+out_put_clk:
+	clk_put(priv->mac_clk);
+
+out_unmap:
+	iounmap(priv->base);
+
+out_release_mem:
+	release_mem_region(res_mem->start, resource_size(res_mem));
 out:
 	free_netdev(dev);
 	return ret;
@@ -2737,13 +2821,17 @@ static int bcm_enetsw_remove(struct platform_device *pdev)
 {
 	struct bcm_enet_priv *priv;
 	struct net_device *dev;
+	struct resource *res;
 
 	/* stop netdevice */
 	dev = platform_get_drvdata(pdev);
 	priv = netdev_priv(dev);
 	unregister_netdev(dev);
 
-	clk_disable_unprepare(priv->mac_clk);
+	/* release device resources */
+	iounmap(priv->base);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	release_mem_region(res->start, resource_size(res));
 
 	free_netdev(dev);
 	return 0;
@@ -2761,13 +2849,15 @@ struct platform_driver bcm63xx_enetsw_driver = {
 /* reserve & remap memory space shared between all macs */
 static int bcm_enet_shared_probe(struct platform_device *pdev)
 {
+	struct resource *res;
 	void __iomem *p[3];
 	unsigned int i;
 
 	memset(bcm_enet_shared_base, 0, sizeof(bcm_enet_shared_base));
 
 	for (i = 0; i < 3; i++) {
-		p[i] = devm_platform_ioremap_resource(pdev, i);
+		res = platform_get_resource(pdev, IORESOURCE_MEM, i);
+		p[i] = devm_ioremap_resource(&pdev->dev, res);
 		if (IS_ERR(p[i]))
 			return PTR_ERR(p[i]);
 	}
@@ -2794,21 +2884,33 @@ struct platform_driver bcm63xx_enet_shared_driver = {
 	},
 };
 
-static struct platform_driver * const drivers[] = {
-	&bcm63xx_enet_shared_driver,
-	&bcm63xx_enet_driver,
-	&bcm63xx_enetsw_driver,
-};
-
 /* entry point */
 static int __init bcm_enet_init(void)
 {
-	return platform_register_drivers(drivers, ARRAY_SIZE(drivers));
+	int ret;
+
+	ret = platform_driver_register(&bcm63xx_enet_shared_driver);
+	if (ret)
+		return ret;
+
+	ret = platform_driver_register(&bcm63xx_enet_driver);
+	if (ret)
+		platform_driver_unregister(&bcm63xx_enet_shared_driver);
+
+	ret = platform_driver_register(&bcm63xx_enetsw_driver);
+	if (ret) {
+		platform_driver_unregister(&bcm63xx_enet_driver);
+		platform_driver_unregister(&bcm63xx_enet_shared_driver);
+	}
+
+	return ret;
 }
 
 static void __exit bcm_enet_exit(void)
 {
-	platform_unregister_drivers(drivers, ARRAY_SIZE(drivers));
+	platform_driver_unregister(&bcm63xx_enet_driver);
+	platform_driver_unregister(&bcm63xx_enetsw_driver);
+	platform_driver_unregister(&bcm63xx_enet_shared_driver);
 }
 
 

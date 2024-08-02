@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_GENERIC_GPIO_H
 #define _ASM_GENERIC_GPIO_H
 
@@ -27,11 +26,7 @@
  */
 
 #ifndef ARCH_NR_GPIOS
-#if defined(CONFIG_ARCH_NR_GPIO) && CONFIG_ARCH_NR_GPIO > 0
-#define ARCH_NR_GPIOS CONFIG_ARCH_NR_GPIO
-#else
 #define ARCH_NR_GPIOS		512
-#endif
 #endif
 
 /*

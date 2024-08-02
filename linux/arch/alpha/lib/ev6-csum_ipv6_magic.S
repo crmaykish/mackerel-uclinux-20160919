@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * arch/alpha/lib/ev6-csum_ipv6_magic.S
  * 21264 version contributed by Rick Gorton <rick.gorton@alpha-processor.com>
@@ -53,7 +52,6 @@
  * may cause additional delay in rare cases (load-load replay traps).
  */
 
-#include <asm/export.h>
 	.globl csum_ipv6_magic
 	.align 4
 	.ent csum_ipv6_magic
@@ -150,4 +148,3 @@ csum_ipv6_magic:
 	ret			# L0 : L U L U
 
 	.end csum_ipv6_magic
-	EXPORT_SYMBOL(csum_ipv6_magic)

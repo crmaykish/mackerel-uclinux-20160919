@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* Parse a Microsoft Individual Code Signing blob
  *
  * Copyright (C) 2014 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public Licence
+ * as published by the Free Software Foundation; either version
+ * 2 of the Licence, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt) "MSCODE: "fmt
@@ -12,18 +16,24 @@
 #include <linux/oid_registry.h>
 #include <crypto/pkcs7.h>
 #include "verify_pefile.h"
-#include "mscode.asn1.h"
+#include "mscode-asn1.h"
 
 /*
  * Parse a Microsoft Individual Code Signing blob
  */
-int mscode_parse(void *_ctx, const void *content_data, size_t data_len,
-		 size_t asn1hdrlen)
+int mscode_parse(struct pefile_context *ctx)
 {
-	struct pefile_context *ctx = _ctx;
+	const void *content_data;
+	size_t data_len;
+	int ret;
 
-	content_data -= asn1hdrlen;
-	data_len += asn1hdrlen;
+	ret = pkcs7_get_content_data(ctx->pkcs7, &content_data, &data_len, 1);
+
+	if (ret) {
+		pr_debug("PKCS#7 message does not contain data\n");
+		return ret;
+	}
+
 	pr_devel("Data: %zu [%*ph]\n", data_len, (unsigned)(data_len),
 		 content_data);
 
@@ -76,25 +86,25 @@ int mscode_note_digest_algo(void *context, size_t hdrlen,
 	oid = look_up_OID(value, vlen);
 	switch (oid) {
 	case OID_md4:
-		ctx->digest_algo = "md4";
+		ctx->digest_algo = HASH_ALGO_MD4;
 		break;
 	case OID_md5:
-		ctx->digest_algo = "md5";
+		ctx->digest_algo = HASH_ALGO_MD5;
 		break;
 	case OID_sha1:
-		ctx->digest_algo = "sha1";
+		ctx->digest_algo = HASH_ALGO_SHA1;
 		break;
 	case OID_sha256:
-		ctx->digest_algo = "sha256";
+		ctx->digest_algo = HASH_ALGO_SHA256;
 		break;
 	case OID_sha384:
-		ctx->digest_algo = "sha384";
+		ctx->digest_algo = HASH_ALGO_SHA384;
 		break;
 	case OID_sha512:
-		ctx->digest_algo = "sha512";
+		ctx->digest_algo = HASH_ALGO_SHA512;
 		break;
 	case OID_sha224:
-		ctx->digest_algo = "sha224";
+		ctx->digest_algo = HASH_ALGO_SHA224;
 		break;
 
 	case OID__NR:
@@ -119,11 +129,7 @@ int mscode_note_digest(void *context, size_t hdrlen,
 {
 	struct pefile_context *ctx = context;
 
-	ctx->digest = kmemdup(value, vlen, GFP_KERNEL);
-	if (!ctx->digest)
-		return -ENOMEM;
-
+	ctx->digest = value;
 	ctx->digest_len = vlen;
-
 	return 0;
 }

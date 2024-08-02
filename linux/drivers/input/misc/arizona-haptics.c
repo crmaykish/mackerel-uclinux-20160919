@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Arizona haptics driver
  *
  * Copyright 2012 Wolfson Microelectronics plc
  *
  * Author: Mark Brown <broonie@opensource.wolfsonmicro.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -34,8 +37,6 @@ static void arizona_haptics_work(struct work_struct *work)
 						       struct arizona_haptics,
 						       work);
 	struct arizona *arizona = haptics->arizona;
-	struct snd_soc_component *component =
-		snd_soc_dapm_to_component(arizona->dapm);
 	int ret;
 
 	if (!haptics->arizona->dapm) {
@@ -65,7 +66,7 @@ static void arizona_haptics_work(struct work_struct *work)
 			return;
 		}
 
-		ret = snd_soc_component_enable_pin(component, "HAPTICS");
+		ret = snd_soc_dapm_enable_pin(arizona->dapm, "HAPTICS");
 		if (ret != 0) {
 			dev_err(arizona->dev, "Failed to start HAPTICS: %d\n",
 				ret);
@@ -80,7 +81,7 @@ static void arizona_haptics_work(struct work_struct *work)
 		}
 	} else {
 		/* This disable sequence will be a noop if already enabled */
-		ret = snd_soc_component_disable_pin(component, "HAPTICS");
+		ret = snd_soc_dapm_disable_pin(arizona->dapm, "HAPTICS");
 		if (ret != 0) {
 			dev_err(arizona->dev, "Failed to disable HAPTICS: %d\n",
 				ret);
@@ -139,14 +140,11 @@ static int arizona_haptics_play(struct input_dev *input, void *data,
 static void arizona_haptics_close(struct input_dev *input)
 {
 	struct arizona_haptics *haptics = input_get_drvdata(input);
-	struct snd_soc_component *component;
 
 	cancel_work_sync(&haptics->work);
 
-	if (haptics->arizona->dapm) {
-		component = snd_soc_dapm_to_component(haptics->arizona->dapm);
-		snd_soc_component_disable_pin(component, "HAPTICS");
-	}
+	if (haptics->arizona->dapm)
+		snd_soc_dapm_disable_pin(haptics->arizona->dapm, "HAPTICS");
 }
 
 static int arizona_haptics_probe(struct platform_device *pdev)
@@ -180,6 +178,7 @@ static int arizona_haptics_probe(struct platform_device *pdev)
 	input_set_drvdata(haptics->input_dev, haptics);
 
 	haptics->input_dev->name = "arizona:haptics";
+	haptics->input_dev->dev.parent = pdev->dev.parent;
 	haptics->input_dev->close = arizona_haptics_close;
 	__set_bit(FF_RUMBLE, haptics->input_dev->ffbit);
 
@@ -197,6 +196,8 @@ static int arizona_haptics_probe(struct platform_device *pdev)
 			ret);
 		return ret;
 	}
+
+	platform_set_drvdata(pdev, haptics);
 
 	return 0;
 }

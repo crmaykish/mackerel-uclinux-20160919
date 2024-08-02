@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * BIOS32 and PCI BIOS handling.
  */
@@ -8,11 +7,9 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
-
 #include <asm/pci_x86.h>
-#include <asm/e820/types.h>
 #include <asm/pci-functions.h>
-#include <asm/set_memory.h>
+#include <asm/cacheflush.h>
 
 /* BIOS32 signature: "_32_" */
 #define BIOS32_SIGNATURE	(('_' << 0) + ('3' << 8) + ('2' << 16) + ('_' << 24))
@@ -47,7 +44,7 @@ static inline void set_bios_x(void)
 	pcibios_enabled = 1;
 	set_memory_x(PAGE_OFFSET + BIOS_BEGIN, (BIOS_END - BIOS_BEGIN) >> PAGE_SHIFT);
 	if (__supported_pte_mask & _PAGE_NX)
-		printk(KERN_INFO "PCI: PCI BIOS area is rw and x. Use pci=nobios if you want it NX.\n");
+		printk(KERN_INFO "PCI : PCI BIOS area is rw and x. Use pci=nobios if you want it NX.\n");
 }
 
 /*
@@ -123,12 +120,9 @@ static unsigned long __init bios32_service(unsigned long service)
 static struct {
 	unsigned long address;
 	unsigned short segment;
-} pci_indirect __ro_after_init = {
-	.address = 0,
-	.segment = __KERNEL_CS,
-};
+} pci_indirect = { 0, __KERNEL_CS };
 
-static int pci_bios_present __ro_after_init;
+static int pci_bios_present;
 
 static int __init check_pcibios(void)
 {
@@ -186,7 +180,6 @@ static int pci_bios_read(unsigned int seg, unsigned int bus,
 	unsigned long result = 0;
 	unsigned long flags;
 	unsigned long bx = (bus << 8) | devfn;
-	u16 number = 0, mask = 0;
 
 	WARN_ON(seg);
 	if (!value || (bus > 255) || (devfn > 255) || (reg > 255))
@@ -196,34 +189,52 @@ static int pci_bios_read(unsigned int seg, unsigned int bus,
 
 	switch (len) {
 	case 1:
-		number = PCIBIOS_READ_CONFIG_BYTE;
-		mask = 0xff;
+		__asm__("lcall *(%%esi); cld\n\t"
+			"jc 1f\n\t"
+			"xor %%ah, %%ah\n"
+			"1:"
+			: "=c" (*value),
+			  "=a" (result)
+			: "1" (PCIBIOS_READ_CONFIG_BYTE),
+			  "b" (bx),
+			  "D" ((long)reg),
+			  "S" (&pci_indirect));
+		/*
+		 * Zero-extend the result beyond 8 bits, do not trust the
+		 * BIOS having done it:
+		 */
+		*value &= 0xff;
 		break;
 	case 2:
-		number = PCIBIOS_READ_CONFIG_WORD;
-		mask = 0xffff;
+		__asm__("lcall *(%%esi); cld\n\t"
+			"jc 1f\n\t"
+			"xor %%ah, %%ah\n"
+			"1:"
+			: "=c" (*value),
+			  "=a" (result)
+			: "1" (PCIBIOS_READ_CONFIG_WORD),
+			  "b" (bx),
+			  "D" ((long)reg),
+			  "S" (&pci_indirect));
+		/*
+		 * Zero-extend the result beyond 16 bits, do not trust the
+		 * BIOS having done it:
+		 */
+		*value &= 0xffff;
 		break;
 	case 4:
-		number = PCIBIOS_READ_CONFIG_DWORD;
+		__asm__("lcall *(%%esi); cld\n\t"
+			"jc 1f\n\t"
+			"xor %%ah, %%ah\n"
+			"1:"
+			: "=c" (*value),
+			  "=a" (result)
+			: "1" (PCIBIOS_READ_CONFIG_DWORD),
+			  "b" (bx),
+			  "D" ((long)reg),
+			  "S" (&pci_indirect));
 		break;
 	}
-
-	__asm__("lcall *(%%esi); cld\n\t"
-		"jc 1f\n\t"
-		"xor %%ah, %%ah\n"
-		"1:"
-		: "=c" (*value),
-		  "=a" (result)
-		: "1" (number),
-		  "b" (bx),
-		  "D" ((long)reg),
-		  "S" (&pci_indirect));
-	/*
-	 * Zero-extend the result beyond 8 or 16 bits, do not trust the
-	 * BIOS having done it:
-	 */
-	if (mask)
-		*value &= mask;
 
 	raw_spin_unlock_irqrestore(&pci_config_lock, flags);
 
@@ -236,7 +247,6 @@ static int pci_bios_write(unsigned int seg, unsigned int bus,
 	unsigned long result = 0;
 	unsigned long flags;
 	unsigned long bx = (bus << 8) | devfn;
-	u16 number = 0;
 
 	WARN_ON(seg);
 	if ((bus > 255) || (devfn > 255) || (reg > 255)) 
@@ -246,26 +256,42 @@ static int pci_bios_write(unsigned int seg, unsigned int bus,
 
 	switch (len) {
 	case 1:
-		number = PCIBIOS_WRITE_CONFIG_BYTE;
+		__asm__("lcall *(%%esi); cld\n\t"
+			"jc 1f\n\t"
+			"xor %%ah, %%ah\n"
+			"1:"
+			: "=a" (result)
+			: "0" (PCIBIOS_WRITE_CONFIG_BYTE),
+			  "c" (value),
+			  "b" (bx),
+			  "D" ((long)reg),
+			  "S" (&pci_indirect));
 		break;
 	case 2:
-		number = PCIBIOS_WRITE_CONFIG_WORD;
+		__asm__("lcall *(%%esi); cld\n\t"
+			"jc 1f\n\t"
+			"xor %%ah, %%ah\n"
+			"1:"
+			: "=a" (result)
+			: "0" (PCIBIOS_WRITE_CONFIG_WORD),
+			  "c" (value),
+			  "b" (bx),
+			  "D" ((long)reg),
+			  "S" (&pci_indirect));
 		break;
 	case 4:
-		number = PCIBIOS_WRITE_CONFIG_DWORD;
+		__asm__("lcall *(%%esi); cld\n\t"
+			"jc 1f\n\t"
+			"xor %%ah, %%ah\n"
+			"1:"
+			: "=a" (result)
+			: "0" (PCIBIOS_WRITE_CONFIG_DWORD),
+			  "c" (value),
+			  "b" (bx),
+			  "D" ((long)reg),
+			  "S" (&pci_indirect));
 		break;
 	}
-
-	__asm__("lcall *(%%esi); cld\n\t"
-		"jc 1f\n\t"
-		"xor %%ah, %%ah\n"
-		"1:"
-		: "=a" (result)
-		: "0" (number),
-		  "c" (value),
-		  "b" (bx),
-		  "D" ((long)reg),
-		  "S" (&pci_indirect));
 
 	raw_spin_unlock_irqrestore(&pci_config_lock, flags);
 

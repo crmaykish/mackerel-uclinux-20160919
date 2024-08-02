@@ -1,16 +1,19 @@
-/* SPDX-License-Identifier: GPL-2.0
- *
+/*
  *  include/asm-sh/magicpanelr2.h
  *
  *  Copyright (C) 2007  Markus Brunner, Mark Jonas
  *
  *  I/O addresses and bitmasks for Magic Panel Release 2 board
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
  */
 
 #ifndef __ASM_SH_MAGICPANELR2_H
 #define __ASM_SH_MAGICPANELR2_H
 
-#include <linux/gpio.h>
+#include <asm/gpio.h>
 
 #define __IO_PREFIX mpr2
 #include <asm/io_generic.h>

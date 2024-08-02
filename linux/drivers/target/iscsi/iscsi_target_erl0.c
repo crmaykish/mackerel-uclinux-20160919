@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /******************************************************************************
  * This file contains error recovery level zero functions used by
  * the iSCSI Target driver.
@@ -7,9 +6,16 @@
  *
  * Author: Nicholas A. Bellinger <nab@linux-iscsi.org>
  *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  ******************************************************************************/
-
-#include <linux/sched/signal.h>
 
 #include <scsi/iscsi_proto.h>
 #include <target/target_core_base.h>
@@ -38,8 +44,10 @@ void iscsit_set_dataout_sequence_values(
 	 */
 	if (cmd->unsolicited_data) {
 		cmd->seq_start_offset = cmd->write_data_done;
-		cmd->seq_end_offset = min(cmd->se_cmd.data_length,
-					conn->sess->sess_ops->FirstBurstLength);
+		cmd->seq_end_offset = (cmd->write_data_done +
+			((cmd->se_cmd.data_length >
+			  conn->sess->sess_ops->FirstBurstLength) ?
+			 conn->sess->sess_ops->FirstBurstLength : cmd->se_cmd.data_length));
 		return;
 	}
 
@@ -741,9 +749,9 @@ int iscsit_check_post_dataout(
 	}
 }
 
-void iscsit_handle_time2retain_timeout(struct timer_list *t)
+static void iscsit_handle_time2retain_timeout(unsigned long data)
 {
-	struct iscsi_session *sess = from_timer(sess, t, time2retain_timer);
+	struct iscsi_session *sess = (struct iscsi_session *) data;
 	struct iscsi_portal_group *tpg = sess->tpg;
 	struct se_portal_group *se_tpg = &tpg->tpg_se_tpg;
 
@@ -762,10 +770,23 @@ void iscsit_handle_time2retain_timeout(struct timer_list *t)
 
 	pr_err("Time2Retain timer expired for SID: %u, cleaning up"
 			" iSCSI session.\n", sess->sid);
+	{
+	struct iscsi_tiqn *tiqn = tpg->tpg_tiqn;
 
-	iscsit_fill_cxn_timeout_err_stats(sess);
+	if (tiqn) {
+		spin_lock(&tiqn->sess_err_stats.lock);
+		strcpy(tiqn->sess_err_stats.last_sess_fail_rem_name,
+			(void *)sess->sess_ops->InitiatorName);
+		tiqn->sess_err_stats.last_sess_failure_type =
+				ISCSI_SESS_ERR_CXN_TIMEOUT;
+		tiqn->sess_err_stats.cxn_timeout_errors++;
+		atomic_long_inc(&sess->conn_timeout_errors);
+		spin_unlock(&tiqn->sess_err_stats.lock);
+	}
+	}
+
 	spin_unlock_bh(&se_tpg->session_lock);
-	iscsit_close_session(sess);
+	target_put_session(sess->se_sess);
 }
 
 void iscsit_start_time2retain_handler(struct iscsi_session *sess)
@@ -788,18 +809,23 @@ void iscsit_start_time2retain_handler(struct iscsi_session *sess)
 	pr_debug("Starting Time2Retain timer for %u seconds on"
 		" SID: %u\n", sess->sess_ops->DefaultTime2Retain, sess->sid);
 
+	init_timer(&sess->time2retain_timer);
+	sess->time2retain_timer.expires =
+		(get_jiffies_64() + sess->sess_ops->DefaultTime2Retain * HZ);
+	sess->time2retain_timer.data = (unsigned long)sess;
+	sess->time2retain_timer.function = iscsit_handle_time2retain_timeout;
 	sess->time2retain_timer_flags &= ~ISCSI_TF_STOP;
 	sess->time2retain_timer_flags |= ISCSI_TF_RUNNING;
-	mod_timer(&sess->time2retain_timer,
-		  jiffies + sess->sess_ops->DefaultTime2Retain * HZ);
+	add_timer(&sess->time2retain_timer);
 }
 
+/*
+ *	Called with spin_lock_bh(&struct se_portal_group->session_lock) held
+ */
 int iscsit_stop_time2retain_timer(struct iscsi_session *sess)
 {
 	struct iscsi_portal_group *tpg = sess->tpg;
 	struct se_portal_group *se_tpg = &tpg->tpg_se_tpg;
-
-	lockdep_assert_held(&se_tpg->session_lock);
 
 	if (sess->time2retain_timer_flags & ISCSI_TF_EXPIRED)
 		return -1;
@@ -904,10 +930,8 @@ static void iscsit_handle_connection_cleanup(struct iscsi_conn *conn)
 	}
 }
 
-void iscsit_take_action_for_connection_exit(struct iscsi_conn *conn, bool *conn_freed)
+void iscsit_take_action_for_connection_exit(struct iscsi_conn *conn)
 {
-	*conn_freed = false;
-
 	spin_lock_bh(&conn->state_lock);
 	if (atomic_read(&conn->connection_exit)) {
 		spin_unlock_bh(&conn->state_lock);
@@ -918,7 +942,6 @@ void iscsit_take_action_for_connection_exit(struct iscsi_conn *conn, bool *conn_
 	if (conn->conn_state == TARG_CONN_STATE_IN_LOGOUT) {
 		spin_unlock_bh(&conn->state_lock);
 		iscsit_close_connection(conn);
-		*conn_freed = true;
 		return;
 	}
 
@@ -932,5 +955,4 @@ void iscsit_take_action_for_connection_exit(struct iscsi_conn *conn, bool *conn_
 	spin_unlock_bh(&conn->state_lock);
 
 	iscsit_handle_connection_cleanup(conn);
-	*conn_freed = true;
 }

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/isofs/namei.c
  *
@@ -23,7 +22,7 @@ isofs_cmp(struct dentry *dentry, const char *compare, int dlen)
 	qstr.len = dlen;
 	if (likely(!dentry->d_op))
 		return dentry->d_name.len != dlen || memcmp(dentry->d_name.name, compare, dlen);
-	return dentry->d_op->d_compare(NULL, dentry->d_name.len, dentry->d_name.name, &qstr);
+	return dentry->d_op->d_compare(NULL, NULL, dentry->d_name.len, dentry->d_name.name, &qstr);
 }
 
 /*
@@ -102,7 +101,6 @@ isofs_find_entry(struct inode *dir, struct dentry *dentry,
 			printk(KERN_NOTICE "iso9660: Corrupted directory entry"
 			       " in block %lu of inode %lu\n", block,
 			       dir->i_ino);
-			brelse(bh);
 			return 0;
 		}
 
@@ -153,8 +151,8 @@ isofs_find_entry(struct inode *dir, struct dentry *dentry,
 struct dentry *isofs_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 {
 	int found;
-	unsigned long block;
-	unsigned long offset;
+	unsigned long uninitialized_var(block);
+	unsigned long uninitialized_var(offset);
 	struct inode *inode;
 	struct page *page;
 

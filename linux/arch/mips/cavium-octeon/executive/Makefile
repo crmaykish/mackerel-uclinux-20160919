@@ -9,11 +9,13 @@
 # Copyright (C) 2005-2008 Cavium Networks
 #
 
-obj-y += cvmx-bootmem.o cvmx-l2c.o cvmx-sysinfo.o octeon-model.o
+obj-y += cvmx-l2c.o cvmx-sysinfo.o octeon-model.o
 obj-y += cvmx-pko.o cvmx-spi.o cvmx-cmd-queue.o \
 	cvmx-helper-board.o cvmx-helper.o cvmx-helper-xaui.o \
 	cvmx-helper-rgmii.o cvmx-helper-sgmii.o cvmx-helper-npi.o \
 	cvmx-helper-loop.o cvmx-helper-spi.o cvmx-helper-util.o \
-	cvmx-interrupt-decodes.o cvmx-interrupt-rsl.o
+	cvmx-interrupt-decodes.o cvmx-interrupt-rsl.o \
+	cvmx-helper-errata.o cvmx-helper-jtag.o
 
-obj-y += cvmx-helper-errata.o cvmx-helper-jtag.o cvmx-boot-vector.o
+obj-$(CONFIG_CAVIUM_OCTEON_USE_BOOTMEM) += cvmx-bootmem.o
+obj-$(CONFIG_CAVIUM_OCTEON_USB) += cvmx-usb.o

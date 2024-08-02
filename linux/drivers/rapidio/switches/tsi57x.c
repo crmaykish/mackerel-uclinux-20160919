@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * RapidIO Tsi57x switch family support
  *
@@ -9,6 +8,11 @@
  *
  * Copyright 2005 MontaVista Software, Inc.
  * Matt Porter <mporter@kernel.crashing.org>
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #include <linux/rio.h>
@@ -171,10 +175,12 @@ tsi57x_em_init(struct rio_dev *rdev)
 
 		/* Clear all pending interrupts */
 		rio_read_config_32(rdev,
-				RIO_DEV_PORT_N_ERR_STS_CSR(rdev, portnum),
+				rdev->phys_efptr +
+					RIO_PORT_N_ERR_STS_CSR(portnum),
 				&regval);
 		rio_write_config_32(rdev,
-				RIO_DEV_PORT_N_ERR_STS_CSR(rdev, portnum),
+				rdev->phys_efptr +
+					RIO_PORT_N_ERR_STS_CSR(portnum),
 				regval & 0x07120214);
 
 		rio_read_config_32(rdev,
@@ -192,7 +198,7 @@ tsi57x_em_init(struct rio_dev *rdev)
 
 		/* Skip next (odd) port if the current port is in x4 mode */
 		rio_read_config_32(rdev,
-				RIO_DEV_PORT_N_CTL_CSR(rdev, portnum),
+				rdev->phys_efptr + RIO_PORT_N_CTL_CSR(portnum),
 				&regval);
 		if ((regval & RIO_PORT_N_CTL_PWIDTH) == RIO_PORT_N_CTL_PWIDTH_4)
 			portnum++;
@@ -215,23 +221,23 @@ tsi57x_em_handler(struct rio_dev *rdev, u8 portnum)
 	u32 regval;
 
 	rio_read_config_32(rdev,
-			RIO_DEV_PORT_N_ERR_STS_CSR(rdev, portnum),
+			rdev->phys_efptr + RIO_PORT_N_ERR_STS_CSR(portnum),
 			&err_status);
 
 	if ((err_status & RIO_PORT_N_ERR_STS_PORT_OK) &&
-	    (err_status & (RIO_PORT_N_ERR_STS_OUT_ES |
-			  RIO_PORT_N_ERR_STS_INP_ES))) {
+	    (err_status & (RIO_PORT_N_ERR_STS_PW_OUT_ES |
+			  RIO_PORT_N_ERR_STS_PW_INP_ES))) {
 		/* Remove any queued packets by locking/unlocking port */
 		rio_read_config_32(rdev,
-			RIO_DEV_PORT_N_CTL_CSR(rdev, portnum),
+			rdev->phys_efptr + RIO_PORT_N_CTL_CSR(portnum),
 			&regval);
 		if (!(regval & RIO_PORT_N_CTL_LOCKOUT)) {
 			rio_write_config_32(rdev,
-				RIO_DEV_PORT_N_CTL_CSR(rdev, portnum),
+				rdev->phys_efptr + RIO_PORT_N_CTL_CSR(portnum),
 				regval | RIO_PORT_N_CTL_LOCKOUT);
 			udelay(50);
 			rio_write_config_32(rdev,
-				RIO_DEV_PORT_N_CTL_CSR(rdev, portnum),
+				rdev->phys_efptr + RIO_PORT_N_CTL_CSR(portnum),
 				regval);
 		}
 
@@ -239,7 +245,7 @@ tsi57x_em_handler(struct rio_dev *rdev, u8 portnum)
 		 * valid bit
 		 */
 		rio_read_config_32(rdev,
-			RIO_DEV_PORT_N_MNT_RSP_CSR(rdev, portnum),
+			rdev->phys_efptr + RIO_PORT_N_MNT_RSP_CSR(portnum),
 			&regval);
 
 		/* Send a Packet-Not-Accepted/Link-Request-Input-Status control
@@ -253,8 +259,8 @@ tsi57x_em_handler(struct rio_dev *rdev, u8 portnum)
 			while (checkcount--) {
 				udelay(50);
 				rio_read_config_32(rdev,
-					RIO_DEV_PORT_N_MNT_RSP_CSR(rdev,
-								   portnum),
+					rdev->phys_efptr +
+						RIO_PORT_N_MNT_RSP_CSR(portnum),
 					&regval);
 				if (regval & RIO_PORT_N_MNT_RSP_RVAL)
 					goto exit_es;
@@ -332,7 +338,7 @@ static void tsi57x_remove(struct rio_dev *rdev)
 	spin_unlock(&rdev->rswitch->lock);
 }
 
-static const struct rio_device_id tsi57x_id_table[] = {
+static struct rio_device_id tsi57x_id_table[] = {
 	{RIO_DEVICE(RIO_DID_TSI572, RIO_VID_TUNDRA)},
 	{RIO_DEVICE(RIO_DID_TSI574, RIO_VID_TUNDRA)},
 	{RIO_DEVICE(RIO_DID_TSI577, RIO_VID_TUNDRA)},

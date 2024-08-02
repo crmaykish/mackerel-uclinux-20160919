@@ -18,7 +18,6 @@
 #include <linux/compat.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
-#include <linux/sched/task_stack.h>
 #include <linux/mm.h>
 #include <linux/errno.h>
 #include <linux/ptrace.h>
@@ -33,8 +32,7 @@
 #include <asm/pgtable.h>
 #include <asm/page.h>
 #include <asm/reg.h>
-#include <asm/syscall.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/bootinfo.h>
 
 /*
@@ -71,8 +69,8 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 		if (get_user(addrOthers, (u32 __user * __user *) (unsigned long) addr) != 0)
 			break;
 
-		copied = ptrace_access_vm(child, (u64)addrOthers, &tmp,
-				sizeof(tmp), FOLL_FORCE);
+		copied = access_process_vm(child, (u64)addrOthers, &tmp,
+				sizeof(tmp), 0);
 		if (copied != sizeof(tmp))
 			break;
 		ret = put_user(tmp, (u32 __user *) (unsigned long) data);
@@ -82,6 +80,7 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 	/* Read the word at location addr in the USER area. */
 	case PTRACE_PEEKUSR: {
 		struct pt_regs *regs;
+		union fpureg *fregs;
 		unsigned int tmp;
 
 		regs = task_pt_regs(child);
@@ -91,37 +90,25 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 		case 0 ... 31:
 			tmp = regs->regs[addr];
 			break;
-#ifdef CONFIG_MIPS_FP_SUPPORT
-		case FPR_BASE ... FPR_BASE + 31: {
-			union fpureg *fregs;
-
+		case FPR_BASE ... FPR_BASE + 31:
 			if (!tsk_used_math(child)) {
 				/* FP not yet used */
 				tmp = -1;
 				break;
 			}
 			fregs = get_fpu_regs(child);
-			if (test_tsk_thread_flag(child, TIF_32BIT_FPREGS)) {
+			if (test_thread_flag(TIF_32BIT_FPREGS)) {
 				/*
 				 * The odd registers are actually the high
 				 * order bits of the values stored in the even
-				 * registers.
+				 * registers - unless we're using r2k_switch.S.
 				 */
 				tmp = get_fpr32(&fregs[(addr & ~1) - FPR_BASE],
 						addr & 1);
 				break;
 			}
-			tmp = get_fpr64(&fregs[addr - FPR_BASE], 0);
+			tmp = get_fpr32(&fregs[addr - FPR_BASE], 0);
 			break;
-		}
-		case FPC_CSR:
-			tmp = child->thread.fpu.fcr31;
-			break;
-		case FPC_EIR:
-			/* implementation / version register */
-			tmp = boot_cpu_data.fpu_id;
-			break;
-#endif /* CONFIG_MIPS_FP_SUPPORT */
 		case PC:
 			tmp = regs->cp0_epc;
 			break;
@@ -137,6 +124,13 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 		case MMLO:
 			tmp = regs->lo;
 			break;
+		case FPC_CSR:
+			tmp = child->thread.fpu.fcr31;
+			break;
+		case FPC_EIR:
+			/* implementation / version register */
+			tmp = boot_cpu_data.fpu_id;
+			break;
 		case DSP_BASE ... DSP_BASE + 5: {
 			dspreg_t *dregs;
 
@@ -146,7 +140,7 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 				goto out;
 			}
 			dregs = __get_dsp_regs(child);
-			tmp = dregs[addr - DSP_BASE];
+			tmp = (unsigned long) (dregs[addr - DSP_BASE]);
 			break;
 		}
 		case DSP_CONTROL:
@@ -184,9 +178,8 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 		if (get_user(addrOthers, (u32 __user * __user *) (unsigned long) addr) != 0)
 			break;
 		ret = 0;
-		if (ptrace_access_vm(child, (u64)addrOthers, &data,
-					sizeof(data),
-					FOLL_FORCE | FOLL_WRITE) == sizeof(data))
+		if (access_process_vm(child, (u64)addrOthers, &data,
+					sizeof(data), 1) == sizeof(data))
 			break;
 		ret = -EIO;
 		break;
@@ -200,14 +193,7 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 		switch (addr) {
 		case 0 ... 31:
 			regs->regs[addr] = data;
-			/* System call number may have been changed */
-			if (addr == 2)
-				mips_syscall_update_nr(child, regs);
-			else if (addr == 4 &&
-				 mips_syscall_is_indirect(child, regs))
-				mips_syscall_update_nr(child, regs);
 			break;
-#ifdef CONFIG_MIPS_FP_SUPPORT
 		case FPR_BASE ... FPR_BASE + 31: {
 			union fpureg *fregs = get_fpu_regs(child);
 
@@ -217,11 +203,11 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 				       sizeof(child->thread.fpu));
 				child->thread.fpu.fcr31 = 0;
 			}
-			if (test_tsk_thread_flag(child, TIF_32BIT_FPREGS)) {
+			if (test_thread_flag(TIF_32BIT_FPREGS)) {
 				/*
 				 * The odd registers are actually the high
 				 * order bits of the values stored in the even
-				 * registers.
+				 * registers - unless we're using r2k_switch.S.
 				 */
 				set_fpr32(&fregs[(addr & ~1) - FPR_BASE],
 					  addr & 1, data);
@@ -230,10 +216,6 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 			set_fpr64(&fregs[addr - FPR_BASE], 0, data);
 			break;
 		}
-		case FPC_CSR:
-			child->thread.fpu.fcr31 = data;
-			break;
-#endif /* CONFIG_MIPS_FP_SUPPORT */
 		case PC:
 			regs->cp0_epc = data;
 			break;
@@ -242,6 +224,9 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 			break;
 		case MMLO:
 			regs->lo = data;
+			break;
+		case FPC_CSR:
+			child->thread.fpu.fcr31 = data;
 			break;
 		case DSP_BASE ... DSP_BASE + 5: {
 			dspreg_t *dregs;
@@ -280,7 +265,6 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 				(struct user_pt_regs __user *) (__u64) data);
 		break;
 
-#ifdef CONFIG_MIPS_FP_SUPPORT
 	case PTRACE_GETFPREGS:
 		ret = ptrace_getfpregs(child, (__u32 __user *) (__u64) data);
 		break;
@@ -288,7 +272,7 @@ long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
 	case PTRACE_SETFPREGS:
 		ret = ptrace_setfpregs(child, (__u32 __user *) (__u64) data);
 		break;
-#endif
+
 	case PTRACE_GET_THREAD_AREA:
 		ret = put_user(task_thread_info(child)->tp_value,
 				(unsigned int __user *) (unsigned long) data);

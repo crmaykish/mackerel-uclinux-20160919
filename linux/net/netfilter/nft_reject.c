@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2008-2009 Patrick McHardy <kaber@trash.net>
  * Copyright (c) 2013 Eric Leblond <eric@regit.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * Development of this code funded by Astaro AG (http://www.astaro.com/)
  */
@@ -22,17 +25,6 @@ const struct nla_policy nft_reject_policy[NFTA_REJECT_MAX + 1] = {
 	[NFTA_REJECT_ICMP_CODE]		= { .type = NLA_U8 },
 };
 EXPORT_SYMBOL_GPL(nft_reject_policy);
-
-int nft_reject_validate(const struct nft_ctx *ctx,
-			const struct nft_expr *expr,
-			const struct nft_data **data)
-{
-	return nft_chain_validate_hooks(ctx->chain,
-					(1 << NF_INET_LOCAL_IN) |
-					(1 << NF_INET_FORWARD) |
-					(1 << NF_INET_LOCAL_OUT));
-}
-EXPORT_SYMBOL_GPL(nft_reject_validate);
 
 int nft_reject_init(const struct nft_ctx *ctx,
 		    const struct nft_expr *expr,
@@ -91,8 +83,7 @@ static u8 icmp_code_v4[NFT_REJECT_ICMPX_MAX + 1] = {
 
 int nft_reject_icmp_code(u8 code)
 {
-	if (WARN_ON_ONCE(code > NFT_REJECT_ICMPX_MAX))
-		return ICMP_NET_UNREACH;
+	BUG_ON(code > NFT_REJECT_ICMPX_MAX);
 
 	return icmp_code_v4[code];
 }
@@ -109,8 +100,7 @@ static u8 icmp_code_v6[NFT_REJECT_ICMPX_MAX + 1] = {
 
 int nft_reject_icmpv6_code(u8 code)
 {
-	if (WARN_ON_ONCE(code > NFT_REJECT_ICMPX_MAX))
-		return ICMPV6_NOROUTE;
+	BUG_ON(code > NFT_REJECT_ICMPX_MAX);
 
 	return icmp_code_v6[code];
 }

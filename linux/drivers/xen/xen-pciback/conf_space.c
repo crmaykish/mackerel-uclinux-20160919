@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * PCI Backend - Functions for creating a virtual configuration space for
  *               exported PCI Devices.
@@ -11,7 +10,7 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/moduleparam.h>
+#include <linux/module.h>
 #include <linux/pci.h>
 #include "pciback.h"
 #include "conf_space.h"
@@ -149,7 +148,7 @@ int xen_pcibk_config_read(struct pci_dev *dev, int offset, int size,
 	struct xen_pcibk_dev_data *dev_data = pci_get_drvdata(dev);
 	const struct config_field_entry *cfg_entry;
 	const struct config_field *field;
-	int field_start, field_end;
+	int req_start, req_end, field_start, field_end;
 	/* if read fails for any reason, return 0
 	 * (as if device didn't respond) */
 	u32 value = 0, tmp_val;
@@ -179,10 +178,13 @@ int xen_pcibk_config_read(struct pci_dev *dev, int offset, int size,
 	list_for_each_entry(cfg_entry, &dev_data->config_fields, list) {
 		field = cfg_entry->field;
 
+		req_start = offset;
+		req_end = offset + size;
 		field_start = OFFSET(cfg_entry);
 		field_end = OFFSET(cfg_entry) + field->size;
 
-		if (offset + size > field_start && field_end > offset) {
+		if ((req_start >= field_start && req_start < field_end)
+		    || (req_end > field_start && req_end <= field_end)) {
 			err = conf_space_read(dev, cfg_entry, field_start,
 					      &tmp_val);
 			if (err)
@@ -190,7 +192,7 @@ int xen_pcibk_config_read(struct pci_dev *dev, int offset, int size,
 
 			value = merge_value(value, tmp_val,
 					    get_mask(field->size),
-					    field_start - offset);
+					    field_start - req_start);
 		}
 	}
 
@@ -210,7 +212,7 @@ int xen_pcibk_config_write(struct pci_dev *dev, int offset, int size, u32 value)
 	const struct config_field_entry *cfg_entry;
 	const struct config_field *field;
 	u32 tmp_val;
-	int field_start, field_end;
+	int req_start, req_end, field_start, field_end;
 
 	if (unlikely(verbose_request))
 		printk(KERN_DEBUG
@@ -223,17 +225,22 @@ int xen_pcibk_config_write(struct pci_dev *dev, int offset, int size, u32 value)
 	list_for_each_entry(cfg_entry, &dev_data->config_fields, list) {
 		field = cfg_entry->field;
 
+		req_start = offset;
+		req_end = offset + size;
 		field_start = OFFSET(cfg_entry);
 		field_end = OFFSET(cfg_entry) + field->size;
 
-		if (offset + size > field_start && field_end > offset) {
-			err = conf_space_read(dev, cfg_entry, field_start,
-					      &tmp_val);
+		if ((req_start >= field_start && req_start < field_end)
+		    || (req_end > field_start && req_end <= field_end)) {
+			tmp_val = 0;
+
+			err = xen_pcibk_config_read(dev, field_start,
+						  field->size, &tmp_val);
 			if (err)
 				break;
 
 			tmp_val = merge_value(tmp_val, value, get_mask(size),
-					      offset - field_start);
+					      req_start - field_start);
 
 			err = conf_space_write(dev, cfg_entry, field_start,
 					       tmp_val);

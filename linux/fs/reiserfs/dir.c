@@ -20,7 +20,7 @@ static int reiserfs_dir_fsync(struct file *filp, loff_t start, loff_t end,
 const struct file_operations reiserfs_dir_operations = {
 	.llseek = generic_file_llseek,
 	.read = generic_read_dir,
-	.iterate_shared = reiserfs_readdir,
+	.iterate = reiserfs_readdir,
 	.fsync = reiserfs_dir_fsync,
 	.unlocked_ioctl = reiserfs_ioctl,
 #ifdef CONFIG_COMPAT
@@ -34,15 +34,15 @@ static int reiserfs_dir_fsync(struct file *filp, loff_t start, loff_t end,
 	struct inode *inode = filp->f_mapping->host;
 	int err;
 
-	err = file_write_and_wait_range(filp, start, end);
+	err = filemap_write_and_wait_range(inode->i_mapping, start, end);
 	if (err)
 		return err;
 
-	inode_lock(inode);
+	mutex_lock(&inode->i_mutex);
 	reiserfs_write_lock(inode->i_sb);
 	err = reiserfs_commit_for_inode(inode);
 	reiserfs_write_unlock(inode->i_sb);
-	inode_unlock(inode);
+	mutex_unlock(&inode->i_mutex);
 	if (err < 0)
 		return err;
 	return 0;

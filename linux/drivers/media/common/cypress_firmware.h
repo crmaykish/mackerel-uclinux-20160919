@@ -1,6 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2004-6 Patrick Boettcher (patrick.boettcher@posteo.de)
+ * Copyright (C) 2004-6 Patrick Boettcher (patrick.boettcher@desy.de)
  * see dvb-usb-init.c for copyright information.
  *
  * This file contains functions for downloading the firmware to Cypress FX 1

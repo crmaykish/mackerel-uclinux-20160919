@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * This header provides constants for binding nvidia,tegra30-car.
  *
@@ -157,7 +156,7 @@
 /* 133 */
 /* 134 */
 /* 135 */
-#define TEGRA30_CLK_CEC 136
+/* 136 */
 /* 137 */
 /* 138 */
 /* 139 */

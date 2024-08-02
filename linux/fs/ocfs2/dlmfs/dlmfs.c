@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* -*- mode: c; c-basic-offset: 8; -*-
  * vim: noexpandtab sw=8 ts=8 sts=0:
  *
@@ -10,6 +9,21 @@
  * which was a template for the fs side of this module.
  *
  * Copyright (C) 2003, 2004 Oracle.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public
+ * License along with this program; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 021110-1307, USA.
  */
 
 /* Simple VFS hooks based on: */
@@ -31,13 +45,13 @@
 #include <linux/backing-dev.h>
 #include <linux/poll.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
-#include "../stackglue.h"
+#include "stackglue.h"
 #include "userdlm.h"
 
 #define MLOG_MASK_PREFIX ML_DLMFS
-#include "../cluster/masklog.h"
+#include "cluster/masklog.h"
 
 
 static const struct super_operations dlmfs_ops;
@@ -57,7 +71,7 @@ struct workqueue_struct *user_dlm_worker;
  * Over time, dlmfs has added some features that were not part of the
  * initial ABI.  Unfortunately, some of these features are not detectable
  * via standard usage.  For example, Linux's default poll always returns
- * EPOLLIN, so there is no way for a caller of poll(2) to know when dlmfs
+ * POLLIN, so there is no way for a caller of poll(2) to know when dlmfs
  * added poll support.  Instead, we provide this list of new capabilities.
  *
  * Capabilities is a read-only attribute.  We do it as a module parameter
@@ -69,18 +83,18 @@ struct workqueue_struct *user_dlm_worker;
  * interaction.
  *
  * Capabilities:
- * - bast	: EPOLLIN against the file descriptor of a held lock
+ * - bast	: POLLIN against the file descriptor of a held lock
  *		  signifies a bast fired on the lock.
  */
 #define DLMFS_CAPABILITIES "bast stackglue"
 static int param_set_dlmfs_capabilities(const char *val,
-					const struct kernel_param *kp)
+					struct kernel_param *kp)
 {
 	printk(KERN_ERR "%s: readonly parameter\n", kp->name);
 	return -EINVAL;
 }
 static int param_get_dlmfs_capabilities(char *buffer,
-					const struct kernel_param *kp)
+					struct kernel_param *kp)
 {
 	return strlcpy(buffer, DLMFS_CAPABILITIES,
 		       strlen(DLMFS_CAPABILITIES) + 1);
@@ -165,7 +179,7 @@ bail:
 static int dlmfs_file_release(struct inode *inode,
 			      struct file *file)
 {
-	int level;
+	int level, status;
 	struct dlmfs_inode_private *ip = DLMFS_I(inode);
 	struct dlmfs_filp_private *fp = file->private_data;
 
@@ -174,6 +188,7 @@ static int dlmfs_file_release(struct inode *inode,
 
 	mlog(0, "close called on inode %lu\n", inode->i_ino);
 
+	status = 0;
 	if (fp) {
 		level = fp->fp_lock_level;
 		if (level != DLM_LOCK_IV)
@@ -196,7 +211,7 @@ static int dlmfs_file_setattr(struct dentry *dentry, struct iattr *attr)
 	struct inode *inode = d_inode(dentry);
 
 	attr->ia_valid &= ~ATTR_SIZE;
-	error = setattr_prepare(dentry, attr);
+	error = inode_change_ok(inode, attr);
 	if (error)
 		return error;
 
@@ -205,9 +220,9 @@ static int dlmfs_file_setattr(struct dentry *dentry, struct iattr *attr)
 	return 0;
 }
 
-static __poll_t dlmfs_file_poll(struct file *file, poll_table *wait)
+static unsigned int dlmfs_file_poll(struct file *file, poll_table *wait)
 {
-	__poll_t event = 0;
+	int event = 0;
 	struct inode *inode = file_inode(file);
 	struct dlmfs_inode_private *ip = DLMFS_I(inode);
 
@@ -215,7 +230,7 @@ static __poll_t dlmfs_file_poll(struct file *file, poll_table *wait)
 
 	spin_lock(&ip->ip_lockres.l_lock);
 	if (ip->ip_lockres.l_flags & USER_LOCK_BLOCKED)
-		event = EPOLLIN | EPOLLRDNORM;
+		event = POLLIN | POLLRDNORM;
 	spin_unlock(&ip->ip_lockres.l_lock);
 
 	return event;
@@ -240,7 +255,7 @@ static ssize_t dlmfs_file_read(struct file *filp,
 	if (!count)
 		return 0;
 
-	if (!access_ok(buf, count))
+	if (!access_ok(VERIFY_WRITE, buf, count))
 		return -EFAULT;
 
 	/* don't read past the lvb */
@@ -275,6 +290,7 @@ static ssize_t dlmfs_file_write(struct file *filp,
 				loff_t *ppos)
 {
 	int bytes_left;
+	ssize_t writelen;
 	char *lvb_buf;
 	struct inode *inode = file_inode(filp);
 
@@ -284,30 +300,32 @@ static ssize_t dlmfs_file_write(struct file *filp,
 	if (*ppos >= i_size_read(inode))
 		return -ENOSPC;
 
-	/* don't write past the lvb */
-	if (count > i_size_read(inode) - *ppos)
-		count = i_size_read(inode) - *ppos;
-
 	if (!count)
 		return 0;
 
-	if (!access_ok(buf, count))
+	if (!access_ok(VERIFY_READ, buf, count))
 		return -EFAULT;
 
-	lvb_buf = kmalloc(count, GFP_NOFS);
+	/* don't write past the lvb */
+	if ((count + *ppos) > i_size_read(inode))
+		writelen = i_size_read(inode) - *ppos;
+	else
+		writelen = count - *ppos;
+
+	lvb_buf = kmalloc(writelen, GFP_NOFS);
 	if (!lvb_buf)
 		return -ENOMEM;
 
-	bytes_left = copy_from_user(lvb_buf, buf, count);
-	count -= bytes_left;
-	if (count)
-		user_dlm_write_lvb(inode, lvb_buf, count);
+	bytes_left = copy_from_user(lvb_buf, buf, writelen);
+	writelen -= bytes_left;
+	if (writelen)
+		user_dlm_write_lvb(inode, lvb_buf, writelen);
 
 	kfree(lvb_buf);
 
-	*ppos = *ppos + count;
-	mlog(0, "wrote %zu bytes\n", count);
-	return count;
+	*ppos = *ppos + writelen;
+	mlog(0, "wrote %zd bytes\n", writelen);
+	return writelen;
 }
 
 static void dlmfs_init_once(void *foo)
@@ -332,9 +350,15 @@ static struct inode *dlmfs_alloc_inode(struct super_block *sb)
 	return &ip->ip_vfs_inode;
 }
 
-static void dlmfs_free_inode(struct inode *inode)
+static void dlmfs_i_callback(struct rcu_head *head)
 {
+	struct inode *inode = container_of(head, struct inode, i_rcu);
 	kmem_cache_free(dlmfs_inode_cache, DLMFS_I(inode));
+}
+
+static void dlmfs_destroy_inode(struct inode *inode)
+{
+	call_rcu(&inode->i_rcu, dlmfs_i_callback);
 }
 
 static void dlmfs_evict_inode(struct inode *inode)
@@ -374,7 +398,7 @@ static struct inode *dlmfs_get_root_inode(struct super_block *sb)
 	if (inode) {
 		inode->i_ino = get_next_ino();
 		inode_init_owner(inode, NULL, mode);
-		inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
+		inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 		inc_nlink(inode);
 
 		inode->i_fop = &simple_dir_operations;
@@ -397,7 +421,7 @@ static struct inode *dlmfs_get_inode(struct inode *parent,
 
 	inode->i_ino = get_next_ino();
 	inode_init_owner(inode, parent, mode);
-	inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
+	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 
 	ip = DLMFS_I(inode);
 	ip->ip_conn = DLMFS_I(parent)->ip_conn;
@@ -445,7 +469,7 @@ static int dlmfs_mkdir(struct inode * dir,
 {
 	int status;
 	struct inode *inode = NULL;
-	const struct qstr *domain = &dentry->d_name;
+	struct qstr *domain = &dentry->d_name;
 	struct dlmfs_inode_private *ip;
 	struct ocfs2_cluster_connection *conn;
 
@@ -494,7 +518,7 @@ static int dlmfs_create(struct inode *dir,
 {
 	int status = 0;
 	struct inode *inode;
-	const struct qstr *name = &dentry->d_name;
+	struct qstr *name = &dentry->d_name;
 
 	mlog(0, "create %.*s\n", name->len, name->name);
 
@@ -547,8 +571,8 @@ static int dlmfs_fill_super(struct super_block * sb,
 			    int silent)
 {
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
-	sb->s_blocksize = PAGE_SIZE;
-	sb->s_blocksize_bits = PAGE_SHIFT;
+	sb->s_blocksize = PAGE_CACHE_SIZE;
+	sb->s_blocksize_bits = PAGE_CACHE_SHIFT;
 	sb->s_magic = DLMFS_MAGIC;
 	sb->s_op = &dlmfs_ops;
 	sb->s_root = d_make_root(dlmfs_get_root_inode(sb));
@@ -582,7 +606,7 @@ static const struct inode_operations dlmfs_root_inode_operations = {
 static const struct super_operations dlmfs_ops = {
 	.statfs		= simple_statfs,
 	.alloc_inode	= dlmfs_alloc_inode,
-	.free_inode	= dlmfs_free_inode,
+	.destroy_inode	= dlmfs_destroy_inode,
 	.evict_inode	= dlmfs_evict_inode,
 	.drop_inode	= generic_delete_inode,
 };
@@ -614,7 +638,7 @@ static int __init init_dlmfs_fs(void)
 	dlmfs_inode_cache = kmem_cache_create("dlmfs_inode_cache",
 				sizeof(struct dlmfs_inode_private),
 				0, (SLAB_HWCACHE_ALIGN|SLAB_RECLAIM_ACCOUNT|
-					SLAB_MEM_SPREAD|SLAB_ACCOUNT),
+					SLAB_MEM_SPREAD),
 				dlmfs_init_once);
 	if (!dlmfs_inode_cache) {
 		status = -ENOMEM;
@@ -622,7 +646,7 @@ static int __init init_dlmfs_fs(void)
 	}
 	cleanup_inode = 1;
 
-	user_dlm_worker = alloc_workqueue("user_dlm", WQ_MEM_RECLAIM, 0);
+	user_dlm_worker = create_singlethread_workqueue("user_dlm");
 	if (!user_dlm_worker) {
 		status = -ENOMEM;
 		goto bail;
@@ -646,6 +670,7 @@ static void __exit exit_dlmfs_fs(void)
 {
 	unregister_filesystem(&dlmfs_fs_type);
 
+	flush_workqueue(user_dlm_worker);
 	destroy_workqueue(user_dlm_worker);
 
 	/*

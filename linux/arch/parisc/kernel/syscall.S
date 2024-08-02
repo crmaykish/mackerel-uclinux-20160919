@@ -2,7 +2,7 @@
  * Linux/PA-RISC Project (http://www.parisc-linux.org/)
  * 
  * System call entry code / Linux gateway page
- * Copyright (c) Matthew Wilcox 1999 <willy@infradead.org>
+ * Copyright (c) Matthew Wilcox 1999 <willy@bofh.ai>
  * Licensed under the GNU GPL.
  * thanks to Philipp Rumpf, Mike Shaver and various others
  * sorry about the wall, puffin..
@@ -48,7 +48,7 @@ registers).
 	 */
 #define KILL_INSN	break	0,0
 
-	.level          PA_ASM_LEVEL
+	.level          LEVEL
 
 	.text
 
@@ -100,16 +100,22 @@ set_thread_pointer:
 	.endr
 
 /* This address must remain fixed at 0x100 for glibc's syscalls to work */
-	.align LINUX_GATEWAY_ADDR
+	.align 256
 linux_gateway_entry:
 	gate	.+8, %r0			/* become privileged */
 	mtsp	%r0,%sr4			/* get kernel space into sr4 */
 	mtsp	%r0,%sr5			/* get kernel space into sr5 */
 	mtsp	%r0,%sr6			/* get kernel space into sr6 */
+	mfsp    %sr7,%r1                        /* save user sr7 */
+	mtsp    %r1,%sr3                        /* and store it in sr3 */
 
 #ifdef CONFIG_64BIT
-	/* Store W bit on entry to the syscall in case it's a wide userland
-	 * process. */
+	/* for now we can *always* set the W bit on entry to the syscall
+	 * since we don't support wide userland processes.  We could
+	 * also save the current SM other than in r0 and restore it on
+	 * exit from the syscall, and also use that value to know
+	 * whether to do narrow or wide syscalls. -PB
+	 */
 	ssm	PSW_SM_W, %r1
 	extrd,u	%r1,PSW_W_BIT,1,%r1
 	/* sp must be aligned on 4, so deposit the W bit setting into
@@ -127,14 +133,6 @@ linux_gateway_entry:
 	depdi	0, 31, 32, %r21
 1:	
 #endif
-
-	/* We use a rsm/ssm pair to prevent sr3 from being clobbered
-	 * by external interrupts.
-	 */
-	mfsp    %sr7,%r1                        /* save user sr7 */
-	rsm	PSW_SM_I, %r0			/* disable interrupts */
-	mtsp    %r1,%sr3                        /* and store it in sr3 */
-
 	mfctl   %cr30,%r1
 	xor     %r1,%r30,%r30                   /* ye olde xor trick */
 	xor     %r1,%r30,%r1
@@ -149,7 +147,6 @@ linux_gateway_entry:
 	 */
 
 	mtsp	%r0,%sr7			/* get kernel space into sr7 */
-	ssm	PSW_SM_I, %r0			/* enable interrupts */
 	STREGM	%r1,FRAME_SIZE(%r30)		/* save r1 (usp) here for now */
 	mfctl	%cr30,%r1			/* get task ptr in %r1 */
 	LDREG	TI_TASK(%r1),%r1
@@ -223,7 +220,8 @@ linux_gateway_entry:
 	or,=	%r2,%r2,%r2
 	ldo	R%sys_call_table64(%r1), %r19
 #else
-	load32	sys_call_table, %r19
+	ldil	L%sys_call_table, %r1
+	ldo     R%sys_call_table(%r1), %r19
 #endif	
 	comiclr,>>	__NR_Linux_syscalls, %r20, %r0
 	b,n	.Lsyscall_nosys
@@ -326,10 +324,11 @@ tracesys_next:
 	 *  task->thread.regs.gr[20] above.
 	 */
 	copy	%ret0,%r20
+	ldil	L%sys_call_table,%r1
+	ldo     R%sys_call_table(%r1), %r19
 
 	ldo     -THREAD_SZ_ALGN-FRAME_SIZE(%r30),%r1      /* get task ptr */
 	LDREG	TI_TASK(%r1), %r1
-	LDREG   TASK_PT_GR28(%r1), %r28		/* Restore return value */
 	LDREG   TASK_PT_GR26(%r1), %r26		/* Restore the users args */
 	LDREG   TASK_PT_GR25(%r1), %r25
 	LDREG   TASK_PT_GR24(%r1), %r24
@@ -343,26 +342,8 @@ tracesys_next:
 	stw     %r21, -56(%r30)                 /* 6th argument */
 #endif
 
-	cmpib,COND(=),n -1,%r20,tracesys_exit /* seccomp may have returned -1 */
-	comiclr,>>	__NR_Linux_syscalls, %r20, %r0
-	b,n	.Ltracesys_nosys
-
-	/* Note!  We cannot use the syscall table that is mapped
-	nearby since the gateway page is mapped execute-only. */
-
-#ifdef CONFIG_64BIT
-	LDREG	TASK_PT_GR30(%r1), %r19		/* get users sp back */
-	extrd,u	%r19,63,1,%r2			/* W hidden in bottom bit */
-
-	ldil	L%sys_call_table, %r1
-	or,=	%r2,%r2,%r2
-	addil	L%(sys_call_table64-sys_call_table), %r1
-	ldo	R%sys_call_table(%r1), %r19
-	or,=	%r2,%r2,%r2
-	ldo	R%sys_call_table64(%r1), %r19
-#else
-	load32	sys_call_table, %r19
-#endif
+	comiclr,>>=	__NR_Linux_syscalls, %r20, %r0
+	b,n	.Lsyscall_nosys
 
 	LDREGX  %r20(%r19), %r19
 
@@ -377,9 +358,6 @@ tracesys_next:
 	ldil	L%tracesys_exit,%r2
 	be      0(%sr7,%r19)
 	ldo	R%tracesys_exit(%r2),%r2
-
-.Ltracesys_nosys:
-	ldo	-ENOSYS(%r0),%r28		/* set errno */
 
 	/* Do *not* call this function on the gateway page, because it
 	makes a direct call to syscall_trace. */
@@ -474,19 +452,27 @@ tracesys_sigexit:
 lws_start:
 
 #ifdef CONFIG_64BIT
+	/* FIXME: If we are a 64-bit kernel just
+	 *        turn this on unconditionally.
+	 */
 	ssm	PSW_SM_W, %r1
 	extrd,u	%r1,PSW_W_BIT,1,%r1
 	/* sp must be aligned on 4, so deposit the W bit setting into
 	 * the bottom of sp temporarily */
-	or,od	%r1,%r30,%r30
+	or,ev	%r1,%r30,%r30
 
-	/* Clip LWS number to a 32-bit value for 32-bit processes */
+	/* Clip LWS number to a 32-bit value always */
 	depdi	0, 31, 32, %r20
 #endif	
 
         /* Is the lws entry number valid? */
 	comiclr,>>	__NR_lws_entries, %r20, %r0
 	b,n	lws_exit_nosys
+
+	/* WARNING: Trashing sr2 and sr3 */
+	mfsp	%sr7,%r1			/* get userspace into sr3 */
+	mtsp	%r1,%sr3
+	mtsp	%r0,%sr2			/* get kernel space into sr2 */
 
 	/* Load table start */
 	ldil	L%lws_table, %r1
@@ -636,9 +622,9 @@ cas_action:
 	stw	%r1, 4(%sr2,%r20)
 #endif
 	/* The load and store could fail */
-1:	ldw	0(%r26), %r28
+1:	ldw,ma	0(%sr3,%r26), %r28
 	sub,<>	%r28, %r25, %r0
-2:	stw	%r24, 0(%r26)
+2:	stw,ma	%r24, 0(%sr3,%r26)
 	/* Free lock */
 	stw,ma	%r20, 0(%sr2,%r20)
 #if ENABLE_LWS_DEBUG
@@ -654,7 +640,7 @@ cas_action:
 3:		
 	/* Error occurred on load or store */
 	/* Free lock */
-	stw,ma	%r20, 0(%sr2,%r20)
+	stw	%r20, 0(%sr2,%r20)
 #if ENABLE_LWS_DEBUG
 	stw	%r0, 4(%sr2,%r20)
 #endif
@@ -697,15 +683,15 @@ cas_action:
 	/* ELF32 Process entry path */
 lws_compare_and_swap_2:
 #ifdef CONFIG_64BIT
-	/* Clip the input registers. We don't need to clip %r23 as we
-	   only use it for word operations */
+	/* Clip the input registers */
 	depdi	0, 31, 32, %r26
 	depdi	0, 31, 32, %r25
 	depdi	0, 31, 32, %r24
+	depdi	0, 31, 32, %r23
 #endif
 
 	/* Check the validity of the size pointer */
-	subi,>>= 3, %r23, %r0
+	subi,>>= 4, %r23, %r0
 	b,n	lws_exit_nosys
 
 	/* Jump to the functions which will load the old and new values into
@@ -715,9 +701,9 @@ lws_compare_and_swap_2:
 	nop
 
 	/* 8bit load */
-4:	ldb	0(%r25), %r25
+4:	ldb	0(%sr3,%r25), %r25
 	b	cas2_lock_start
-5:	ldb	0(%r24), %r24
+5:	ldb	0(%sr3,%r24), %r24
 	nop
 	nop
 	nop
@@ -725,9 +711,9 @@ lws_compare_and_swap_2:
 	nop
 
 	/* 16bit load */
-6:	ldh	0(%r25), %r25
+6:	ldh	0(%sr3,%r25), %r25
 	b	cas2_lock_start
-7:	ldh	0(%r24), %r24
+7:	ldh	0(%sr3,%r24), %r24
 	nop
 	nop
 	nop
@@ -735,9 +721,9 @@ lws_compare_and_swap_2:
 	nop
 
 	/* 32bit load */
-8:	ldw	0(%r25), %r25
+8:	ldw	0(%sr3,%r25), %r25
 	b	cas2_lock_start
-9:	ldw	0(%r24), %r24
+9:	ldw	0(%sr3,%r24), %r24
 	nop
 	nop
 	nop
@@ -746,14 +732,14 @@ lws_compare_and_swap_2:
 
 	/* 64bit load */
 #ifdef CONFIG_64BIT
-10:	ldd	0(%r25), %r25
-11:	ldd	0(%r24), %r24
+10:	ldd	0(%sr3,%r25), %r25
+11:	ldd	0(%sr3,%r24), %r24
 #else
-	/* Load old value into r22/r23 - high/low */
-10:	ldw	0(%r25), %r22
-11:	ldw	4(%r25), %r23
+	/* Load new value into r22/r23 - high/low */
+10:	ldw	0(%sr3,%r25), %r22
+11:	ldw	4(%sr3,%r25), %r23
 	/* Load new value into fr4 for atomic store later */
-12:	flddx	0(%r24), %fr4
+12:	flddx	0(%sr3,%r24), %fr4
 #endif
 
 cas2_lock_start:
@@ -803,30 +789,30 @@ cas2_action:
 	ldo	1(%r0),%r28
 
 	/* 8bit CAS */
-13:	ldb	0(%r26), %r29
+13:	ldb,ma	0(%sr3,%r26), %r29
 	sub,=	%r29, %r25, %r0
 	b,n	cas2_end
-14:	stb	%r24, 0(%r26)
+14:	stb,ma	%r24, 0(%sr3,%r26)
 	b	cas2_end
 	copy	%r0, %r28
 	nop
 	nop
 
 	/* 16bit CAS */
-15:	ldh	0(%r26), %r29
+15:	ldh,ma	0(%sr3,%r26), %r29
 	sub,=	%r29, %r25, %r0
 	b,n	cas2_end
-16:	sth	%r24, 0(%r26)
+16:	sth,ma	%r24, 0(%sr3,%r26)
 	b	cas2_end
 	copy	%r0, %r28
 	nop
 	nop
 
 	/* 32bit CAS */
-17:	ldw	0(%r26), %r29
+17:	ldw,ma	0(%sr3,%r26), %r29
 	sub,=	%r29, %r25, %r0
 	b,n	cas2_end
-18:	stw	%r24, 0(%r26)
+18:	stw,ma	%r24, 0(%sr3,%r26)
 	b	cas2_end
 	copy	%r0, %r28
 	nop
@@ -834,22 +820,22 @@ cas2_action:
 
 	/* 64bit CAS */
 #ifdef CONFIG_64BIT
-19:	ldd	0(%r26), %r29
+19:	ldd,ma	0(%sr3,%r26), %r29
 	sub,*=	%r29, %r25, %r0
 	b,n	cas2_end
-20:	std	%r24, 0(%r26)
+20:	std,ma	%r24, 0(%sr3,%r26)
 	copy	%r0, %r28
 #else
 	/* Compare first word */
-19:	ldw	0(%r26), %r29
+19:	ldw,ma	0(%sr3,%r26), %r29
 	sub,=	%r29, %r22, %r0
 	b,n	cas2_end
 	/* Compare second word */
-20:	ldw	4(%r26), %r29
+20:	ldw,ma	4(%sr3,%r26), %r29
 	sub,=	%r29, %r23, %r0
 	b,n	cas2_end
 	/* Perform the store */
-21:	fstdx	%fr4, 0(%r26)
+21:	fstdx	%fr4, 0(%sr3,%r26)
 	copy	%r0, %r28
 #endif
 
@@ -865,7 +851,7 @@ cas2_end:
 22:
 	/* Error occurred on load or store */
 	/* Free lock */
-	stw,ma	%r20, 0(%sr2,%r20)
+	stw	%r20, 0(%sr2,%r20)
 	ssm	PSW_SM_I, %r0
 	ldo	1(%r0),%r28
 	b	lws_exit
@@ -919,24 +905,18 @@ ENTRY(lws_table)
 END(lws_table)
 	/* End of lws table */
 
-#define __SYSCALL(nr, entry, nargs) ASM_ULONG_INSN entry
 	.align 8
 ENTRY(sys_call_table)
-	.export sys_call_table,data
-#ifdef CONFIG_64BIT
-#include <asm/syscall_table_c32.h>   /* Compat syscalls */
-#else
-#include <asm/syscall_table_32.h>    /* 32-bit native syscalls */
-#endif
+#include "syscall_table.S"
 END(sys_call_table)
 
 #ifdef CONFIG_64BIT
 	.align 8
 ENTRY(sys_call_table64)
-#include <asm/syscall_table_64.h>    /* 64-bit native syscalls */
+#define SYSCALL_TABLE_64BIT
+#include "syscall_table.S"
 END(sys_call_table64)
 #endif
-#undef __SYSCALL
 
 	/*
 		All light-weight-syscall atomic operations 

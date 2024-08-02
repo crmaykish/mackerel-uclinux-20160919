@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /dts-v1/;
 #include "bcm7445.dtsi"
 
@@ -6,7 +5,7 @@
 	model = "Broadcom STB (bcm7445), SVMB reference board";
 	compatible = "brcm,bcm7445", "brcm,brcmstb";
 
-	memory@0 {
+	memory {
 		device_type = "memory";
 		reg = <0x00 0x00000000 0x00 0x40000000>,
 		      <0x00 0x40000000 0x00 0x40000000>,
@@ -14,10 +13,10 @@
 	};
 };
 
-&nand_controller {
+&nand {
 	status = "okay";
 
-	nand@1 {
+	nandcs@1 {
 		compatible = "brcm,nandcs";
 		reg = <1>;
 		nand-ecc-step-size = <512>;

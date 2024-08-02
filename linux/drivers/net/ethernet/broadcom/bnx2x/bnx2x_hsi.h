@@ -1140,11 +1140,6 @@ struct shm_dev_info {				/* size */
 
 };
 
-struct extended_dev_info_shared_cfg {
-	u32 reserved[18];
-	u32 mbi_version;
-	u32 mbi_date;
-};
 
 #if !defined(__LITTLE_ENDIAN) && !defined(__BIG_ENDIAN)
 	#error "Missing either LITTLE_ENDIAN or BIG_ENDIAN definition."
@@ -1829,22 +1824,17 @@ struct dcbx_app_priority_entry {
 	u8  pri_bitmap;
 	u8  appBitfield;
 	#define DCBX_APP_ENTRY_VALID         0x01
-	#define DCBX_APP_ENTRY_SF_MASK       0xF0
+	#define DCBX_APP_ENTRY_SF_MASK       0x30
 	#define DCBX_APP_ENTRY_SF_SHIFT      4
 	#define DCBX_APP_SF_ETH_TYPE         0x10
 	#define DCBX_APP_SF_PORT             0x20
-	#define DCBX_APP_SF_UDP              0x40
-	#define DCBX_APP_SF_DEFAULT          0x80
 #elif defined(__LITTLE_ENDIAN)
 	u8 appBitfield;
 	#define DCBX_APP_ENTRY_VALID         0x01
-	#define DCBX_APP_ENTRY_SF_MASK       0xF0
+	#define DCBX_APP_ENTRY_SF_MASK       0x30
 	#define DCBX_APP_ENTRY_SF_SHIFT      4
-	#define DCBX_APP_ENTRY_VALID         0x01
 	#define DCBX_APP_SF_ETH_TYPE         0x10
 	#define DCBX_APP_SF_PORT             0x20
-	#define DCBX_APP_SF_UDP              0x40
-	#define DCBX_APP_SF_DEFAULT          0x80
 	u8  pri_bitmap;
 	u16  app_id;
 #endif
@@ -3023,8 +3013,8 @@ struct afex_stats {
 };
 
 #define BCM_5710_FW_MAJOR_VERSION			7
-#define BCM_5710_FW_MINOR_VERSION			13
-#define BCM_5710_FW_REVISION_VERSION		11
+#define BCM_5710_FW_MINOR_VERSION			12
+#define BCM_5710_FW_REVISION_VERSION		30
 #define BCM_5710_FW_ENGINEERING_VERSION		0
 #define BCM_5710_FW_COMPILE_FLAGS			1
 
@@ -3593,7 +3583,7 @@ enum classify_rule {
 	CLASSIFY_RULE_OPCODE_MAC,
 	CLASSIFY_RULE_OPCODE_VLAN,
 	CLASSIFY_RULE_OPCODE_PAIR,
-	CLASSIFY_RULE_OPCODE_IMAC_VNI,
+	CLASSIFY_RULE_OPCODE_VXLAN,
 	MAX_CLASSIFY_RULE
 };
 
@@ -3639,10 +3629,8 @@ struct client_init_rx_data {
 #define CLIENT_INIT_RX_DATA_TPA_EN_IPV6_SHIFT 1
 #define CLIENT_INIT_RX_DATA_TPA_MODE (0x1<<2)
 #define CLIENT_INIT_RX_DATA_TPA_MODE_SHIFT 2
-#define CLIENT_INIT_RX_DATA_TPA_OVER_VLAN_DISABLE (0x1<<3)
-#define CLIENT_INIT_RX_DATA_TPA_OVER_VLAN_DISABLE_SHIFT 3
-#define CLIENT_INIT_RX_DATA_RESERVED5 (0xF<<4)
-#define CLIENT_INIT_RX_DATA_RESERVED5_SHIFT 4
+#define CLIENT_INIT_RX_DATA_RESERVED5 (0x1F<<3)
+#define CLIENT_INIT_RX_DATA_RESERVED5_SHIFT 3
 	u8 vmqueue_mode_en_flg;
 	u8 extra_data_over_sgl_en_flg;
 	u8 cache_line_alignment_log_size;
@@ -3833,22 +3821,11 @@ struct eth_classify_cmd_header {
  */
 struct eth_classify_header {
 	u8 rule_cnt;
-	u8 warning_on_error;
+	u8 reserved0;
 	__le16 reserved1;
 	__le32 echo;
 };
 
-/*
- * Command for adding/removing a Inner-MAC/VNI classification rule
- */
-struct eth_classify_imac_vni_cmd {
-	struct eth_classify_cmd_header header;
-	__le32 vni;
-	__le16 imac_lsb;
-	__le16 imac_mid;
-	__le16 imac_msb;
-	__le16 reserved1;
-};
 
 /*
  * Command for adding/removing a MAC classification rule
@@ -3892,6 +3869,14 @@ struct eth_classify_vlan_cmd {
 /*
  * Command for adding/removing a VXLAN classification rule
  */
+struct eth_classify_vxlan_cmd {
+	struct eth_classify_cmd_header header;
+	__le32 vni;
+	__le16 inner_mac_lsb;
+	__le16 inner_mac_mid;
+	__le16 inner_mac_msb;
+	__le16 reserved1;
+};
 
 /*
  * union for eth classification rule
@@ -3900,7 +3885,7 @@ union eth_classify_rule_cmd {
 	struct eth_classify_mac_cmd mac;
 	struct eth_classify_vlan_cmd vlan;
 	struct eth_classify_pair_cmd pair;
-	struct eth_classify_imac_vni_cmd imac_vni;
+	struct eth_classify_vxlan_cmd vxlan;
 };
 
 /*
@@ -4754,8 +4739,6 @@ struct tpa_update_ramrod_data {
 	__le32 sge_page_base_hi;
 	__le16 sge_pause_thr_low;
 	__le16 sge_pause_thr_high;
-	u8 tpa_over_vlan_disable;
-	u8 reserved[7];
 };
 
 
@@ -4910,9 +4893,9 @@ struct c2s_pri_trans_table_entry {
  * cfc delete event data
  */
 struct cfc_del_event_data {
-	__le32 cid;
-	__le32 reserved0;
-	__le32 reserved1;
+	u32 cid;
+	u32 reserved0;
+	u32 reserved1;
 };
 
 
@@ -4950,7 +4933,7 @@ struct fairness_vars_per_port {
 	u32 upper_bound;
 	u32 fair_threshold;
 	u32 fairness_timeout;
-	u32 size_thr;
+	u32 reserved0;
 };
 
 /*
@@ -5128,9 +5111,15 @@ struct vf_pf_channel_zone_trigger {
  * zone that triggers the in-bound interrupt
  */
 struct trigger_vf_zone {
+#if defined(__BIG_ENDIAN)
+	u16 reserved1;
+	u8 reserved0;
+	struct vf_pf_channel_zone_trigger vf_pf_channel;
+#elif defined(__LITTLE_ENDIAN)
 	struct vf_pf_channel_zone_trigger vf_pf_channel;
 	u8 reserved0;
 	u16 reserved1;
+#endif
 	u32 reserved2;
 };
 
@@ -5215,9 +5204,9 @@ struct e2_integ_data {
  * set mac event data
  */
 struct eth_event_data {
-	__le32 echo;
-	__le32 reserved0;
-	__le32 reserved1;
+	u32 echo;
+	u32 reserved0;
+	u32 reserved1;
 };
 
 
@@ -5227,9 +5216,9 @@ struct eth_event_data {
 struct vf_pf_event_data {
 	u8 vf_id;
 	u8 reserved0;
-	__le16 reserved1;
-	__le32 msg_addr_lo;
-	__le32 msg_addr_hi;
+	u16 reserved1;
+	u32 msg_addr_lo;
+	u32 msg_addr_hi;
 };
 
 /*
@@ -5238,9 +5227,9 @@ struct vf_pf_event_data {
 struct vf_flr_event_data {
 	u8 vf_id;
 	u8 reserved0;
-	__le16 reserved1;
-	__le32 reserved2;
-	__le32 reserved3;
+	u16 reserved1;
+	u32 reserved2;
+	u32 reserved3;
 };
 
 /*
@@ -5249,9 +5238,9 @@ struct vf_flr_event_data {
 struct malicious_vf_event_data {
 	u8 vf_id;
 	u8 err_id;
-	__le16 reserved1;
-	__le32 reserved2;
-	__le32 reserved3;
+	u16 reserved1;
+	u32 reserved2;
+	u32 reserved3;
 };
 
 /*
@@ -5419,9 +5408,7 @@ struct function_start_data {
 	u8 sd_vlan_force_pri_val;
 	u8 c2s_pri_tt_valid;
 	u8 c2s_pri_default;
-	u8 tx_vlan_filtering_enable;
-	u8 tx_vlan_filtering_use_pvid;
-	u8 reserved2[4];
+	u8 reserved2[6];
 	struct c2s_pri_trans_table_entry c2s_pri_trans_table;
 };
 
@@ -5454,8 +5441,7 @@ struct function_update_data {
 	u8 reserved1;
 	__le16 sd_vlan_tag;
 	__le16 sd_vlan_eth_type;
-	u8 tx_vlan_filtering_pvid_change_flg;
-	u8 reserved0;
+	__le16 reserved0;
 	__le32 reserved2;
 };
 
@@ -5637,14 +5623,6 @@ enum igu_mode {
 	MAX_IGU_MODE
 };
 
-/*
- * Inner Headers Classification Type
- */
-enum inner_clss_type {
-	INNER_CLSS_DISABLED,
-	INNER_CLSS_USE_VLAN,
-	INNER_CLSS_USE_VNI,
-	MAX_INNER_CLSS_TYPE};
 
 /*
  * IP versions
@@ -5973,6 +5951,14 @@ enum ts_offset_cmd {
 	TS_OFFSET_INC,
 	TS_OFFSET_DEC,
 	MAX_TS_OFFSET_CMD
+};
+
+/* Tunnel Mode */
+enum tunnel_mode {
+	TUNN_MODE_NONE,
+	TUNN_MODE_VXLAN,
+	TUNN_MODE_GRE,
+	MAX_TUNNEL_MODE
 };
 
  /* zone A per-queue data */

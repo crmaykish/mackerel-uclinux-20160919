@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /**
  * Copyright (C) ST-Ericsson SA 2010
  * Author: Shujuan Chen <shujuan.chen@stericsson.com> for ST-Ericsson.
@@ -7,6 +6,7 @@
  * Author: Niklas Hernaeus <niklas.hernaeus@stericsson.com> for ST-Ericsson.
  * Author: Jonas Linde <jonas.linde@stericsson.com> for ST-Ericsson.
  * Author: Andreas Westin <andreas.westin@stericsson.com> for ST-Ericsson.
+ * License terms: GNU General Public License (GPL) version 2
  */
 
 #include <linux/clk.h>
@@ -20,7 +20,6 @@
 #include <linux/irqreturn.h>
 #include <linux/klist.h>
 #include <linux/module.h>
-#include <linux/mod_devicetable.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/semaphore.h>
@@ -29,7 +28,7 @@
 #include <crypto/aes.h>
 #include <crypto/algapi.h>
 #include <crypto/ctr.h>
-#include <crypto/internal/des.h>
+#include <crypto/des.h>
 #include <crypto/scatterwalk.h>
 
 #include <linux/platform_data/crypto-ux500.h>
@@ -528,9 +527,9 @@ static int cryp_set_dma_transfer(struct cryp_ctx *ctx,
 
 	dev_dbg(ctx->device->dev, "[%s]: ", __func__);
 
-	if (unlikely(!IS_ALIGNED((unsigned long)sg, 4))) {
+	if (unlikely(!IS_ALIGNED((u32)sg, 4))) {
 		dev_err(ctx->device->dev, "[%s]: Data in sg list isn't "
-			"aligned! Addr: 0x%08lx", __func__, (unsigned long)sg);
+			"aligned! Addr: 0x%08x", __func__, (u32)sg);
 		return -EFAULT;
 	}
 
@@ -556,7 +555,7 @@ static int cryp_set_dma_transfer(struct cryp_ctx *ctx,
 		desc = dmaengine_prep_slave_sg(channel,
 				ctx->device->dma.sg_src,
 				ctx->device->dma.sg_src_len,
-				DMA_MEM_TO_DEV, DMA_CTRL_ACK);
+				direction, DMA_CTRL_ACK);
 		break;
 
 	case DMA_FROM_DEVICE:
@@ -580,7 +579,7 @@ static int cryp_set_dma_transfer(struct cryp_ctx *ctx,
 		desc = dmaengine_prep_slave_sg(channel,
 				ctx->device->dma.sg_dst,
 				ctx->device->dma.sg_dst_len,
-				DMA_DEV_TO_MEM,
+				direction,
 				DMA_CTRL_ACK |
 				DMA_PREP_INTERRUPT);
 
@@ -595,12 +594,6 @@ static int cryp_set_dma_transfer(struct cryp_ctx *ctx,
 	}
 
 	cookie = dmaengine_submit(desc);
-	if (dma_submit_error(cookie)) {
-		dev_dbg(ctx->device->dev, "[%s]: DMA submission failed\n",
-			__func__);
-		return cookie;
-	}
-
 	dma_async_issue_pending(channel);
 
 	return 0;
@@ -763,9 +756,9 @@ static int hw_crypt_noxts(struct cryp_ctx *ctx,
 
 	ctx->outlen = ctx->datalen;
 
-	if (unlikely(!IS_ALIGNED((unsigned long)indata, 4))) {
+	if (unlikely(!IS_ALIGNED((u32)indata, 4))) {
 		pr_debug(DEV_DBG_NAME " [%s]: Data isn't aligned! Addr: "
-			 "0x%08lx", __func__, (unsigned long)indata);
+			 "0x%08x", __func__, (u32)indata);
 		return -EINVAL;
 	}
 
@@ -987,13 +980,25 @@ static int des_ablkcipher_setkey(struct crypto_ablkcipher *cipher,
 				 const u8 *key, unsigned int keylen)
 {
 	struct cryp_ctx *ctx = crypto_ablkcipher_ctx(cipher);
-	int err;
+	u32 *flags = &cipher->base.crt_flags;
+	u32 tmp[DES_EXPKEY_WORDS];
+	int ret;
 
 	pr_debug(DEV_DBG_NAME " [%s]", __func__);
+	if (keylen != DES_KEY_SIZE) {
+		*flags |= CRYPTO_TFM_RES_BAD_KEY_LEN;
+		pr_debug(DEV_DBG_NAME " [%s]: CRYPTO_TFM_RES_BAD_KEY_LEN",
+				__func__);
+		return -EINVAL;
+	}
 
-	err = verify_ablkcipher_des_key(cipher, key);
-	if (err)
-		return err;
+	ret = des_ekey(tmp, key);
+	if (unlikely(ret == 0) && (*flags & CRYPTO_TFM_REQ_WEAK_KEY)) {
+		*flags |= CRYPTO_TFM_RES_WEAK_KEY;
+		pr_debug(DEV_DBG_NAME " [%s]: CRYPTO_TFM_REQ_WEAK_KEY",
+				__func__);
+		return -EINVAL;
+	}
 
 	memcpy(ctx->key, key, keylen);
 	ctx->keylen = keylen;
@@ -1006,13 +1011,37 @@ static int des3_ablkcipher_setkey(struct crypto_ablkcipher *cipher,
 				  const u8 *key, unsigned int keylen)
 {
 	struct cryp_ctx *ctx = crypto_ablkcipher_ctx(cipher);
-	int err;
+	u32 *flags = &cipher->base.crt_flags;
+	const u32 *K = (const u32 *)key;
+	u32 tmp[DES3_EDE_EXPKEY_WORDS];
+	int i, ret;
 
 	pr_debug(DEV_DBG_NAME " [%s]", __func__);
+	if (keylen != DES3_EDE_KEY_SIZE) {
+		*flags |= CRYPTO_TFM_RES_BAD_KEY_LEN;
+		pr_debug(DEV_DBG_NAME " [%s]: CRYPTO_TFM_RES_BAD_KEY_LEN",
+				__func__);
+		return -EINVAL;
+	}
 
-	err = verify_ablkcipher_des3_key(cipher, key);
-	if (err)
-		return err;
+	/* Checking key interdependency for weak key detection. */
+	if (unlikely(!((K[0] ^ K[2]) | (K[1] ^ K[3])) ||
+				!((K[2] ^ K[4]) | (K[3] ^ K[5]))) &&
+			(*flags & CRYPTO_TFM_REQ_WEAK_KEY)) {
+		*flags |= CRYPTO_TFM_RES_WEAK_KEY;
+		pr_debug(DEV_DBG_NAME " [%s]: CRYPTO_TFM_REQ_WEAK_KEY",
+				__func__);
+		return -EINVAL;
+	}
+	for (i = 0; i < 3; i++) {
+		ret = des_ekey(tmp, key + i*DES_KEY_SIZE);
+		if (unlikely(ret == 0) && (*flags & CRYPTO_TFM_REQ_WEAK_KEY)) {
+			*flags |= CRYPTO_TFM_RES_WEAK_KEY;
+			pr_debug(DEV_DBG_NAME " [%s]: "
+					"CRYPTO_TFM_REQ_WEAK_KEY", __func__);
+			return -EINVAL;
+		}
+	}
 
 	memcpy(ctx->key, key, keylen);
 	ctx->keylen = keylen;
@@ -1181,6 +1210,57 @@ static struct cryp_algo_template cryp_algs[] = {
 	{
 		.algomode = CRYP_ALGO_DES_ECB,
 		.crypto = {
+			.cra_name = "des",
+			.cra_driver_name = "des-ux500",
+			.cra_priority = 300,
+			.cra_flags = CRYPTO_ALG_TYPE_ABLKCIPHER |
+						CRYPTO_ALG_ASYNC,
+			.cra_blocksize = DES_BLOCK_SIZE,
+			.cra_ctxsize = sizeof(struct cryp_ctx),
+			.cra_alignmask = 3,
+			.cra_type = &crypto_ablkcipher_type,
+			.cra_init = cryp_cra_init,
+			.cra_module = THIS_MODULE,
+			.cra_u = {
+				.ablkcipher = {
+					.min_keysize = DES_KEY_SIZE,
+					.max_keysize = DES_KEY_SIZE,
+					.setkey = des_ablkcipher_setkey,
+					.encrypt = cryp_blk_encrypt,
+					.decrypt = cryp_blk_decrypt
+				}
+			}
+		}
+
+	},
+	{
+		.algomode = CRYP_ALGO_TDES_ECB,
+		.crypto = {
+			.cra_name = "des3_ede",
+			.cra_driver_name = "des3_ede-ux500",
+			.cra_priority = 300,
+			.cra_flags = CRYPTO_ALG_TYPE_ABLKCIPHER |
+						CRYPTO_ALG_ASYNC,
+			.cra_blocksize = DES3_EDE_BLOCK_SIZE,
+			.cra_ctxsize = sizeof(struct cryp_ctx),
+			.cra_alignmask = 3,
+			.cra_type = &crypto_ablkcipher_type,
+			.cra_init = cryp_cra_init,
+			.cra_module = THIS_MODULE,
+			.cra_u = {
+				.ablkcipher = {
+					.min_keysize = DES3_EDE_KEY_SIZE,
+					.max_keysize = DES3_EDE_KEY_SIZE,
+					.setkey = des_ablkcipher_setkey,
+					.encrypt = cryp_blk_encrypt,
+					.decrypt = cryp_blk_decrypt
+				}
+			}
+		}
+	},
+	{
+		.algomode = CRYP_ALGO_DES_ECB,
+		.crypto = {
 			.cra_name = "ecb(des)",
 			.cra_driver_name = "ecb-des-ux500",
 			.cra_priority = 300,
@@ -1324,8 +1404,9 @@ static void cryp_algs_unregister_all(void)
 static int ux500_cryp_probe(struct platform_device *pdev)
 {
 	int ret;
-	struct resource *res;
-	struct resource *res_irq;
+	int cryp_error = 0;
+	struct resource *res = NULL;
+	struct resource *res_irq = NULL;
 	struct cryp_device_data *device_data;
 	struct cryp_protection_config prot = {
 		.privilege_access = CRYP_STATE_ENABLE
@@ -1335,6 +1416,7 @@ static int ux500_cryp_probe(struct platform_device *pdev)
 	dev_dbg(dev, "[%s]", __func__);
 	device_data = devm_kzalloc(dev, sizeof(*device_data), GFP_ATOMIC);
 	if (!device_data) {
+		dev_err(dev, "[%s]: kzalloc() failed!", __func__);
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -1358,9 +1440,9 @@ static int ux500_cryp_probe(struct platform_device *pdev)
 
 	device_data->phybase = res->start;
 	device_data->base = devm_ioremap_resource(dev, res);
-	if (IS_ERR(device_data->base)) {
+	if (!device_data->base) {
 		dev_err(dev, "[%s]: ioremap failed!", __func__);
-		ret = PTR_ERR(device_data->base);
+		ret = -ENOMEM;
 		goto out;
 	}
 
@@ -1397,13 +1479,15 @@ static int ux500_cryp_probe(struct platform_device *pdev)
 		goto out_clk_unprepare;
 	}
 
-	if (cryp_check(device_data)) {
-		dev_err(dev, "[%s]: cryp_check() failed!", __func__);
+	cryp_error = cryp_check(device_data);
+	if (cryp_error != 0) {
+		dev_err(dev, "[%s]: cryp_init() failed!", __func__);
 		ret = -EINVAL;
 		goto out_power;
 	}
 
-	if (cryp_configure_protection(device_data, &prot)) {
+	cryp_error = cryp_configure_protection(device_data, &prot);
+	if (cryp_error != 0) {
 		dev_err(dev, "[%s]: cryp_configure_protection() failed!",
 			__func__);
 		ret = -EINVAL;
@@ -1667,6 +1751,7 @@ static void __exit ux500_cryp_mod_fini(void)
 {
 	pr_debug("[%s] is called!", __func__);
 	platform_driver_unregister(&cryp_driver);
+	return;
 }
 
 module_init(ux500_cryp_mod_init);

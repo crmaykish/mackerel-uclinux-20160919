@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Driver for s390 chsc subchannels
  *
@@ -16,6 +15,7 @@
 #include <linux/miscdevice.h>
 #include <linux/kernel_stat.h>
 
+#include <asm/compat.h>
 #include <asm/cio.h>
 #include <asm/chsc.h>
 #include <asm/isc.h>
@@ -43,7 +43,11 @@ static DEFINE_MUTEX(on_close_mutex);
 
 static void CHSC_LOG_HEX(int level, void *data, int length)
 {
-	debug_event(chsc_debug_log_id, level, data, length);
+	while (length > 0) {
+		debug_event(chsc_debug_log_id, level, data, length);
+		length -= chsc_debug_log_id->buf_size;
+		data += chsc_debug_log_id->buf_size;
+	}
 }
 
 MODULE_AUTHOR("IBM Corporation");
@@ -129,7 +133,7 @@ static int chsc_subchannel_prepare(struct subchannel *sch)
 	 * since we don't have a way to clear the subchannel and
 	 * cannot disable it with a request running.
 	 */
-	cc = stsch(sch->schid, &schib);
+	cc = stsch_err(sch->schid, &schib);
 	if (!cc && scsw_stctl(&schib.scsw))
 		return -EAGAIN;
 	return 0;
@@ -181,7 +185,8 @@ static int __init chsc_init_dbfs(void)
 	debug_set_level(chsc_debug_log_id, 2);
 	return 0;
 out:
-	debug_unregister(chsc_debug_msg_id);
+	if (chsc_debug_msg_id)
+		debug_unregister(chsc_debug_msg_id);
 	return -ENOMEM;
 }
 
@@ -203,7 +208,7 @@ static void chsc_cleanup_sch_driver(void)
 
 static DEFINE_SPINLOCK(chsc_lock);
 
-static int chsc_subchannel_match_next_free(struct device *dev, const void *data)
+static int chsc_subchannel_match_next_free(struct device *dev, void *data)
 {
 	struct subchannel *sch = to_subchannel(dev);
 
@@ -548,7 +553,7 @@ static int chsc_ioctl_info_cu(void __user *user_cd)
 		goto out_free;
 	}
 	scucd_area->request.length = 0x0010;
-	scucd_area->request.code = 0x0026;
+	scucd_area->request.code = 0x0028;
 	scucd_area->m = cd->m;
 	scucd_area->fmt1 = cd->fmt;
 	scucd_area->cssid = cd->cssid;

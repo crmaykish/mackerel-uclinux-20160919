@@ -1,8 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0
-//
-// Copyright (c) 2011 Wolfson Microelectronics, plc
-// Copyright (c) 2011 Samsung Electronics Co., Ltd.
-//		http://www.samsung.com
+/* linux/arch/arm/mach-s3c64xx/cpuidle.c
+ *
+ * Copyright (c) 2011 Wolfson Microelectronics, plc
+ * Copyright (c) 2011 Samsung Electronics Co., Ltd.
+ *		http://www.samsung.com
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+*/
 
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -13,7 +18,6 @@
 
 #include <asm/cpuidle.h>
 
-#include <plat/cpu.h>
 #include <mach/map.h>
 
 #include "regs-sys.h"
@@ -53,8 +57,6 @@ static struct cpuidle_driver s3c64xx_cpuidle_driver = {
 
 static int __init s3c64xx_init_cpuidle(void)
 {
-	if (soc_is_s3c64xx())
-		return cpuidle_register(&s3c64xx_cpuidle_driver, NULL);
-	return 0;
+	return cpuidle_register(&s3c64xx_cpuidle_driver, NULL);
 }
 device_initcall(s3c64xx_init_cpuidle);

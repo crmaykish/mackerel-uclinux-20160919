@@ -32,7 +32,7 @@
 #include <linux/slab.h>
 #include <linux/phy.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
 #include <asm/irq.h>
 
@@ -59,8 +59,8 @@
 #define B44_TX_TIMEOUT			(5 * HZ)
 
 /* hardware minimum and maximum for a single frame's data payload */
-#define B44_MIN_MTU			ETH_ZLEN
-#define B44_MAX_MTU			ETH_DATA_LEN
+#define B44_MIN_MTU			60
+#define B44_MAX_MTU			1500
 
 #define B44_RX_RING_SIZE		512
 #define B44_DEF_RX_RING_PENDING		200
@@ -599,9 +599,9 @@ static void b44_check_phy(struct b44 *bp)
 	}
 }
 
-static void b44_timer(struct timer_list *t)
+static void b44_timer(unsigned long __opaque)
 {
-	struct b44 *bp = from_timer(bp, t, timer);
+	struct b44 *bp = (struct b44 *) __opaque;
 
 	spin_lock_irq(&bp->lock);
 
@@ -638,7 +638,7 @@ static void b44_tx(struct b44 *bp)
 		bytes_compl += skb->len;
 		pkts_compl++;
 
-		dev_consume_skb_irq(skb);
+		dev_kfree_skb_irq(skb);
 	}
 
 	netdev_completed_queue(bp->dev, pkts_compl, bytes_compl);
@@ -902,7 +902,7 @@ static int b44_poll(struct napi_struct *napi, int budget)
 	}
 
 	if (work_done < budget) {
-		napi_complete_done(napi, work_done);
+		napi_complete(napi);
 		b44_enable_ints(bp);
 	}
 
@@ -1012,7 +1012,7 @@ static netdev_tx_t b44_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		}
 
 		skb_copy_from_linear_data(skb, skb_put(bounce_skb, len), len);
-		dev_consume_skb_any(skb);
+		dev_kfree_skb_any(skb);
 		skb = bounce_skb;
 	}
 
@@ -1063,6 +1063,9 @@ err_out:
 static int b44_change_mtu(struct net_device *dev, int new_mtu)
 {
 	struct b44 *bp = netdev_priv(dev);
+
+	if (new_mtu < B44_MIN_MTU || new_mtu > B44_MAX_MTU)
+		return -EINVAL;
 
 	if (!netif_running(dev)) {
 		/* We'll just catch it later when the
@@ -1474,14 +1477,16 @@ static int b44_open(struct net_device *dev)
 		goto out;
 	}
 
-	timer_setup(&bp->timer, b44_timer, 0);
+	init_timer(&bp->timer);
 	bp->timer.expires = jiffies + HZ;
+	bp->timer.data = (unsigned long) bp;
+	bp->timer.function = b44_timer;
 	add_timer(&bp->timer);
 
 	b44_enable_ints(bp);
 
 	if (bp->flags & B44_FLAG_EXTERNAL_PHY)
-		phy_start(dev->phydev);
+		phy_start(bp->phydev);
 
 	netif_start_queue(dev);
 out:
@@ -1519,10 +1524,8 @@ static int b44_magic_pattern(u8 *macaddr, u8 *ppattern, u8 *pmask, int offset)
 	int ethaddr_bytes = ETH_ALEN;
 
 	memset(ppattern + offset, 0xff, magicsync);
-	for (j = 0; j < magicsync; j++) {
-		pmask[len >> 3] |= BIT(len & 7);
-		len++;
-	}
+	for (j = 0; j < magicsync; j++)
+		set_bit(len++, (unsigned long *) pmask);
 
 	for (j = 0; j < B44_MAX_PATTERNS; j++) {
 		if ((B44_PATTERN_SIZE - len) >= ETH_ALEN)
@@ -1534,8 +1537,7 @@ static int b44_magic_pattern(u8 *macaddr, u8 *ppattern, u8 *pmask, int offset)
 		for (k = 0; k< ethaddr_bytes; k++) {
 			ppattern[offset + magicsync +
 				(j * ETH_ALEN) + k] = macaddr[k];
-			pmask[len >> 3] |= BIT(len & 7);
-			len++;
+			set_bit(len++, (unsigned long *) pmask);
 		}
 	}
 	return len - 1;
@@ -1649,7 +1651,7 @@ static int b44_close(struct net_device *dev)
 	netif_stop_queue(dev);
 
 	if (bp->flags & B44_FLAG_EXTERNAL_PHY)
-		phy_stop(dev->phydev);
+		phy_stop(bp->phydev);
 
 	napi_disable(&bp->napi);
 
@@ -1675,8 +1677,8 @@ static int b44_close(struct net_device *dev)
 	return 0;
 }
 
-static void b44_get_stats64(struct net_device *dev,
-			    struct rtnl_link_stats64 *nstat)
+static struct rtnl_link_stats64 *b44_get_stats64(struct net_device *dev,
+					struct rtnl_link_stats64 *nstat)
 {
 	struct b44 *bp = netdev_priv(dev);
 	struct b44_hw_stats *hwstat = &bp->hw_stats;
@@ -1719,6 +1721,7 @@ static void b44_get_stats64(struct net_device *dev,
 #endif
 	} while (u64_stats_fetch_retry_irq(&hwstat->syncp, start));
 
+	return nstat;
 }
 
 static int __b44_load_mcast(struct b44 *bp, struct net_device *dev)
@@ -1829,102 +1832,90 @@ static int b44_nway_reset(struct net_device *dev)
 	return r;
 }
 
-static int b44_get_link_ksettings(struct net_device *dev,
-				  struct ethtool_link_ksettings *cmd)
+static int b44_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 {
 	struct b44 *bp = netdev_priv(dev);
-	u32 supported, advertising;
 
 	if (bp->flags & B44_FLAG_EXTERNAL_PHY) {
-		BUG_ON(!dev->phydev);
-		phy_ethtool_ksettings_get(dev->phydev, cmd);
-
-		return 0;
+		BUG_ON(!bp->phydev);
+		return phy_ethtool_gset(bp->phydev, cmd);
 	}
 
-	supported = (SUPPORTED_Autoneg);
-	supported |= (SUPPORTED_100baseT_Half |
-		      SUPPORTED_100baseT_Full |
-		      SUPPORTED_10baseT_Half |
-		      SUPPORTED_10baseT_Full |
-		      SUPPORTED_MII);
+	cmd->supported = (SUPPORTED_Autoneg);
+	cmd->supported |= (SUPPORTED_100baseT_Half |
+			  SUPPORTED_100baseT_Full |
+			  SUPPORTED_10baseT_Half |
+			  SUPPORTED_10baseT_Full |
+			  SUPPORTED_MII);
 
-	advertising = 0;
+	cmd->advertising = 0;
 	if (bp->flags & B44_FLAG_ADV_10HALF)
-		advertising |= ADVERTISED_10baseT_Half;
+		cmd->advertising |= ADVERTISED_10baseT_Half;
 	if (bp->flags & B44_FLAG_ADV_10FULL)
-		advertising |= ADVERTISED_10baseT_Full;
+		cmd->advertising |= ADVERTISED_10baseT_Full;
 	if (bp->flags & B44_FLAG_ADV_100HALF)
-		advertising |= ADVERTISED_100baseT_Half;
+		cmd->advertising |= ADVERTISED_100baseT_Half;
 	if (bp->flags & B44_FLAG_ADV_100FULL)
-		advertising |= ADVERTISED_100baseT_Full;
-	advertising |= ADVERTISED_Pause | ADVERTISED_Asym_Pause;
-	cmd->base.speed = (bp->flags & B44_FLAG_100_BASE_T) ?
-		SPEED_100 : SPEED_10;
-	cmd->base.duplex = (bp->flags & B44_FLAG_FULL_DUPLEX) ?
+		cmd->advertising |= ADVERTISED_100baseT_Full;
+	cmd->advertising |= ADVERTISED_Pause | ADVERTISED_Asym_Pause;
+	ethtool_cmd_speed_set(cmd, ((bp->flags & B44_FLAG_100_BASE_T) ?
+				    SPEED_100 : SPEED_10));
+	cmd->duplex = (bp->flags & B44_FLAG_FULL_DUPLEX) ?
 		DUPLEX_FULL : DUPLEX_HALF;
-	cmd->base.port = 0;
-	cmd->base.phy_address = bp->phy_addr;
-	cmd->base.autoneg = (bp->flags & B44_FLAG_FORCE_LINK) ?
+	cmd->port = 0;
+	cmd->phy_address = bp->phy_addr;
+	cmd->transceiver = (bp->flags & B44_FLAG_EXTERNAL_PHY) ?
+		XCVR_EXTERNAL : XCVR_INTERNAL;
+	cmd->autoneg = (bp->flags & B44_FLAG_FORCE_LINK) ?
 		AUTONEG_DISABLE : AUTONEG_ENABLE;
-	if (cmd->base.autoneg == AUTONEG_ENABLE)
-		advertising |= ADVERTISED_Autoneg;
-
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.supported,
-						supported);
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.advertising,
-						advertising);
-
+	if (cmd->autoneg == AUTONEG_ENABLE)
+		cmd->advertising |= ADVERTISED_Autoneg;
 	if (!netif_running(dev)){
-		cmd->base.speed = 0;
-		cmd->base.duplex = 0xff;
+		ethtool_cmd_speed_set(cmd, 0);
+		cmd->duplex = 0xff;
 	}
-
+	cmd->maxtxpkt = 0;
+	cmd->maxrxpkt = 0;
 	return 0;
 }
 
-static int b44_set_link_ksettings(struct net_device *dev,
-				  const struct ethtool_link_ksettings *cmd)
+static int b44_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
 {
 	struct b44 *bp = netdev_priv(dev);
 	u32 speed;
 	int ret;
-	u32 advertising;
 
 	if (bp->flags & B44_FLAG_EXTERNAL_PHY) {
-		BUG_ON(!dev->phydev);
+		BUG_ON(!bp->phydev);
 		spin_lock_irq(&bp->lock);
 		if (netif_running(dev))
 			b44_setup_phy(bp);
 
-		ret = phy_ethtool_ksettings_set(dev->phydev, cmd);
+		ret = phy_ethtool_sset(bp->phydev, cmd);
 
 		spin_unlock_irq(&bp->lock);
 
 		return ret;
 	}
 
-	speed = cmd->base.speed;
-
-	ethtool_convert_link_mode_to_legacy_u32(&advertising,
-						cmd->link_modes.advertising);
+	speed = ethtool_cmd_speed(cmd);
 
 	/* We do not support gigabit. */
-	if (cmd->base.autoneg == AUTONEG_ENABLE) {
-		if (advertising &
+	if (cmd->autoneg == AUTONEG_ENABLE) {
+		if (cmd->advertising &
 		    (ADVERTISED_1000baseT_Half |
 		     ADVERTISED_1000baseT_Full))
 			return -EINVAL;
 	} else if ((speed != SPEED_100 &&
 		    speed != SPEED_10) ||
-		   (cmd->base.duplex != DUPLEX_HALF &&
-		    cmd->base.duplex != DUPLEX_FULL)) {
+		   (cmd->duplex != DUPLEX_HALF &&
+		    cmd->duplex != DUPLEX_FULL)) {
 			return -EINVAL;
 	}
 
 	spin_lock_irq(&bp->lock);
 
-	if (cmd->base.autoneg == AUTONEG_ENABLE) {
+	if (cmd->autoneg == AUTONEG_ENABLE) {
 		bp->flags &= ~(B44_FLAG_FORCE_LINK |
 			       B44_FLAG_100_BASE_T |
 			       B44_FLAG_FULL_DUPLEX |
@@ -1932,19 +1923,19 @@ static int b44_set_link_ksettings(struct net_device *dev,
 			       B44_FLAG_ADV_10FULL |
 			       B44_FLAG_ADV_100HALF |
 			       B44_FLAG_ADV_100FULL);
-		if (advertising == 0) {
+		if (cmd->advertising == 0) {
 			bp->flags |= (B44_FLAG_ADV_10HALF |
 				      B44_FLAG_ADV_10FULL |
 				      B44_FLAG_ADV_100HALF |
 				      B44_FLAG_ADV_100FULL);
 		} else {
-			if (advertising & ADVERTISED_10baseT_Half)
+			if (cmd->advertising & ADVERTISED_10baseT_Half)
 				bp->flags |= B44_FLAG_ADV_10HALF;
-			if (advertising & ADVERTISED_10baseT_Full)
+			if (cmd->advertising & ADVERTISED_10baseT_Full)
 				bp->flags |= B44_FLAG_ADV_10FULL;
-			if (advertising & ADVERTISED_100baseT_Half)
+			if (cmd->advertising & ADVERTISED_100baseT_Half)
 				bp->flags |= B44_FLAG_ADV_100HALF;
-			if (advertising & ADVERTISED_100baseT_Full)
+			if (cmd->advertising & ADVERTISED_100baseT_Full)
 				bp->flags |= B44_FLAG_ADV_100FULL;
 		}
 	} else {
@@ -1952,7 +1943,7 @@ static int b44_set_link_ksettings(struct net_device *dev,
 		bp->flags &= ~(B44_FLAG_100_BASE_T | B44_FLAG_FULL_DUPLEX);
 		if (speed == SPEED_100)
 			bp->flags |= B44_FLAG_100_BASE_T;
-		if (cmd->base.duplex == DUPLEX_FULL)
+		if (cmd->duplex == DUPLEX_FULL)
 			bp->flags |= B44_FLAG_FULL_DUPLEX;
 	}
 
@@ -2033,14 +2024,12 @@ static int b44_set_pauseparam(struct net_device *dev,
 		bp->flags |= B44_FLAG_TX_PAUSE;
 	else
 		bp->flags &= ~B44_FLAG_TX_PAUSE;
-	if (netif_running(dev)) {
-		if (bp->flags & B44_FLAG_PAUSE_AUTO) {
-			b44_halt(bp);
-			b44_init_rings(bp);
-			b44_init_hw(bp, B44_FULL_RESET);
-		} else {
-			__b44_set_flow_ctrl(bp, bp->flags);
-		}
+	if (bp->flags & B44_FLAG_PAUSE_AUTO) {
+		b44_halt(bp);
+		b44_init_rings(bp);
+		b44_init_hw(bp, B44_FULL_RESET);
+	} else {
+		__b44_set_flow_ctrl(bp, bp->flags);
 	}
 	spin_unlock_irq(&bp->lock);
 
@@ -2121,6 +2110,8 @@ static int b44_set_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
 
 static const struct ethtool_ops b44_ethtool_ops = {
 	.get_drvinfo		= b44_get_drvinfo,
+	.get_settings		= b44_get_settings,
+	.set_settings		= b44_set_settings,
 	.nway_reset		= b44_nway_reset,
 	.get_link		= ethtool_op_get_link,
 	.get_wol		= b44_get_wol,
@@ -2134,8 +2125,6 @@ static const struct ethtool_ops b44_ethtool_ops = {
 	.get_strings		= b44_get_strings,
 	.get_sset_count		= b44_get_sset_count,
 	.get_ethtool_stats	= b44_get_ethtool_stats,
-	.get_link_ksettings	= b44_get_link_ksettings,
-	.set_link_ksettings	= b44_set_link_ksettings,
 };
 
 static int b44_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
@@ -2148,8 +2137,8 @@ static int b44_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 
 	spin_lock_irq(&bp->lock);
 	if (bp->flags & B44_FLAG_EXTERNAL_PHY) {
-		BUG_ON(!dev->phydev);
-		err = phy_mii_ioctl(dev->phydev, ifr, cmd);
+		BUG_ON(!bp->phydev);
+		err = phy_mii_ioctl(bp->phydev, ifr, cmd);
 	} else {
 		err = generic_mii_ioctl(&bp->mii_if, if_mii(ifr), cmd, NULL);
 	}
@@ -2217,7 +2206,7 @@ static const struct net_device_ops b44_netdev_ops = {
 static void b44_adjust_link(struct net_device *dev)
 {
 	struct b44 *bp = netdev_priv(dev);
-	struct phy_device *phydev = dev->phydev;
+	struct phy_device *phydev = bp->phydev;
 	bool status_changed = 0;
 
 	BUG_ON(!phydev);
@@ -2253,7 +2242,6 @@ static void b44_adjust_link(struct net_device *dev)
 
 static int b44_register_phy_one(struct b44 *bp)
 {
-	__ETHTOOL_DECLARE_LINK_MODE_MASK(mask) = { 0, };
 	struct mii_bus *mii_bus;
 	struct ssb_device *sdev = bp->sdev;
 	struct phy_device *phydev;
@@ -2275,16 +2263,24 @@ static int b44_register_phy_one(struct b44 *bp)
 	mii_bus->parent = sdev->dev;
 	mii_bus->phy_mask = ~(1 << bp->phy_addr);
 	snprintf(mii_bus->id, MII_BUS_ID_SIZE, "%x", instance);
+	mii_bus->irq = kmalloc(sizeof(int) * PHY_MAX_ADDR, GFP_KERNEL);
+	if (!mii_bus->irq) {
+		dev_err(sdev->dev, "mii_bus irq allocation failed\n");
+		err = -ENOMEM;
+		goto err_out_mdiobus;
+	}
+
+	memset(mii_bus->irq, PHY_POLL, sizeof(int) * PHY_MAX_ADDR);
 
 	bp->mii_bus = mii_bus;
 
 	err = mdiobus_register(mii_bus);
 	if (err) {
 		dev_err(sdev->dev, "failed to register MII bus\n");
-		goto err_out_mdiobus;
+		goto err_out_mdiobus_irq;
 	}
 
-	if (!mdiobus_is_registered_device(bp->mii_bus, bp->phy_addr) &&
+	if (!bp->mii_bus->phy_map[bp->phy_addr] &&
 	    (sprom->boardflags_lo & (B44_BOARDFLAG_ROBO | B44_BOARDFLAG_ADM))) {
 
 		dev_info(sdev->dev,
@@ -2309,22 +2305,26 @@ static int b44_register_phy_one(struct b44 *bp)
 	}
 
 	/* mask with MAC supported features */
-	linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Half_BIT, mask);
-	linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Full_BIT, mask);
-	linkmode_set_bit(ETHTOOL_LINK_MODE_Autoneg_BIT, mask);
-	linkmode_set_bit(ETHTOOL_LINK_MODE_MII_BIT, mask);
-	linkmode_and(phydev->supported, phydev->supported, mask);
-	linkmode_copy(phydev->advertising, phydev->supported);
+	phydev->supported &= (SUPPORTED_100baseT_Half |
+			      SUPPORTED_100baseT_Full |
+			      SUPPORTED_Autoneg |
+			      SUPPORTED_MII);
+	phydev->advertising = phydev->supported;
 
+	bp->phydev = phydev;
 	bp->old_link = 0;
-	bp->phy_addr = phydev->mdio.addr;
+	bp->phy_addr = phydev->addr;
 
-	phy_attached_info(phydev);
+	dev_info(sdev->dev, "attached PHY driver [%s] (mii_bus:phy_addr=%s)\n",
+		 phydev->drv->name, dev_name(&phydev->dev));
 
 	return 0;
 
 err_out_mdiobus_unregister:
 	mdiobus_unregister(mii_bus);
+
+err_out_mdiobus_irq:
+	kfree(mii_bus->irq);
 
 err_out_mdiobus:
 	mdiobus_free(mii_bus);
@@ -2335,11 +2335,11 @@ err_out:
 
 static void b44_unregister_phy_one(struct b44 *bp)
 {
-	struct net_device *dev = bp->dev;
 	struct mii_bus *mii_bus = bp->mii_bus;
 
-	phy_disconnect(dev->phydev);
+	phy_disconnect(bp->phydev);
 	mdiobus_unregister(mii_bus);
+	kfree(mii_bus->irq);
 	mdiobus_free(mii_bus);
 }
 
@@ -2373,7 +2373,6 @@ static int b44_init_one(struct ssb_device *sdev,
 	bp->msg_enable = netif_msg_init(b44_debug, B44_DEF_MSG_ENABLE);
 
 	spin_lock_init(&bp->lock);
-	u64_stats_init(&bp->hw_stats.syncp);
 
 	bp->rx_pending = B44_DEF_RX_RING_PENDING;
 	bp->tx_pending = B44_DEF_TX_RING_PENDING;
@@ -2381,8 +2380,6 @@ static int b44_init_one(struct ssb_device *sdev,
 	dev->netdev_ops = &b44_netdev_ops;
 	netif_napi_add(dev, &bp->napi, b44_poll, 64);
 	dev->watchdog_timeo = B44_TX_TIMEOUT;
-	dev->min_mtu = B44_MIN_MTU;
-	dev->max_mtu = B44_MAX_MTU;
 	dev->irq = sdev->irq;
 	dev->ethtool_ops = &b44_ethtool_ops;
 
@@ -2393,8 +2390,7 @@ static int b44_init_one(struct ssb_device *sdev,
 		goto err_out_free_dev;
 	}
 
-	err = dma_set_mask_and_coherent(sdev->dma_dev, DMA_BIT_MASK(30));
-	if (err) {
+	if (dma_set_mask_and_coherent(sdev->dma_dev, DMA_BIT_MASK(30))) {
 		dev_err(sdev->dev,
 			"Required 30BIT DMA mask unsupported by the system\n");
 		goto err_out_powerdown;

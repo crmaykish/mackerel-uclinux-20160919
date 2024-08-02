@@ -69,9 +69,7 @@ MODULE_AUTHOR("Maintainer: Samuel Chessman <chessman@tux.org>");
 MODULE_DESCRIPTION("Driver for TI ThunderLAN based ethernet PCI adapters");
 MODULE_LICENSE("GPL");
 
-/* Turn on debugging.
- * See Documentation/networking/device_drivers/ti/tlan.txt for details
- */
+/* Turn on debugging. See Documentation/networking/tlan.txt for details */
 static  int		debug;
 module_param(debug, int, 0);
 MODULE_PARM_DESC(debug, "ThunderLAN debug mask");
@@ -174,8 +172,7 @@ static u32	tlan_handle_tx_eoc(struct net_device *, u16);
 static u32	tlan_handle_status_check(struct net_device *, u16);
 static u32	tlan_handle_rx_eoc(struct net_device *, u16);
 
-static void	tlan_timer(struct timer_list *t);
-static void	tlan_phy_monitor(struct timer_list *t);
+static void	tlan_timer(unsigned long);
 
 static void	tlan_reset_lists(struct net_device *);
 static void	tlan_free_lists(struct net_device *);
@@ -193,6 +190,7 @@ static void	tlan_phy_power_up(struct net_device *);
 static void	tlan_phy_reset(struct net_device *);
 static void	tlan_phy_start_link(struct net_device *);
 static void	tlan_phy_finish_auto_neg(struct net_device *);
+static void     tlan_phy_monitor(unsigned long);
 
 /*
   static int	tlan_phy_nop(struct net_device *);
@@ -260,6 +258,7 @@ tlan_set_timer(struct net_device *dev, u32 ticks, u32 type)
 	if (!in_irq())
 		spin_unlock_irqrestore(&priv->lock, flags);
 
+	priv->timer.data = (unsigned long) dev;
 	priv->timer_set_at = jiffies;
 	priv->timer_type = type;
 	mod_timer(&priv->timer, jiffies + ticks);
@@ -314,8 +313,9 @@ static void tlan_remove_one(struct pci_dev *pdev)
 	pci_release_regions(pdev);
 #endif
 
-	cancel_work_sync(&priv->tlan_tqueue);
 	free_netdev(dev);
+
+	cancel_work_sync(&priv->tlan_tqueue);
 }
 
 static void tlan_start(struct net_device *dev)
@@ -610,8 +610,8 @@ err_out_regions:
 #ifdef CONFIG_PCI
 	if (pdev)
 		pci_release_regions(pdev);
-err_out:
 #endif
+err_out:
 	if (pdev)
 		pci_disable_device(pdev);
 	return rc;
@@ -672,6 +672,7 @@ module_exit(tlan_exit);
 static void  __init tlan_eisa_probe(void)
 {
 	long	ioaddr;
+	int	rc = -ENODEV;
 	int	irq;
 	u16	device_id;
 
@@ -736,7 +737,8 @@ static void  __init tlan_eisa_probe(void)
 
 
 		/* Setup the newly found eisa adapter */
-		tlan_probe1(NULL, ioaddr, irq, 12, NULL);
+		rc = tlan_probe1(NULL, ioaddr, irq,
+				 12, NULL);
 		continue;
 
 out:
@@ -770,6 +772,7 @@ static const struct net_device_ops tlan_netdev_ops = {
 	.ndo_get_stats		= tlan_get_stats,
 	.ndo_set_rx_mode	= tlan_set_multicast_list,
 	.ndo_do_ioctl		= tlan_ioctl,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -852,6 +855,7 @@ static int tlan_init(struct net_device *dev)
 		       dev->name);
 		return -ENOMEM;
 	}
+	memset(priv->dma_storage, 0, dma_size);
 	priv->rx_list = (struct tlan_list *)
 		ALIGN((unsigned long)priv->dma_storage, 8);
 	priv->rx_list_dma = ALIGN(priv->dma_storage_dma, 8);
@@ -923,8 +927,8 @@ static int tlan_open(struct net_device *dev)
 		return err;
 	}
 
-	timer_setup(&priv->timer, NULL, 0);
-	timer_setup(&priv->media_timer, tlan_phy_monitor, 0);
+	init_timer(&priv->timer);
+	init_timer(&priv->media_timer);
 
 	tlan_start(dev);
 
@@ -964,7 +968,6 @@ static int tlan_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	switch (cmd) {
 	case SIOCGMIIPHY:		/* get address of MII PHY in use. */
 		data->phy_id = phy;
-		/* fall through */
 
 
 	case SIOCGMIIREG:		/* read MII PHY register. */
@@ -1004,7 +1007,7 @@ static void tlan_tx_timeout(struct net_device *dev)
 	tlan_reset_lists(dev);
 	tlan_read_and_clear_stats(dev, TLAN_IGNORE);
 	tlan_reset_adapter(dev);
-	netif_trans_update(dev); /* prevent tx timeout */
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 
 }
@@ -1425,6 +1428,7 @@ static u32 tlan_handle_tx_eof(struct net_device *dev, u16 host_int)
 				TLAN_LED_REG, TLAN_LED_LINK | TLAN_LED_ACT);
 		if (priv->timer.function == NULL) {
 			priv->timer.function = tlan_timer;
+			priv->timer.data = (unsigned long) dev;
 			priv->timer.expires = jiffies + TLAN_TIMER_ACT_DELAY;
 			priv->timer_set_at = jiffies;
 			priv->timer_type = TLAN_TIMER_ACTIVITY;
@@ -1576,6 +1580,7 @@ drop_and_reuse:
 				TLAN_LED_REG, TLAN_LED_LINK | TLAN_LED_ACT);
 		if (priv->timer.function == NULL)  {
 			priv->timer.function = tlan_timer;
+			priv->timer.data = (unsigned long) dev;
 			priv->timer.expires = jiffies + TLAN_TIMER_ACT_DELAY;
 			priv->timer_set_at = jiffies;
 			priv->timer_type = TLAN_TIMER_ACTIVITY;
@@ -1646,6 +1651,7 @@ static u32 tlan_handle_tx_eoc(struct net_device *dev, u16 host_int)
 	dma_addr_t		head_list_phys;
 	u32			ack = 1;
 
+	host_int = 0;
 	if (priv->tlan_rev < 0x30) {
 		TLAN_DBG(TLAN_DEBUG_TX,
 			 "TRANSMIT:  handling TX EOC (Head=%d Tail=%d) -- IRQ\n",
@@ -1832,10 +1838,10 @@ ThunderLAN driver timer function
  *
  **************************************************************/
 
-static void tlan_timer(struct timer_list *t)
+static void tlan_timer(unsigned long data)
 {
-	struct tlan_priv	*priv = from_timer(priv, t, timer);
-	struct net_device	*dev = priv->dev;
+	struct net_device	*dev = (struct net_device *) data;
+	struct tlan_priv	*priv = netdev_priv(dev);
 	u32		elapsed;
 	unsigned long	flags = 0;
 
@@ -1868,6 +1874,7 @@ static void tlan_timer(struct timer_list *t)
 				tlan_dio_write8(dev->base_addr,
 						TLAN_LED_REG, TLAN_LED_LINK);
 			} else  {
+				priv->timer.function = tlan_timer;
 				priv->timer.expires = priv->timer_set_at
 					+ TLAN_TIMER_ACT_DELAY;
 				spin_unlock_irqrestore(&priv->lock, flags);
@@ -1900,7 +1907,7 @@ ThunderLAN driver adapter related routines
  *		Nothing
  *	Parms:
  *		dev	The device structure with the list
- *			structures to be reset.
+ *			stuctures to be reset.
  *
  *	This routine sets the variables associated with managing
  *	the TLAN lists to their initial values.
@@ -2312,6 +2319,8 @@ tlan_finish_reset(struct net_device *dev)
 			} else
 				netdev_info(dev, "Link active\n");
 			/* Enabling link beat monitoring */
+			priv->media_timer.function = tlan_phy_monitor;
+			priv->media_timer.data = (unsigned long) dev;
 			priv->media_timer.expires = jiffies + HZ;
 			add_timer(&priv->media_timer);
 		}
@@ -2756,10 +2765,10 @@ static void tlan_phy_finish_auto_neg(struct net_device *dev)
  *
  *******************************************************************/
 
-static void tlan_phy_monitor(struct timer_list *t)
+static void tlan_phy_monitor(unsigned long data)
 {
-	struct tlan_priv *priv = from_timer(priv, t, media_timer);
-	struct net_device *dev = priv->dev;
+	struct net_device *dev = (struct net_device *) data;
+	struct tlan_priv *priv = netdev_priv(dev);
 	u16     phy;
 	u16     phy_status;
 

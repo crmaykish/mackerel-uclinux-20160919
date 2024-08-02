@@ -1,7 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright(c) 2007 Yuri Tikhonov <yur@emcraft.com>
  * Copyright(c) 2009 Intel Corporation
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc., 59
+ * Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ *
+ * The full GNU General Public License is included in this distribution in the
+ * file called COPYING.
  */
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
@@ -26,8 +42,6 @@ static struct page *pq_scribble_page;
 #define P(b, d) (b[d-2])
 #define Q(b, d) (b[d-1])
 
-#define MAX_DISKS 255
-
 /**
  * do_async_gen_syndrome - asynchronously calculate P and/or Q
  */
@@ -48,6 +62,9 @@ do_async_gen_syndrome(struct dma_chan *chan,
 	dma_addr_t dma_dest[2];
 	int src_off = 0;
 
+	if (submit->flags & ASYNC_TX_FENCE)
+		dma_flags |= DMA_PREP_FENCE;
+
 	while (src_cnt > 0) {
 		submit->flags = flags_orig;
 		pq_src_cnt = min(src_cnt, dma_maxpq(dma, dma_flags));
@@ -66,8 +83,6 @@ do_async_gen_syndrome(struct dma_chan *chan,
 			if (cb_fn_orig)
 				dma_flags |= DMA_PREP_INTERRUPT;
 		}
-		if (submit->flags & ASYNC_TX_FENCE)
-			dma_flags |= DMA_PREP_FENCE;
 
 		/* Drivers force forward progress in case they can not provide
 		 * a descriptor
@@ -170,7 +185,7 @@ async_gen_syndrome(struct page **blocks, unsigned int offset, int disks,
 	struct dma_device *device = chan ? chan->device : NULL;
 	struct dmaengine_unmap_data *unmap = NULL;
 
-	BUG_ON(disks > MAX_DISKS || !(P(blocks, disks) || Q(blocks, disks)));
+	BUG_ON(disks > 255 || !(P(blocks, disks) || Q(blocks, disks)));
 
 	if (device)
 		unmap = dmaengine_get_unmap_data(device->dev, disks, GFP_NOWAIT);
@@ -182,7 +197,7 @@ async_gen_syndrome(struct page **blocks, unsigned int offset, int disks,
 	    is_dma_pq_aligned(device, offset, 0, len)) {
 		struct dma_async_tx_descriptor *tx;
 		enum dma_ctrl_flags dma_flags = 0;
-		unsigned char coefs[MAX_DISKS];
+		unsigned char coefs[src_cnt];
 		int i, j;
 
 		/* run the p+q asynchronously */
@@ -285,11 +300,11 @@ async_syndrome_val(struct page **blocks, unsigned int offset, int disks,
 	struct dma_chan *chan = pq_val_chan(submit, blocks, disks, len);
 	struct dma_device *device = chan ? chan->device : NULL;
 	struct dma_async_tx_descriptor *tx;
-	unsigned char coefs[MAX_DISKS];
+	unsigned char coefs[disks-2];
 	enum dma_ctrl_flags dma_flags = submit->cb_fn ? DMA_PREP_INTERRUPT : 0;
 	struct dmaengine_unmap_data *unmap = NULL;
 
-	BUG_ON(disks < 4 || disks > MAX_DISKS);
+	BUG_ON(disks < 4);
 
 	if (device)
 		unmap = dmaengine_get_unmap_data(device->dev, disks, GFP_NOWAIT);
@@ -353,6 +368,8 @@ async_syndrome_val(struct page **blocks, unsigned int offset, int disks,
 
 		dma_set_unmap(tx, unmap);
 		async_tx_submit(chan, tx, submit);
+
+		return tx;
 	} else {
 		struct page *p_src = P(blocks, disks);
 		struct page *q_src = Q(blocks, disks);
@@ -407,11 +424,9 @@ async_syndrome_val(struct page **blocks, unsigned int offset, int disks,
 		submit->cb_param = cb_param_orig;
 		submit->flags = flags_orig;
 		async_tx_sync_epilog(submit);
-		tx = NULL;
-	}
-	dmaengine_unmap_put(unmap);
 
-	return tx;
+		return NULL;
+	}
 }
 EXPORT_SYMBOL_GPL(async_syndrome_val);
 
@@ -429,7 +444,7 @@ static int __init async_pq_init(void)
 
 static void __exit async_pq_exit(void)
 {
-	__free_page(pq_scribble_page);
+	put_page(pq_scribble_page);
 }
 
 module_init(async_pq_init);

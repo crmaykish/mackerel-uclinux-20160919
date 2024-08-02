@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2012-2014 Andy Lutomirski <luto@amacapital.net>
  *
@@ -28,8 +27,6 @@
 
 #include <linux/kernel.h>
 #include <linux/timer.h>
-#include <linux/sched/signal.h>
-#include <linux/mm_types.h>
 #include <linux/syscalls.h>
 #include <linux/ratelimit.h>
 
@@ -37,16 +34,15 @@
 #include <asm/unistd.h>
 #include <asm/fixmap.h>
 #include <asm/traps.h>
-#include <asm/paravirt.h>
 
 #define CREATE_TRACE_POINTS
 #include "vsyscall_trace.h"
 
-static enum { EMULATE, XONLY, NONE } vsyscall_mode __ro_after_init =
-#ifdef CONFIG_LEGACY_VSYSCALL_NONE
+static enum { EMULATE, NATIVE, NONE } vsyscall_mode =
+#if defined(CONFIG_LEGACY_VSYSCALL_NATIVE)
+	NATIVE;
+#elif defined(CONFIG_LEGACY_VSYSCALL_NONE)
 	NONE;
-#elif defined(CONFIG_LEGACY_VSYSCALL_XONLY)
-	XONLY;
 #else
 	EMULATE;
 #endif
@@ -56,8 +52,8 @@ static int __init vsyscall_setup(char *str)
 	if (str) {
 		if (!strcmp("emulate", str))
 			vsyscall_mode = EMULATE;
-		else if (!strcmp("xonly", str))
-			vsyscall_mode = XONLY;
+		else if (!strcmp("native", str))
+			vsyscall_mode = NATIVE;
 		else if (!strcmp("none", str))
 			vsyscall_mode = NONE;
 		else
@@ -98,43 +94,39 @@ static int addr_to_vsyscall_nr(unsigned long addr)
 
 static bool write_ok_or_segv(unsigned long ptr, size_t size)
 {
-	if (!access_ok((void __user *)ptr, size)) {
+	/*
+	 * XXX: if access_ok, get_user, and put_user handled
+	 * sig_on_uaccess_error, this could go away.
+	 */
+
+	if (!access_ok(VERIFY_WRITE, (void __user *)ptr, size)) {
+		siginfo_t info;
 		struct thread_struct *thread = &current->thread;
 
-		thread->error_code	= X86_PF_USER | X86_PF_WRITE;
+		thread->error_code	= 6;  /* user fault, no page, write */
 		thread->cr2		= ptr;
 		thread->trap_nr		= X86_TRAP_PF;
 
-		force_sig_fault(SIGSEGV, SEGV_MAPERR, (void __user *)ptr);
+		memset(&info, 0, sizeof(info));
+		info.si_signo		= SIGSEGV;
+		info.si_errno		= 0;
+		info.si_code		= SEGV_MAPERR;
+		info.si_addr		= (void __user *)ptr;
+
+		force_sig_info(SIGSEGV, &info, current);
 		return false;
 	} else {
 		return true;
 	}
 }
 
-bool emulate_vsyscall(unsigned long error_code,
-		      struct pt_regs *regs, unsigned long address)
+bool emulate_vsyscall(struct pt_regs *regs, unsigned long address)
 {
+	struct task_struct *tsk;
 	unsigned long caller;
 	int vsyscall_nr, syscall_nr, tmp;
+	int prev_sig_on_uaccess_error;
 	long ret;
-	unsigned long orig_dx;
-
-	/* Write faults or kernel-privilege faults never get fixed up. */
-	if ((error_code & (X86_PF_WRITE | X86_PF_USER)) != X86_PF_USER)
-		return false;
-
-	if (!(error_code & X86_PF_INSTR)) {
-		/* Failed vsyscall read */
-		if (vsyscall_mode == EMULATE)
-			return false;
-
-		/*
-		 * User code tried and failed to read the vsyscall page.
-		 */
-		warn_bad_vsyscall(KERN_INFO, regs, "vsyscall read attempt denied -- look up the vsyscall kernel parameter if you need a workaround");
-		return false;
-	}
 
 	/*
 	 * No point in checking CS -- the only way to get here is a user mode
@@ -164,6 +156,8 @@ bool emulate_vsyscall(unsigned long error_code,
 				  "vsyscall with bad stack (exploit attempt?)");
 		goto sigsegv;
 	}
+
+	tsk = current;
 
 	/*
 	 * Check for access_ok violations and find the syscall nr.
@@ -206,14 +200,14 @@ bool emulate_vsyscall(unsigned long error_code,
 
 	/*
 	 * Handle seccomp.  regs->ip must be the original value.
-	 * See seccomp_send_sigsys and Documentation/userspace-api/seccomp_filter.rst.
+	 * See seccomp_send_sigsys and Documentation/prctl/seccomp_filter.txt.
 	 *
 	 * We could optimize the seccomp disabled case, but performance
 	 * here doesn't matter.
 	 */
 	regs->orig_ax = syscall_nr;
 	regs->ax = -ENOSYS;
-	tmp = secure_computing(NULL);
+	tmp = secure_computing();
 	if ((!tmp && regs->orig_ax != syscall_nr) || regs->ip != address) {
 		warn_bad_vsyscall(KERN_DEBUG, regs,
 				  "seccomp tried to change syscall nr or ip");
@@ -224,36 +218,48 @@ bool emulate_vsyscall(unsigned long error_code,
 		goto do_ret;  /* skip requested */
 
 	/*
-	 * With a real vsyscall, page faults cause SIGSEGV.
+	 * With a real vsyscall, page faults cause SIGSEGV.  We want to
+	 * preserve that behavior to make writing exploits harder.
 	 */
+	prev_sig_on_uaccess_error = current_thread_info()->sig_on_uaccess_error;
+	current_thread_info()->sig_on_uaccess_error = 1;
+
 	ret = -EFAULT;
 	switch (vsyscall_nr) {
 	case 0:
-		/* this decodes regs->di and regs->si on its own */
-		ret = __x64_sys_gettimeofday(regs);
+		ret = sys_gettimeofday(
+			(struct timeval __user *)regs->di,
+			(struct timezone __user *)regs->si);
 		break;
 
 	case 1:
-		/* this decodes regs->di on its own */
-		ret = __x64_sys_time(regs);
+		ret = sys_time((time_t __user *)regs->di);
 		break;
 
 	case 2:
-		/* while we could clobber regs->dx, we didn't in the past... */
-		orig_dx = regs->dx;
-		regs->dx = 0;
-		/* this decodes regs->di, regs->si and regs->dx on its own */
-		ret = __x64_sys_getcpu(regs);
-		regs->dx = orig_dx;
+		ret = sys_getcpu((unsigned __user *)regs->di,
+				 (unsigned __user *)regs->si,
+				 NULL);
 		break;
 	}
+
+	current_thread_info()->sig_on_uaccess_error = prev_sig_on_uaccess_error;
 
 check_fault:
 	if (ret == -EFAULT) {
 		/* Bad news -- userspace fed a bad pointer to a vsyscall. */
 		warn_bad_vsyscall(KERN_INFO, regs,
 				  "vsyscall fault (exploit attempt?)");
-		goto sigsegv;
+
+		/*
+		 * If we failed to generate a signal for any reason,
+		 * generate one here.  (This should be impossible.)
+		 */
+		if (WARN_ON_ONCE(!sigismember(&tsk->pending.signal, SIGBUS) &&
+				 !sigismember(&tsk->pending.signal, SIGSEGV)))
+			goto sigsegv;
+
+		return true;  /* Don't emulate the ret. */
 	}
 
 	regs->ax = ret;
@@ -265,7 +271,7 @@ do_ret:
 	return true;
 
 sigsegv:
-	force_sig(SIGSEGV);
+	force_sig(SIGSEGV, current);
 	return true;
 }
 
@@ -281,7 +287,7 @@ static const char *gate_vma_name(struct vm_area_struct *vma)
 static const struct vm_operations_struct gate_vma_ops = {
 	.name = gate_vma_name,
 };
-static struct vm_area_struct gate_vma __ro_after_init = {
+static struct vm_area_struct gate_vma = {
 	.vm_start	= VSYSCALL_ADDR,
 	.vm_end		= VSYSCALL_ADDR + PAGE_SIZE,
 	.vm_page_prot	= PAGE_READONLY_EXEC,
@@ -320,53 +326,16 @@ int in_gate_area_no_mm(unsigned long addr)
 	return vsyscall_mode != NONE && (addr & PAGE_MASK) == VSYSCALL_ADDR;
 }
 
-/*
- * The VSYSCALL page is the only user-accessible page in the kernel address
- * range.  Normally, the kernel page tables can have _PAGE_USER clear, but
- * the tables covering VSYSCALL_ADDR need _PAGE_USER set if vsyscalls
- * are enabled.
- *
- * Some day we may create a "minimal" vsyscall mode in which we emulate
- * vsyscalls but leave the page not present.  If so, we skip calling
- * this.
- */
-void __init set_vsyscall_pgtable_user_bits(pgd_t *root)
-{
-	pgd_t *pgd;
-	p4d_t *p4d;
-	pud_t *pud;
-	pmd_t *pmd;
-
-	pgd = pgd_offset_pgd(root, VSYSCALL_ADDR);
-	set_pgd(pgd, __pgd(pgd_val(*pgd) | _PAGE_USER));
-	p4d = p4d_offset(pgd, VSYSCALL_ADDR);
-#if CONFIG_PGTABLE_LEVELS >= 5
-	set_p4d(p4d, __p4d(p4d_val(*p4d) | _PAGE_USER));
-#endif
-	pud = pud_offset(p4d, VSYSCALL_ADDR);
-	set_pud(pud, __pud(pud_val(*pud) | _PAGE_USER));
-	pmd = pmd_offset(pud, VSYSCALL_ADDR);
-	set_pmd(pmd, __pmd(pmd_val(*pmd) | _PAGE_USER));
-}
-
 void __init map_vsyscall(void)
 {
 	extern char __vsyscall_page;
 	unsigned long physaddr_vsyscall = __pa_symbol(&__vsyscall_page);
 
-	/*
-	 * For full emulation, the page needs to exist for real.  In
-	 * execute-only mode, there is no PTE at all backing the vsyscall
-	 * page.
-	 */
-	if (vsyscall_mode == EMULATE) {
+	if (vsyscall_mode != NONE)
 		__set_fixmap(VSYSCALL_PAGE, physaddr_vsyscall,
-			     PAGE_KERNEL_VVAR);
-		set_vsyscall_pgtable_user_bits(swapper_pg_dir);
-	}
-
-	if (vsyscall_mode == XONLY)
-		gate_vma.vm_flags = VM_EXEC;
+			     vsyscall_mode == NATIVE
+			     ? PAGE_KERNEL_VSYSCALL
+			     : PAGE_KERNEL_VVAR);
 
 	BUILD_BUG_ON((unsigned long)__fix_to_virt(VSYSCALL_PAGE) !=
 		     (unsigned long)VSYSCALL_ADDR);

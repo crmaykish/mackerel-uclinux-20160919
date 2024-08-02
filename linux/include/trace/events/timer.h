@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM timer
 
@@ -37,13 +36,6 @@ DEFINE_EVENT(timer_class, timer_init,
 	TP_ARGS(timer)
 );
 
-#define decode_timer_flags(flags)			\
-	__print_flags(flags, "|",			\
-		{  TIMER_MIGRATING,	"M" },		\
-		{  TIMER_DEFERRABLE,	"D" },		\
-		{  TIMER_PINNED,	"P" },		\
-		{  TIMER_IRQSAFE,	"I" })
-
 /**
  * timer_start - called when the timer is started
  * @timer:	pointer to struct timer_list
@@ -73,12 +65,9 @@ TRACE_EVENT(timer_start,
 		__entry->flags		= flags;
 	),
 
-	TP_printk("timer=%p function=%ps expires=%lu [timeout=%ld] cpu=%u idx=%u flags=%s",
+	TP_printk("timer=%p function=%pf expires=%lu [timeout=%ld] flags=0x%08x",
 		  __entry->timer, __entry->function, __entry->expires,
-		  (long)__entry->expires - __entry->now,
-		  __entry->flags & TIMER_CPUMASK,
-		  __entry->flags >> TIMER_ARRAYSHIFT,
-		  decode_timer_flags(__entry->flags & TIMER_TRACE_FLAGMASK))
+		  (long)__entry->expires - __entry->now, __entry->flags)
 );
 
 /**
@@ -89,27 +78,23 @@ TRACE_EVENT(timer_start,
  */
 TRACE_EVENT(timer_expire_entry,
 
-	TP_PROTO(struct timer_list *timer, unsigned long baseclk),
+	TP_PROTO(struct timer_list *timer),
 
-	TP_ARGS(timer, baseclk),
+	TP_ARGS(timer),
 
 	TP_STRUCT__entry(
 		__field( void *,	timer	)
 		__field( unsigned long,	now	)
 		__field( void *,	function)
-		__field( unsigned long,	baseclk	)
 	),
 
 	TP_fast_assign(
 		__entry->timer		= timer;
 		__entry->now		= jiffies;
 		__entry->function	= timer->function;
-		__entry->baseclk	= baseclk;
 	),
 
-	TP_printk("timer=%p function=%ps now=%lu baseclk=%lu",
-		  __entry->timer, __entry->function, __entry->now,
-		  __entry->baseclk)
+	TP_printk("timer=%p function=%pf now=%lu", __entry->timer, __entry->function,__entry->now)
 );
 
 /**
@@ -140,28 +125,6 @@ DEFINE_EVENT(timer_class, timer_cancel,
 	TP_ARGS(timer)
 );
 
-#define decode_clockid(type)						\
-	__print_symbolic(type,						\
-		{ CLOCK_REALTIME,	"CLOCK_REALTIME"	},	\
-		{ CLOCK_MONOTONIC,	"CLOCK_MONOTONIC"	},	\
-		{ CLOCK_BOOTTIME,	"CLOCK_BOOTTIME"	},	\
-		{ CLOCK_TAI,		"CLOCK_TAI"		})
-
-#define decode_hrtimer_mode(mode)					\
-	__print_symbolic(mode,						\
-		{ HRTIMER_MODE_ABS,		"ABS"		},	\
-		{ HRTIMER_MODE_REL,		"REL"		},	\
-		{ HRTIMER_MODE_ABS_PINNED,	"ABS|PINNED"	},	\
-		{ HRTIMER_MODE_REL_PINNED,	"REL|PINNED"	},	\
-		{ HRTIMER_MODE_ABS_SOFT,	"ABS|SOFT"	},	\
-		{ HRTIMER_MODE_REL_SOFT,	"REL|SOFT"	},	\
-		{ HRTIMER_MODE_ABS_PINNED_SOFT,	"ABS|PINNED|SOFT" },	\
-		{ HRTIMER_MODE_REL_PINNED_SOFT,	"REL|PINNED|SOFT" },	\
-		{ HRTIMER_MODE_ABS_HARD,	"ABS|HARD" },		\
-		{ HRTIMER_MODE_REL_HARD,	"REL|HARD" },		\
-		{ HRTIMER_MODE_ABS_PINNED_HARD, "ABS|PINNED|HARD" },	\
-		{ HRTIMER_MODE_REL_PINNED_HARD,	"REL|PINNED|HARD" })
-
 /**
  * hrtimer_init - called when the hrtimer is initialized
  * @hrtimer:	pointer to struct hrtimer
@@ -188,8 +151,10 @@ TRACE_EVENT(hrtimer_init,
 	),
 
 	TP_printk("hrtimer=%p clockid=%s mode=%s", __entry->hrtimer,
-		  decode_clockid(__entry->clockid),
-		  decode_hrtimer_mode(__entry->mode))
+		  __entry->clockid == CLOCK_REALTIME ?
+			"CLOCK_REALTIME" : "CLOCK_MONOTONIC",
+		  __entry->mode == HRTIMER_MODE_ABS ?
+			"HRTIMER_MODE_ABS" : "HRTIMER_MODE_REL")
 );
 
 /**
@@ -198,31 +163,30 @@ TRACE_EVENT(hrtimer_init,
  */
 TRACE_EVENT(hrtimer_start,
 
-	TP_PROTO(struct hrtimer *hrtimer, enum hrtimer_mode mode),
+	TP_PROTO(struct hrtimer *hrtimer),
 
-	TP_ARGS(hrtimer, mode),
+	TP_ARGS(hrtimer),
 
 	TP_STRUCT__entry(
 		__field( void *,	hrtimer		)
 		__field( void *,	function	)
 		__field( s64,		expires		)
 		__field( s64,		softexpires	)
-		__field( enum hrtimer_mode,	mode	)
 	),
 
 	TP_fast_assign(
 		__entry->hrtimer	= hrtimer;
 		__entry->function	= hrtimer->function;
-		__entry->expires	= hrtimer_get_expires(hrtimer);
-		__entry->softexpires	= hrtimer_get_softexpires(hrtimer);
-		__entry->mode		= mode;
+		__entry->expires	= hrtimer_get_expires(hrtimer).tv64;
+		__entry->softexpires	= hrtimer_get_softexpires(hrtimer).tv64;
 	),
 
-	TP_printk("hrtimer=%p function=%ps expires=%llu softexpires=%llu "
-		  "mode=%s", __entry->hrtimer, __entry->function,
-		  (unsigned long long) __entry->expires,
-		  (unsigned long long) __entry->softexpires,
-		  decode_hrtimer_mode(__entry->mode))
+	TP_printk("hrtimer=%p function=%pf expires=%llu softexpires=%llu",
+		  __entry->hrtimer, __entry->function,
+		  (unsigned long long)ktime_to_ns((ktime_t) {
+				  .tv64 = __entry->expires }),
+		  (unsigned long long)ktime_to_ns((ktime_t) {
+				  .tv64 = __entry->softexpires }))
 );
 
 /**
@@ -247,14 +211,13 @@ TRACE_EVENT(hrtimer_expire_entry,
 
 	TP_fast_assign(
 		__entry->hrtimer	= hrtimer;
-		__entry->now		= *now;
+		__entry->now		= now->tv64;
 		__entry->function	= hrtimer->function;
 	),
 
-	TP_printk("hrtimer=%p function=%ps now=%llu",
-		  __entry->hrtimer, __entry->function,
-		  (unsigned long long) __entry->now)
-);
+	TP_printk("hrtimer=%p function=%pf now=%llu", __entry->hrtimer, __entry->function,
+		  (unsigned long long)ktime_to_ns((ktime_t) { .tv64 = __entry->now }))
+ );
 
 DECLARE_EVENT_CLASS(hrtimer_class,
 
@@ -308,17 +271,17 @@ DEFINE_EVENT(hrtimer_class, hrtimer_cancel,
 TRACE_EVENT(itimer_state,
 
 	TP_PROTO(int which, const struct itimerval *const value,
-		 unsigned long long expires),
+		 cputime_t expires),
 
 	TP_ARGS(which, value, expires),
 
 	TP_STRUCT__entry(
-		__field(	int,			which		)
-		__field(	unsigned long long,	expires		)
-		__field(	long,			value_sec	)
-		__field(	long,			value_usec	)
-		__field(	long,			interval_sec	)
-		__field(	long,			interval_usec	)
+		__field(	int,		which		)
+		__field(	cputime_t,	expires		)
+		__field(	long,		value_sec	)
+		__field(	long,		value_usec	)
+		__field(	long,		interval_sec	)
+		__field(	long,		interval_usec	)
 	),
 
 	TP_fast_assign(
@@ -331,7 +294,7 @@ TRACE_EVENT(itimer_state,
 	),
 
 	TP_printk("which=%d expires=%llu it_value=%ld.%ld it_interval=%ld.%ld",
-		  __entry->which, __entry->expires,
+		  __entry->which, (unsigned long long)__entry->expires,
 		  __entry->value_sec, __entry->value_usec,
 		  __entry->interval_sec, __entry->interval_usec)
 );
@@ -344,14 +307,14 @@ TRACE_EVENT(itimer_state,
  */
 TRACE_EVENT(itimer_expire,
 
-	TP_PROTO(int which, struct pid *pid, unsigned long long now),
+	TP_PROTO(int which, struct pid *pid, cputime_t now),
 
 	TP_ARGS(which, pid, now),
 
 	TP_STRUCT__entry(
-		__field( int ,			which	)
-		__field( pid_t,			pid	)
-		__field( unsigned long long,	now	)
+		__field( int ,		which	)
+		__field( pid_t,		pid	)
+		__field( cputime_t,	now	)
 	),
 
 	TP_fast_assign(
@@ -361,62 +324,27 @@ TRACE_EVENT(itimer_expire,
 	),
 
 	TP_printk("which=%d pid=%d now=%llu", __entry->which,
-		  (int) __entry->pid, __entry->now)
+		  (int) __entry->pid, (unsigned long long)__entry->now)
 );
 
 #ifdef CONFIG_NO_HZ_COMMON
-
-#define TICK_DEP_NAMES					\
-		tick_dep_mask_name(NONE)		\
-		tick_dep_name(POSIX_TIMER)		\
-		tick_dep_name(PERF_EVENTS)		\
-		tick_dep_name(SCHED)			\
-		tick_dep_name(CLOCK_UNSTABLE)		\
-		tick_dep_name_end(RCU)
-
-#undef tick_dep_name
-#undef tick_dep_mask_name
-#undef tick_dep_name_end
-
-/* The MASK will convert to their bits and they need to be processed too */
-#define tick_dep_name(sdep) TRACE_DEFINE_ENUM(TICK_DEP_BIT_##sdep); \
-	TRACE_DEFINE_ENUM(TICK_DEP_MASK_##sdep);
-#define tick_dep_name_end(sdep)  TRACE_DEFINE_ENUM(TICK_DEP_BIT_##sdep); \
-	TRACE_DEFINE_ENUM(TICK_DEP_MASK_##sdep);
-/* NONE only has a mask defined for it */
-#define tick_dep_mask_name(sdep) TRACE_DEFINE_ENUM(TICK_DEP_MASK_##sdep);
-
-TICK_DEP_NAMES
-
-#undef tick_dep_name
-#undef tick_dep_mask_name
-#undef tick_dep_name_end
-
-#define tick_dep_name(sdep) { TICK_DEP_MASK_##sdep, #sdep },
-#define tick_dep_mask_name(sdep) { TICK_DEP_MASK_##sdep, #sdep },
-#define tick_dep_name_end(sdep) { TICK_DEP_MASK_##sdep, #sdep }
-
-#define show_tick_dep_name(val)				\
-	__print_symbolic(val, TICK_DEP_NAMES)
-
 TRACE_EVENT(tick_stop,
 
-	TP_PROTO(int success, int dependency),
+	TP_PROTO(int success, char *error_msg),
 
-	TP_ARGS(success, dependency),
+	TP_ARGS(success, error_msg),
 
 	TP_STRUCT__entry(
 		__field( int ,		success	)
-		__field( int ,		dependency )
+		__string( msg, 		error_msg )
 	),
 
 	TP_fast_assign(
 		__entry->success	= success;
-		__entry->dependency	= dependency;
+		__assign_str(msg, error_msg);
 	),
 
-	TP_printk("success=%d dependency=%s",  __entry->success, \
-			show_tick_dep_name(__entry->dependency))
+	TP_printk("success=%s msg=%s",  __entry->success ? "yes" : "no", __get_str(msg))
 );
 #endif
 

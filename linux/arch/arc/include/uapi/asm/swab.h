@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
  *
@@ -75,7 +74,7 @@
 	__tmp ^ __in;						\
 })
 
-#elif (ARC_BSWAP_TYPE == 2)	/* Custom single cycle bswap instruction */
+#elif (ARC_BSWAP_TYPE == 2)	/* Custom single cycle bwap instruction */
 
 #define __arch_swab32(x)						\
 ({									\

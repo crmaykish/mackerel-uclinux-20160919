@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _PERF_UI_H_
 #define _PERF_UI_H_ 1
 
@@ -26,9 +25,5 @@ static inline void ui__exit(bool wait_for_ok __maybe_unused) {}
 #endif
 
 void ui__refresh_dimensions(bool force);
-
-struct option;
-
-int stdio__config_color(const struct option *opt, const char *mode, int unset);
 
 #endif /* _PERF_UI_H_ */

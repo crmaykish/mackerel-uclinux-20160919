@@ -1,7 +1,7 @@
 /*
  * Common signal handling code for both 32 and 64 bits
  *
- *    Copyright (c) 2007 Benjamin Herrenschmidt, IBM Corporation
+ *    Copyright (c) 2007 Benjamin Herrenschmidt, IBM Coproration
  *    Extracted from signal_32.c and signal_64.c
  *
  * This file is subject to the terms and conditions of the GNU General
@@ -14,10 +14,8 @@
 #include <linux/uprobes.h>
 #include <linux/key.h>
 #include <linux/context_tracking.h>
-#include <linux/livepatch.h>
-#include <linux/syscalls.h>
 #include <asm/hw_breakpoint.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/debug.h>
 #include <asm/tm.h>
@@ -44,7 +42,7 @@ void __user *get_sigframe(struct ksignal *ksig, unsigned long sp,
 	newsp = (oldsp - frame_size) & ~0xFUL;
 
 	/* Check access */
-	if (!access_ok((void __user *)newsp, oldsp - newsp))
+	if (!access_ok(VERIFY_WRITE, (void __user *)newsp, oldsp - newsp))
 		return NULL;
 
         return (void __user *)newsp;
@@ -101,24 +99,22 @@ static void check_syscall_restart(struct pt_regs *regs, struct k_sigaction *ka,
 	}
 }
 
-static void do_signal(struct task_struct *tsk)
+static void do_signal(struct pt_regs *regs)
 {
 	sigset_t *oldset = sigmask_to_save();
-	struct ksignal ksig = { .sig = 0 };
+	struct ksignal ksig;
 	int ret;
 	int is32 = is_32bit_task();
-
-	BUG_ON(tsk != current);
 
 	get_signal(&ksig);
 
 	/* Is there any syscall restart business here ? */
-	check_syscall_restart(tsk->thread.regs, &ksig.ka, ksig.sig > 0);
+	check_syscall_restart(regs, &ksig.ka, ksig.sig > 0);
 
 	if (ksig.sig <= 0) {
 		/* No signal to deliver -- put the saved sigmask back */
 		restore_saved_sigmask();
-		tsk->thread.regs->trap = 0;
+		regs->trap = 0;
 		return;               /* no signals delivered */
 	}
 
@@ -128,24 +124,23 @@ static void do_signal(struct task_struct *tsk)
 	 * user space. The DABR will have been cleared if it
 	 * triggered inside the kernel.
 	 */
-	if (tsk->thread.hw_brk.address && tsk->thread.hw_brk.type)
-		__set_breakpoint(&tsk->thread.hw_brk);
+	if (current->thread.hw_brk.address &&
+		current->thread.hw_brk.type)
+		__set_breakpoint(&current->thread.hw_brk);
 #endif
 	/* Re-enable the breakpoints for the signal stack */
-	thread_change_pc(tsk, tsk->thread.regs);
-
-	rseq_signal_deliver(&ksig, tsk->thread.regs);
+	thread_change_pc(current, regs);
 
 	if (is32) {
         	if (ksig.ka.sa.sa_flags & SA_SIGINFO)
-			ret = handle_rt_signal32(&ksig, oldset, tsk);
+			ret = handle_rt_signal32(&ksig, oldset, regs);
 		else
-			ret = handle_signal32(&ksig, oldset, tsk);
+			ret = handle_signal32(&ksig, oldset, regs);
 	} else {
-		ret = handle_rt_signal64(&ksig, oldset, tsk);
+		ret = handle_rt_signal64(&ksig, oldset, regs);
 	}
 
-	tsk->thread.regs->trap = 0;
+	regs->trap = 0;
 	signal_setup_done(ret, &ksig, test_thread_flag(TIF_SINGLESTEP));
 }
 
@@ -153,30 +148,21 @@ void do_notify_resume(struct pt_regs *regs, unsigned long thread_info_flags)
 {
 	user_exit();
 
-	/* Check valid addr_limit, TIF check is done there */
-	addr_limit_user_check();
-
 	if (thread_info_flags & _TIF_UPROBE)
 		uprobe_notify_resume(regs);
 
-	if (thread_info_flags & _TIF_PATCH_PENDING)
-		klp_update_patch_state(current);
-
-	if (thread_info_flags & _TIF_SIGPENDING) {
-		BUG_ON(regs != current->thread.regs);
-		do_signal(current);
-	}
+	if (thread_info_flags & _TIF_SIGPENDING)
+		do_signal(regs);
 
 	if (thread_info_flags & _TIF_NOTIFY_RESUME) {
 		clear_thread_flag(TIF_NOTIFY_RESUME);
 		tracehook_notify_resume(regs);
-		rseq_handle_notify_resume(NULL, regs);
 	}
 
 	user_enter();
 }
 
-unsigned long get_tm_stackpointer(struct task_struct *tsk)
+unsigned long get_tm_stackpointer(struct pt_regs *regs)
 {
 	/* When in an active transaction that takes a signal, we need to be
 	 * careful with the stack.  It's possible that the stack has moved back
@@ -192,7 +178,7 @@ unsigned long get_tm_stackpointer(struct task_struct *tsk)
 	 * need to use the stack pointer from the checkpointed state, rather
 	 * than the speculated state.  This ensures that the signal context
 	 * (written tm suspended) will be written below the stack required for
-	 * the rollback.  The transaction is aborted because of the treclaim,
+	 * the rollback.  The transaction is aborted becuase of the treclaim,
 	 * so any memory written between the tbegin and the signal will be
 	 * rolled back anyway.
 	 *
@@ -200,27 +186,12 @@ unsigned long get_tm_stackpointer(struct task_struct *tsk)
 	 * normal/non-checkpointed stack pointer.
 	 */
 
-	unsigned long ret = tsk->thread.regs->gpr[1];
-
 #ifdef CONFIG_PPC_TRANSACTIONAL_MEM
-	BUG_ON(tsk != current);
-
-	if (MSR_TM_ACTIVE(tsk->thread.regs->msr)) {
-		preempt_disable();
+	if (MSR_TM_ACTIVE(regs->msr)) {
 		tm_reclaim_current(TM_CAUSE_SIGNAL);
-		if (MSR_TM_TRANSACTIONAL(tsk->thread.regs->msr))
-			ret = tsk->thread.ckpt_regs.gpr[1];
-
-		/*
-		 * If we treclaim, we must clear the current thread's TM bits
-		 * before re-enabling preemption. Otherwise we might be
-		 * preempted and have the live MSR[TS] changed behind our back
-		 * (tm_recheckpoint_new_task() would recheckpoint). Besides, we
-		 * enter the signal handler in non-transactional state.
-		 */
-		tsk->thread.regs->msr &= ~MSR_TS_MASK;
-		preempt_enable();
+		if (MSR_TM_TRANSACTIONAL(regs->msr))
+			return current->thread.ckpt_regs.gpr[1];
 	}
 #endif
-	return ret;
+	return regs->gpr[1];
 }

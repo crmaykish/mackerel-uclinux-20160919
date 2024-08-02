@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/init.h>
@@ -46,10 +45,10 @@ static void __init memtest(u64 pattern, phys_addr_t start_phys, phys_addr_t size
 	last_bad = 0;
 
 	for (p = start; p < end; p++)
-		WRITE_ONCE(*p, pattern);
+		*p = pattern;
 
 	for (p = start; p < end; p++, start_phys_aligned += incr) {
-		if (READ_ONCE(*p) == pattern)
+		if (*p == pattern)
 			continue;
 		if (start_phys_aligned == last_bad + incr) {
 			last_bad += incr;

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /dts-v1/;
 
 #include "kirkwood.dtsi"
@@ -61,7 +60,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		power {
+		button@1 {
 			label = "Power push button";
 			linux,code = <KEY_POWER>;
 			gpios = <&gpio0 16 GPIO_ACTIVE_LOW>;

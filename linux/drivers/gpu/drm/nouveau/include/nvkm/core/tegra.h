@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: MIT */
 #ifndef __NVKM_DEVICE_TEGRA_H__
 #define __NVKM_DEVICE_TEGRA_H__
 #include <core/device.h>
@@ -12,7 +11,6 @@ struct nvkm_device_tegra {
 
 	struct reset_control *rst;
 	struct clk *clk;
-	struct clk *clk_ref;
 	struct clk *clk_pwr;
 
 	struct regulator *vdd;
@@ -29,7 +27,6 @@ struct nvkm_device_tegra {
 	} iommu;
 
 	int gpu_speedo;
-	int gpu_speedo_id;
 };
 
 struct nvkm_device_tegra_func {
@@ -39,14 +36,6 @@ struct nvkm_device_tegra_func {
 	 * bypassed). A value of 0 means an IOMMU is never used.
 	 */
 	u8 iommu_bit;
-	/*
-	 * Whether the chip requires a reference clock
-	 */
-	bool require_ref_clk;
-	/*
-	 * Whether the chip requires the VDD regulator
-	 */
-	bool require_vdd;
 };
 
 int nvkm_device_tegra_new(const struct nvkm_device_tegra_func *,

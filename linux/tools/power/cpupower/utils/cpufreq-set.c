@@ -1,6 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  (C) 2004-2009  Dominik Brodowski <linux@dominikbrodowski.de>
+ *
+ *  Licensed under the terms of the GNU GPL License version 2.
  */
 
 
@@ -15,8 +16,8 @@
 #include <getopt.h>
 
 #include "cpufreq.h"
-#include "cpuidle.h"
 #include "helpers/helpers.h"
+#include "helpers/sysfs.h"
 
 #define NORM_FREQ_LEN 32
 
@@ -295,7 +296,7 @@ int cmd_freq_set(int argc, char **argv)
 			struct cpufreq_affected_cpus *cpus;
 
 			if (!bitmask_isbitset(cpus_chosen, cpu) ||
-			    cpupower_is_cpu_online(cpu) != 1)
+			    cpufreq_cpu_exists(cpu))
 				continue;
 
 			cpus = cpufreq_get_related_cpus(cpu);
@@ -305,8 +306,6 @@ int cmd_freq_set(int argc, char **argv)
 				bitmask_setbit(cpus_chosen, cpus->cpu);
 				cpus = cpus->next;
 			}
-			/* Set the last cpu in related cpus list */
-			bitmask_setbit(cpus_chosen, cpus->cpu);
 			cpufreq_put_related_cpus(cpus);
 		}
 	}
@@ -317,7 +316,10 @@ int cmd_freq_set(int argc, char **argv)
 	     cpu <= bitmask_last(cpus_chosen); cpu++) {
 
 		if (!bitmask_isbitset(cpus_chosen, cpu) ||
-		    cpupower_is_cpu_online(cpu) != 1)
+		    cpufreq_cpu_exists(cpu))
+			continue;
+
+		if (sysfs_is_cpu_online(cpu) != 1)
 			continue;
 
 		printf(_("Setting cpu: %d\n"), cpu);

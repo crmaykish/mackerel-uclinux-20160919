@@ -1,16 +1,26 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Driver for the Conexant CX23885 PCIe bridge
  *
  *  Copyright (c) 2007 Steven Toth <stoth@linuxtv.org>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *
+ *  GNU General Public License for more details.
  */
-
-#include "cx23885.h"
 
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/init.h>
+
+#include "cx23885.h"
 
 static unsigned int vbibufs = 4;
 module_param(vbibufs, int, 0644);
@@ -22,8 +32,7 @@ MODULE_PARM_DESC(vbi_debug, "enable debug messages [vbi]");
 
 #define dprintk(level, fmt, arg...)\
 	do { if (vbi_debug >= level)\
-		printk(KERN_DEBUG pr_fmt("%s: vbi:" fmt), \
-			__func__, ##arg); \
+		printk(KERN_DEBUG "%s/0: " fmt, dev->name, ## arg);\
 	} while (0)
 
 /* ------------------------------------------------------------------ */
@@ -74,7 +83,7 @@ int cx23885_vbi_irq(struct cx23885_dev *dev, u32 status)
 	if (status & VID_BC_MSK_VBI_RISCI1) {
 		dprintk(1, "%s() VID_BC_MSK_VBI_RISCI1\n", __func__);
 		spin_lock(&dev->slock);
-		count = cx_read(VBI_A_GPCNT);
+		count = cx_read(VID_A_GPCNT);
 		cx23885_video_wakeup(dev, &dev->vbiq, count);
 		spin_unlock(&dev->slock);
 		handled++;
@@ -94,6 +103,7 @@ static int cx23885_start_vbi_dma(struct cx23885_dev    *dev,
 				VBI_LINE_LENGTH, buf->risc.dma);
 
 	/* reset counter */
+	cx_write(VID_A_GPCNT_CTL, 3);
 	cx_write(VID_A_VBI_CTRL, 3);
 	cx_write(VBI_A_GPCNT_CTL, 3);
 	q->count = 0;
@@ -111,9 +121,9 @@ static int cx23885_start_vbi_dma(struct cx23885_dev    *dev,
 
 /* ------------------------------------------------------------------ */
 
-static int queue_setup(struct vb2_queue *q,
+static int queue_setup(struct vb2_queue *q, const void *parg,
 			   unsigned int *num_buffers, unsigned int *num_planes,
-			   unsigned int sizes[], struct device *alloc_devs[])
+			   unsigned int sizes[], void *alloc_ctxs[])
 {
 	struct cx23885_dev *dev = q->drv_priv;
 	unsigned lines = VBI_PAL_LINE_COUNT;
@@ -122,6 +132,7 @@ static int queue_setup(struct vb2_queue *q,
 		lines = VBI_NTSC_LINE_COUNT;
 	*num_planes = 1;
 	sizes[0] = lines * VBI_LINE_LENGTH * 2;
+	alloc_ctxs[0] = dev->alloc_ctx;
 	return 0;
 }
 
@@ -244,7 +255,7 @@ static void cx23885_stop_streaming(struct vb2_queue *q)
 }
 
 
-const struct vb2_ops cx23885_vbi_qops = {
+struct vb2_ops cx23885_vbi_qops = {
 	.queue_setup    = queue_setup,
 	.buf_prepare  = buffer_prepare,
 	.buf_finish = buffer_finish,

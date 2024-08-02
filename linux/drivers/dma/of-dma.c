@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Device tree helpers for DMA request / controller
  *
  * Based on of_gpio.c
  *
  * Copyright (C) 2012 Texas Instruments Incorporated - http://www.ti.com/
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/device.h>
@@ -35,8 +38,8 @@ static struct of_dma *of_dma_find_controller(struct of_phandle_args *dma_spec)
 		if (ofdma->of_node == dma_spec->np)
 			return ofdma;
 
-	pr_debug("%s: can't find DMA controller %pOF\n", __func__,
-		 dma_spec->np);
+	pr_debug("%s: can't find DMA controller %s\n", __func__,
+		 dma_spec->np->full_name);
 
 	return NULL;
 }
@@ -65,23 +68,18 @@ static struct dma_chan *of_dma_router_xlate(struct of_phandle_args *dma_spec,
 		return NULL;
 
 	ofdma_target = of_dma_find_controller(&dma_spec_target);
-	if (!ofdma_target) {
-		ofdma->dma_router->route_free(ofdma->dma_router->dev,
-					      route_data);
-		chan = ERR_PTR(-EPROBE_DEFER);
-		goto err;
-	}
+	if (!ofdma_target)
+		return NULL;
 
 	chan = ofdma_target->of_dma_xlate(&dma_spec_target, ofdma_target);
-	if (IS_ERR_OR_NULL(chan)) {
-		ofdma->dma_router->route_free(ofdma->dma_router->dev,
-					      route_data);
-	} else {
+	if (chan) {
 		chan->router = ofdma->dma_router;
 		chan->route_data = route_data;
+	} else {
+		ofdma->dma_router->route_free(ofdma->dma_router->dev,
+					      route_data);
 	}
 
-err:
 	/*
 	 * Need to put the node back since the ofdma->of_dma_route_allocate
 	 * has taken it for generating the new, translated dma_spec
@@ -242,9 +240,8 @@ struct dma_chan *of_dma_request_slave_channel(struct device_node *np,
 	struct of_phandle_args	dma_spec;
 	struct of_dma		*ofdma;
 	struct dma_chan		*chan;
-	int			count, i, start;
+	int			count, i;
 	int			ret_no_channel = -ENODEV;
-	static atomic_t		last_index;
 
 	if (!np || !name) {
 		pr_err("%s: not enough information provided\n", __func__);
@@ -257,20 +254,13 @@ struct dma_chan *of_dma_request_slave_channel(struct device_node *np,
 
 	count = of_property_count_strings(np, "dma-names");
 	if (count < 0) {
-		pr_err("%s: dma-names property of node '%pOF' missing or empty\n",
-			__func__, np);
+		pr_err("%s: dma-names property of node '%s' missing or empty\n",
+			__func__, np->full_name);
 		return ERR_PTR(-ENODEV);
 	}
 
-	/*
-	 * approximate an average distribution across multiple
-	 * entries with the same name
-	 */
-	start = atomic_inc_return(&last_index);
 	for (i = 0; i < count; i++) {
-		if (of_dma_match_channel(np, name,
-					 (i + start) % count,
-					 &dma_spec))
+		if (of_dma_match_channel(np, name, i, &dma_spec))
 			continue;
 
 		mutex_lock(&of_dma_lock);
@@ -318,8 +308,8 @@ struct dma_chan *of_dma_simple_xlate(struct of_phandle_args *dma_spec,
 	if (count != 1)
 		return NULL;
 
-	return __dma_request_channel(&info->dma_cap, info->filter_fn,
-				     &dma_spec->args[0], dma_spec->np);
+	return dma_request_channel(info->dma_cap, info->filter_fn,
+			&dma_spec->args[0]);
 }
 EXPORT_SYMBOL_GPL(of_dma_simple_xlate);
 

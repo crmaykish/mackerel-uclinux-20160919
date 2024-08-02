@@ -39,6 +39,7 @@ cpuflags-$(CONFIG_M68040)	:= -m68040
 endif
 cpuflags-$(CONFIG_M68030)	:=
 cpuflags-$(CONFIG_M68020)	:=
+cpuflags-$(CONFIG_M68360)	:= -m68332
 cpuflags-$(CONFIG_M68000)	:= -m68000
 cpuflags-$(CONFIG_M5441x)	:= $(call cc-option,-mcpu=54455,-mcfv4e)
 cpuflags-$(CONFIG_M54xx)	:= $(call cc-option,-mcpu=5475,-m5200)
@@ -58,10 +59,7 @@ cpuflags-$(CONFIG_M5206e)	:= $(call cc-option,-mcpu=5206e,-m5200)
 cpuflags-$(CONFIG_M5206)	:= $(call cc-option,-mcpu=5206,-m5200)
 
 KBUILD_AFLAGS += $(cpuflags-y)
-KBUILD_CFLAGS += $(cpuflags-y)
-
-KBUILD_CFLAGS += -pipe -ffreestanding
-
+KBUILD_CFLAGS += $(cpuflags-y) -pipe
 ifdef CONFIG_MMU
 # without -fno-strength-reduce the 53c7xx.c driver fails ;-(
 KBUILD_CFLAGS += -fno-strength-reduce -ffixed-a2
@@ -72,8 +70,8 @@ KBUILD_CFLAGS += -D__uClinux__
 KBUILD_AFLAGS += -D__uClinux__
 endif
 
-KBUILD_LDFLAGS := -m m68kelf
-KBUILD_LDS_MODULE += $(srctree)/arch/m68k/kernel/module.lds
+LDFLAGS := -m m68kelf
+KBUILD_LDFLAGS_MODULE += -T $(srctree)/arch/m68k/kernel/module.lds
 
 ifdef CONFIG_SUN3
 LDFLAGS_vmlinux = -N
@@ -94,6 +92,7 @@ endif
 #
 head-y				:= arch/m68k/kernel/head.o
 head-$(CONFIG_SUN3)		:= arch/m68k/kernel/sun3-head.o
+head-$(CONFIG_M68360)		:= arch/m68k/68360/head.o
 head-$(CONFIG_M68000)		:= arch/m68k/68000/head.o
 head-$(CONFIG_COLDFIRE)		:= arch/m68k/coldfire/head.o
 
@@ -115,6 +114,7 @@ core-$(CONFIG_NATFEAT)		+= arch/m68k/emu/
 core-$(CONFIG_M68040)		+= arch/m68k/fpsp040/
 core-$(CONFIG_M68060)		+= arch/m68k/ifpsp060/
 core-$(CONFIG_M68KFPU_EMU)	+= arch/m68k/math-emu/
+core-$(CONFIG_M68360)		+= arch/m68k/68360/
 core-$(CONFIG_M68000)		+= arch/m68k/68000/
 core-$(CONFIG_COLDFIRE)		+= arch/m68k/coldfire/
 
@@ -135,10 +135,10 @@ vmlinux.gz: vmlinux
 ifndef CONFIG_KGDB
 	cp vmlinux vmlinux.tmp
 	$(STRIP) vmlinux.tmp
-	$(KGZIP) -9c vmlinux.tmp >vmlinux.gz
+	gzip -9c vmlinux.tmp >vmlinux.gz
 	rm vmlinux.tmp
 else
-	$(KGZIP) -9c vmlinux >vmlinux.gz
+	gzip -9c vmlinux >vmlinux.gz
 endif
 
 bzImage: vmlinux.bz2
@@ -148,17 +148,14 @@ vmlinux.bz2: vmlinux
 ifndef CONFIG_KGDB
 	cp vmlinux vmlinux.tmp
 	$(STRIP) vmlinux.tmp
-	$(KBZIP2) -1c vmlinux.tmp >vmlinux.bz2
+	bzip2 -1c vmlinux.tmp >vmlinux.bz2
 	rm vmlinux.tmp
 else
-	$(KBZIP2) -1c vmlinux >vmlinux.bz2
+	bzip2 -1c vmlinux >vmlinux.bz2
 endif
 
 archclean:
 	rm -f vmlinux.gz vmlinux.bz2
-
-archheaders:
-	$(Q)$(MAKE) $(build)=arch/m68k/kernel/syscalls all
 
 install:
 	sh $(srctree)/arch/m68k/install.sh $(KERNELRELEASE) vmlinux.gz System.map "$(INSTALL_PATH)"

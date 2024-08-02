@@ -1,5 +1,30 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright(c) 1999 - 2018 Intel Corporation. */
+/*******************************************************************************
+
+  Intel 10 Gigabit PCI Express Linux driver
+  Copyright(c) 1999 - 2014 Intel Corporation.
+
+  This program is free software; you can redistribute it and/or modify it
+  under the terms and conditions of the GNU General Public License,
+  version 2, as published by the Free Software Foundation.
+
+  This program is distributed in the hope it will be useful, but WITHOUT
+  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+  more details.
+
+  You should have received a copy of the GNU General Public License along with
+  this program; if not, write to the Free Software Foundation, Inc.,
+  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+
+  The full GNU General Public License is included in this distribution in
+  the file called "COPYING".
+
+  Contact Information:
+  Linux NICS <linux.nics@intel.com>
+  e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
+  Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+
+*******************************************************************************/
 
 #include <linux/pci.h>
 #include <linux/delay.h>
@@ -114,6 +139,8 @@ static s32 ixgbe_init_phy_ops_82598(struct ixgbe_hw *hw)
 	case ixgbe_phy_tn:
 		phy->ops.setup_link = &ixgbe_setup_phy_link_tnx;
 		phy->ops.check_link = &ixgbe_check_phy_link_tnx;
+		phy->ops.get_firmware_version =
+			     &ixgbe_get_phy_firmware_version_tnx;
 		break;
 	case ixgbe_phy_nl:
 		phy->ops.reset = &ixgbe_reset_phy_nl;
@@ -123,14 +150,14 @@ static s32 ixgbe_init_phy_ops_82598(struct ixgbe_hw *hw)
 		if (ret_val)
 			return ret_val;
 		if (hw->phy.sfp_type == ixgbe_sfp_type_unknown)
-			return -EOPNOTSUPP;
+			return IXGBE_ERR_SFP_NOT_SUPPORTED;
 
 		/* Check to see if SFP+ module is supported */
 		ret_val = ixgbe_get_sfp_init_sequence_offsets(hw,
 							    &list_offset,
 							    &data_offset);
 		if (ret_val)
-			return -EOPNOTSUPP;
+			return IXGBE_ERR_SFP_NOT_SUPPORTED;
 		break;
 	default:
 		break;
@@ -150,9 +177,31 @@ static s32 ixgbe_init_phy_ops_82598(struct ixgbe_hw *hw)
  **/
 static s32 ixgbe_start_hw_82598(struct ixgbe_hw *hw)
 {
+#ifndef CONFIG_SPARC
+	u32 regval;
+	u32 i;
+#endif
 	s32 ret_val;
 
 	ret_val = ixgbe_start_hw_generic(hw);
+
+#ifndef CONFIG_SPARC
+	/* Disable relaxed ordering */
+	for (i = 0; ((i < hw->mac.max_tx_queues) &&
+	     (i < IXGBE_DCA_MAX_QUEUES_82598)); i++) {
+		regval = IXGBE_READ_REG(hw, IXGBE_DCA_TXCTRL(i));
+		regval &= ~IXGBE_DCA_TXCTRL_DESC_WRO_EN;
+		IXGBE_WRITE_REG(hw, IXGBE_DCA_TXCTRL(i), regval);
+	}
+
+	for (i = 0; ((i < hw->mac.max_rx_queues) &&
+	     (i < IXGBE_DCA_MAX_QUEUES_82598)); i++) {
+		regval = IXGBE_READ_REG(hw, IXGBE_DCA_RXCTRL(i));
+		regval &= ~(IXGBE_DCA_RXCTRL_DATA_WRO_EN |
+			    IXGBE_DCA_RXCTRL_HEAD_WRO_EN);
+		IXGBE_WRITE_REG(hw, IXGBE_DCA_RXCTRL(i), regval);
+	}
+#endif
 	if (ret_val)
 		return ret_val;
 
@@ -213,7 +262,7 @@ static s32 ixgbe_get_link_capabilities_82598(struct ixgbe_hw *hw,
 		break;
 
 	default:
-		return -EIO;
+		return IXGBE_ERR_LINK_SETUP;
 	}
 
 	return 0;
@@ -283,7 +332,7 @@ static s32 ixgbe_fc_enable_82598(struct ixgbe_hw *hw)
 
 	/* Validate the water mark configuration */
 	if (!hw->fc.pause_time)
-		return -EINVAL;
+		return IXGBE_ERR_INVALID_LINK_SETTINGS;
 
 	/* Low water mark of zero causes XOFF floods */
 	for (i = 0; i < MAX_TRAFFIC_CLASS; i++) {
@@ -292,7 +341,7 @@ static s32 ixgbe_fc_enable_82598(struct ixgbe_hw *hw)
 			if (!hw->fc.low_water[i] ||
 			    hw->fc.low_water[i] >= hw->fc.high_water[i]) {
 				hw_dbg(hw, "Invalid water mark configuration\n");
-				return -EINVAL;
+				return IXGBE_ERR_INVALID_LINK_SETTINGS;
 			}
 		}
 	}
@@ -318,7 +367,7 @@ static s32 ixgbe_fc_enable_82598(struct ixgbe_hw *hw)
 	}
 
 	/* Negotiate the fc mode to use */
-	hw->mac.ops.fc_autoneg(hw);
+	ixgbe_fc_autoneg(hw);
 
 	/* Disable any previous flow control settings */
 	fctrl_reg = IXGBE_READ_REG(hw, IXGBE_FCTRL);
@@ -369,7 +418,7 @@ static s32 ixgbe_fc_enable_82598(struct ixgbe_hw *hw)
 		break;
 	default:
 		hw_dbg(hw, "Flow control param set incorrectly\n");
-		return -EIO;
+		return IXGBE_ERR_CONFIG;
 	}
 
 	/* Set 802.3x based flow control settings. */
@@ -406,7 +455,6 @@ static s32 ixgbe_fc_enable_82598(struct ixgbe_hw *hw)
 /**
  *  ixgbe_start_mac_link_82598 - Configures MAC link settings
  *  @hw: pointer to hardware structure
- *  @autoneg_wait_to_complete: true when waiting for completion is needed
  *
  *  Configures link settings based on values in the ixgbe_hw struct.
  *  Restarts the link.  Performs autonegotiation if needed.
@@ -438,7 +486,7 @@ static s32 ixgbe_start_mac_link_82598(struct ixgbe_hw *hw,
 				msleep(100);
 			}
 			if (!(links_reg & IXGBE_LINKS_KX_AN_COMP)) {
-				status = -EIO;
+				status = IXGBE_ERR_AUTONEG_NOT_COMPLETE;
 				hw_dbg(hw, "Autonegotiation did not complete.\n");
 			}
 		}
@@ -478,7 +526,7 @@ static s32 ixgbe_validate_link_ready(struct ixgbe_hw *hw)
 
 	if (timeout == IXGBE_VALIDATE_LINK_READY_TIMEOUT) {
 		hw_dbg(hw, "Link was indicated but link is down\n");
-		return -EIO;
+		return IXGBE_ERR_LINK_SETUP;
 	}
 
 	return 0;
@@ -594,7 +642,7 @@ static s32 ixgbe_setup_mac_link_82598(struct ixgbe_hw *hw,
 	speed &= link_capabilities;
 
 	if (speed == IXGBE_LINK_SPEED_UNKNOWN)
-		return -EINVAL;
+		return IXGBE_ERR_LINK_SETUP;
 
 	/* Set KX4/KX support according to speed requested */
 	else if (link_mode == IXGBE_AUTOC_LMS_KX4_AN ||
@@ -701,9 +749,9 @@ static s32 ixgbe_reset_hw_82598(struct ixgbe_hw *hw)
 
 		/* Init PHY and function pointers, perform SFP setup */
 		phy_status = hw->phy.ops.init(hw);
-		if (phy_status == -EOPNOTSUPP)
+		if (phy_status == IXGBE_ERR_SFP_NOT_SUPPORTED)
 			return phy_status;
-		if (phy_status == -ENOENT)
+		if (phy_status == IXGBE_ERR_SFP_NOT_PRESENT)
 			goto mac_reset_top;
 
 		hw->phy.ops.reset(hw);
@@ -717,17 +765,16 @@ mac_reset_top:
 	ctrl = IXGBE_READ_REG(hw, IXGBE_CTRL) | IXGBE_CTRL_RST;
 	IXGBE_WRITE_REG(hw, IXGBE_CTRL, ctrl);
 	IXGBE_WRITE_FLUSH(hw);
-	usleep_range(1000, 1200);
 
 	/* Poll for reset bit to self-clear indicating reset is complete */
 	for (i = 0; i < 10; i++) {
+		udelay(1);
 		ctrl = IXGBE_READ_REG(hw, IXGBE_CTRL);
 		if (!(ctrl & IXGBE_CTRL_RST))
 			break;
-		udelay(1);
 	}
 	if (ctrl & IXGBE_CTRL_RST) {
-		status = -EIO;
+		status = IXGBE_ERR_RESET_FAILED;
 		hw_dbg(hw, "Reset polling failed to complete.\n");
 	}
 
@@ -744,7 +791,7 @@ mac_reset_top:
 	}
 
 	gheccr = IXGBE_READ_REG(hw, IXGBE_GHECCR);
-	gheccr &= ~(BIT(21) | BIT(18) | BIT(9) | BIT(6));
+	gheccr &= ~((1 << 21) | (1 << 18) | (1 << 9) | (1 << 6));
 	IXGBE_WRITE_REG(hw, IXGBE_GHECCR, gheccr);
 
 	/*
@@ -789,7 +836,7 @@ static s32 ixgbe_set_vmdq_82598(struct ixgbe_hw *hw, u32 rar, u32 vmdq)
 	/* Make sure we are using a valid rar index range */
 	if (rar >= rar_entries) {
 		hw_dbg(hw, "RAR index %d is out of range.\n", rar);
-		return -EINVAL;
+		return IXGBE_ERR_INVALID_ARGUMENT;
 	}
 
 	rar_high = IXGBE_READ_REG(hw, IXGBE_RAH(rar));
@@ -814,7 +861,7 @@ static s32 ixgbe_clear_vmdq_82598(struct ixgbe_hw *hw, u32 rar, u32 vmdq)
 	/* Make sure we are using a valid rar index range */
 	if (rar >= rar_entries) {
 		hw_dbg(hw, "RAR index %d is out of range.\n", rar);
-		return -EINVAL;
+		return IXGBE_ERR_INVALID_ARGUMENT;
 	}
 
 	rar_high = IXGBE_READ_REG(hw, IXGBE_RAH(rar));
@@ -832,12 +879,11 @@ static s32 ixgbe_clear_vmdq_82598(struct ixgbe_hw *hw, u32 rar, u32 vmdq)
  *  @vlan: VLAN id to write to VLAN filter
  *  @vind: VMDq output index that maps queue to VLAN id in VFTA
  *  @vlan_on: boolean flag to turn on/off VLAN in VFTA
- *  @vlvf_bypass: boolean flag - unused
  *
  *  Turn on/off specified VLAN in the VLAN filter table.
  **/
 static s32 ixgbe_set_vfta_82598(struct ixgbe_hw *hw, u32 vlan, u32 vind,
-				bool vlan_on, bool vlvf_bypass)
+				bool vlan_on)
 {
 	u32 regindex;
 	u32 bitindex;
@@ -845,7 +891,7 @@ static s32 ixgbe_set_vfta_82598(struct ixgbe_hw *hw, u32 vlan, u32 vind,
 	u32 vftabyte;
 
 	if (vlan > 4095)
-		return -EINVAL;
+		return IXGBE_ERR_PARAM;
 
 	/* Determine 32-bit word position in array */
 	regindex = (vlan >> 5) & 0x7F;   /* upper seven bits */
@@ -866,10 +912,10 @@ static s32 ixgbe_set_vfta_82598(struct ixgbe_hw *hw, u32 vlan, u32 vind,
 	bits = IXGBE_READ_REG(hw, IXGBE_VFTA(regindex));
 	if (vlan_on)
 		/* Turn on this VLAN id */
-		bits |= BIT(bitindex);
+		bits |= (1 << bitindex);
 	else
 		/* Turn off this VLAN id */
-		bits &= ~BIT(bitindex);
+		bits &= ~(1 << bitindex);
 	IXGBE_WRITE_REG(hw, IXGBE_VFTA(regindex), bits);
 
 	return 0;
@@ -964,7 +1010,7 @@ static s32 ixgbe_read_i2c_phy_82598(struct ixgbe_hw *hw, u8 dev_addr,
 		gssr = IXGBE_GSSR_PHY0_SM;
 
 	if (hw->mac.ops.acquire_swfw_sync(hw, gssr) != 0)
-		return -EBUSY;
+		return IXGBE_ERR_SWFW_SYNC;
 
 	if (hw->phy.type == ixgbe_phy_nl) {
 		/*
@@ -993,7 +1039,7 @@ static s32 ixgbe_read_i2c_phy_82598(struct ixgbe_hw *hw, u8 dev_addr,
 
 		if (sfp_stat != IXGBE_I2C_EEPROM_STATUS_PASS) {
 			hw_dbg(hw, "EEPROM read did not pass.\n");
-			status = -ENOENT;
+			status = IXGBE_ERR_SFP_NOT_PRESENT;
 			goto out;
 		}
 
@@ -1003,7 +1049,7 @@ static s32 ixgbe_read_i2c_phy_82598(struct ixgbe_hw *hw, u8 dev_addr,
 
 		*eeprom_data = (u8)(sfp_data >> 8);
 	} else {
-		status = -EIO;
+		status = IXGBE_ERR_PHY;
 	}
 
 out:
@@ -1030,7 +1076,7 @@ static s32 ixgbe_read_i2c_eeprom_82598(struct ixgbe_hw *hw, u8 byte_offset,
  *  ixgbe_read_i2c_sff8472_82598 - Reads 8 bit word over I2C interface.
  *  @hw: pointer to hardware structure
  *  @byte_offset: byte offset at address 0xA2
- *  @sff8472_data: value read
+ *  @eeprom_data: value read
  *
  *  Performs 8 byte read operation to SFP module's SFF-8472 data over I2C
  **/
@@ -1112,7 +1158,7 @@ static void ixgbe_set_rxpba_82598(struct ixgbe_hw *hw, int num_pb,
 		IXGBE_WRITE_REG(hw, IXGBE_TXPBSIZE(i), IXGBE_TXPBSIZE_40KB);
 }
 
-static const struct ixgbe_mac_operations mac_ops_82598 = {
+static struct ixgbe_mac_operations mac_ops_82598 = {
 	.init_hw		= &ixgbe_init_hw_generic,
 	.reset_hw		= &ixgbe_reset_hw_82598,
 	.start_hw		= &ixgbe_start_hw_82598,
@@ -1131,7 +1177,6 @@ static const struct ixgbe_mac_operations mac_ops_82598 = {
 	.get_link_capabilities	= &ixgbe_get_link_capabilities_82598,
 	.led_on			= &ixgbe_led_on_generic,
 	.led_off		= &ixgbe_led_off_generic,
-	.init_led_link_act	= ixgbe_init_led_link_act_generic,
 	.blink_led_start	= &ixgbe_blink_led_start_generic,
 	.blink_led_stop		= &ixgbe_blink_led_stop_generic,
 	.set_rar		= &ixgbe_set_rar_generic,
@@ -1145,12 +1190,9 @@ static const struct ixgbe_mac_operations mac_ops_82598 = {
 	.clear_vfta		= &ixgbe_clear_vfta_82598,
 	.set_vfta		= &ixgbe_set_vfta_82598,
 	.fc_enable		= &ixgbe_fc_enable_82598,
-	.setup_fc		= ixgbe_setup_fc_generic,
-	.fc_autoneg		= ixgbe_fc_autoneg,
 	.set_fw_drv_ver         = NULL,
 	.acquire_swfw_sync      = &ixgbe_acquire_swfw_sync,
 	.release_swfw_sync      = &ixgbe_release_swfw_sync,
-	.init_swfw_sync		= NULL,
 	.get_thermal_sensor_data = NULL,
 	.init_thermal_sensor_thresh = NULL,
 	.prot_autoc_read	= &prot_autoc_read_generic,
@@ -1159,7 +1201,7 @@ static const struct ixgbe_mac_operations mac_ops_82598 = {
 	.disable_rx		= &ixgbe_disable_rx_generic,
 };
 
-static const struct ixgbe_eeprom_operations eeprom_ops_82598 = {
+static struct ixgbe_eeprom_operations eeprom_ops_82598 = {
 	.init_params		= &ixgbe_init_eeprom_params_generic,
 	.read			= &ixgbe_read_eerd_generic,
 	.write			= &ixgbe_write_eeprom_generic,
@@ -1170,7 +1212,7 @@ static const struct ixgbe_eeprom_operations eeprom_ops_82598 = {
 	.update_checksum	= &ixgbe_update_eeprom_checksum_generic,
 };
 
-static const struct ixgbe_phy_operations phy_ops_82598 = {
+static struct ixgbe_phy_operations phy_ops_82598 = {
 	.identify		= &ixgbe_identify_phy_generic,
 	.identify_sfp		= &ixgbe_identify_module_generic,
 	.init			= &ixgbe_init_phy_ops_82598,
@@ -1186,7 +1228,7 @@ static const struct ixgbe_phy_operations phy_ops_82598 = {
 	.check_overtemp		= &ixgbe_tn_check_overtemp,
 };
 
-const struct ixgbe_info ixgbe_82598_info = {
+struct ixgbe_info ixgbe_82598_info = {
 	.mac			= ixgbe_mac_82598EB,
 	.get_invariants		= &ixgbe_get_invariants_82598,
 	.mac_ops		= &mac_ops_82598,

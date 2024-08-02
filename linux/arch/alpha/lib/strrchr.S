@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * arch/alpha/lib/strrchr.S
  * Contributed by Richard Henderson (rth@tamu.edu)
@@ -6,7 +5,7 @@
  * Return the address of the last occurrence of a given character
  * within a null-terminated string, or null if it is not found.
  */
-#include <asm/export.h>
+
 #include <asm/regdef.h>
 
 	.set noreorder
@@ -86,4 +85,3 @@ $retnull:
 	ret			# .. e1 :
 
 	.end strrchr
-	EXPORT_SYMBOL(strrchr)

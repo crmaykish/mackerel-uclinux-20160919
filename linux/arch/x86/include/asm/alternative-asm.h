@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_ALTERNATIVE_ASM_H
 #define _ASM_X86_ALTERNATIVE_ASM_H
 
@@ -18,17 +17,6 @@
 	.macro LOCK_PREFIX
 	.endm
 #endif
-
-/*
- * objtool annotation to ignore the alternatives and only consider the original
- * instruction(s).
- */
-.macro ANNOTATE_IGNORE_ALTERNATIVE
-	.Lannotate_\@:
-	.pushsection .discard.ignore_alts
-	.long .Lannotate_\@ - .
-	.popsection
-.endm
 
 /*
  * Issue one struct alt_instr descriptor entry (need to put it into
@@ -74,10 +62,8 @@
 #define new_len2		145f-144f
 
 /*
- * gas compatible max based on the idea from:
+ * max without conditionals. Idea adapted from:
  * http://graphics.stanford.edu/~seander/bithacks.html#IntegerMinOrMax
- *
- * The additional "-" is needed because gas uses a "true" value of -1.
  */
 #define alt_max_short(a, b)	((a) ^ (((a) ^ (b)) & -(-((a) < (b)))))
 

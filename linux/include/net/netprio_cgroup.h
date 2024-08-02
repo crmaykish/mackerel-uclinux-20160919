@@ -1,8 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * netprio_cgroup.h			Control Group Priority set
  *
+ *
  * Authors:	Neil Horman <nhorman@tuxdriver.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
+ *
  */
 
 #ifndef _NETPRIO_CGROUP_H
@@ -19,6 +25,8 @@ struct netprio_map {
 	u32 priomap[];
 };
 
+void sock_update_netprioidx(struct sock *sk);
+
 static inline u32 task_netprioidx(struct task_struct *p)
 {
 	struct cgroup_subsys_state *css;
@@ -30,25 +38,13 @@ static inline u32 task_netprioidx(struct task_struct *p)
 	rcu_read_unlock();
 	return idx;
 }
-
-static inline void sock_update_netprioidx(struct sock_cgroup_data *skcd)
-{
-	if (in_interrupt())
-		return;
-
-	sock_cgroup_set_prioidx(skcd, task_netprioidx(current));
-}
-
 #else /* !CONFIG_CGROUP_NET_PRIO */
-
 static inline u32 task_netprioidx(struct task_struct *p)
 {
 	return 0;
 }
 
-static inline void sock_update_netprioidx(struct sock_cgroup_data *skcd)
-{
-}
+#define sock_update_netprioidx(sk)
 
 #endif /* CONFIG_CGROUP_NET_PRIO */
 #endif  /* _NET_CLS_CGROUP_H */

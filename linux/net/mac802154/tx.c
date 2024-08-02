@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2007-2012 Siemens AG
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  * Written by:
  * Dmitry Eremin-Solenikov <dbaryshkov@gmail.com>
@@ -30,20 +38,29 @@ void ieee802154_xmit_worker(struct work_struct *work)
 	struct net_device *dev = skb->dev;
 	int res;
 
+	rtnl_lock();
+
+	/* check if ifdown occurred while schedule */
+	if (!netif_running(dev))
+		goto err_tx;
+
 	res = drv_xmit_sync(local, skb);
 	if (res)
 		goto err_tx;
 
-	DEV_STATS_INC(dev, tx_packets);
-	DEV_STATS_ADD(dev, tx_bytes, skb->len);
-
 	ieee802154_xmit_complete(&local->hw, skb, false);
+
+	dev->stats.tx_packets++;
+	dev->stats.tx_bytes += skb->len;
+
+	rtnl_unlock();
 
 	return;
 
 err_tx:
 	/* Restart the netif queue on each sub_if_data object. */
 	ieee802154_wake_queue(&local->hw);
+	rtnl_unlock();
 	kfree_skb(skb);
 	netdev_dbg(dev, "transmission failed\n");
 }
@@ -55,21 +72,8 @@ ieee802154_tx(struct ieee802154_local *local, struct sk_buff *skb)
 	int ret;
 
 	if (!(local->hw.flags & IEEE802154_HW_TX_OMIT_CKSUM)) {
-		struct sk_buff *nskb;
-		u16 crc;
+		u16 crc = crc_ccitt(0, skb->data, skb->len);
 
-		if (unlikely(skb_tailroom(skb) < IEEE802154_FCS_LEN)) {
-			nskb = skb_copy_expand(skb, 0, IEEE802154_FCS_LEN,
-					       GFP_ATOMIC);
-			if (likely(nskb)) {
-				consume_skb(skb);
-				skb = nskb;
-			} else {
-				goto err_tx;
-			}
-		}
-
-		crc = crc_ccitt(0, skb->data, skb->len);
 		put_unaligned_le16(crc, skb_put(skb, 2));
 	}
 
@@ -78,16 +82,14 @@ ieee802154_tx(struct ieee802154_local *local, struct sk_buff *skb)
 
 	/* async is priority, otherwise sync is fallback */
 	if (local->ops->xmit_async) {
-		unsigned int len = skb->len;
-
 		ret = drv_xmit_async(local, skb);
 		if (ret) {
 			ieee802154_wake_queue(&local->hw);
 			goto err_tx;
 		}
 
-		DEV_STATS_INC(dev, tx_packets);
-		DEV_STATS_ADD(dev, tx_bytes, len);
+		dev->stats.tx_packets++;
+		dev->stats.tx_bytes += skb->len;
 	} else {
 		local->tx_skb = skb;
 		queue_work(local->workqueue, &local->tx_work);

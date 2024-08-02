@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * DRA7xx Power domains framework
  *
@@ -15,6 +14,10 @@
  * with the public linux-omap@vger.kernel.org mailing list and the
  * authors above to ensure that the autogeneration scripts are kept
  * up-to-date with the file contents.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -26,20 +29,26 @@
 #include "prcm44xx.h"
 #include "prm7xx.h"
 #include "prcm_mpu7xx.h"
-#include "soc.h"
 
 /* iva_7xx_pwrdm: IVA-HD power domain */
 static struct powerdomain iva_7xx_pwrdm = {
 	.name		  = "iva_pwrdm",
 	.prcm_offs	  = DRA7XX_PRM_IVA_INST,
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
-	.pwrsts		  = PWRSTS_OFF_ON,
+	.pwrsts		  = PWRSTS_OFF_RET_ON,
+	.pwrsts_logic_ret = PWRSTS_OFF,
 	.banks		  = 4,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* hwa_mem */
+		[1] = PWRSTS_OFF_RET,	/* sl2_mem */
+		[2] = PWRSTS_OFF_RET,	/* tcm1_mem */
+		[3] = PWRSTS_OFF_RET,	/* tcm2_mem */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* hwa_mem */
-		[1] = PWRSTS_ON,	/* sl2_mem */
-		[2] = PWRSTS_ON,	/* tcm1_mem */
-		[3] = PWRSTS_ON,	/* tcm2_mem */
+		[0] = PWRSTS_OFF_RET,	/* hwa_mem */
+		[1] = PWRSTS_OFF_RET,	/* sl2_mem */
+		[2] = PWRSTS_OFF_RET,	/* tcm1_mem */
+		[3] = PWRSTS_OFF_RET,	/* tcm2_mem */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -61,24 +70,21 @@ static struct powerdomain custefuse_7xx_pwrdm = {
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
 
-/* custefuse_aon_7xx_pwrdm: Customer efuse controller power domain */
-static struct powerdomain custefuse_aon_7xx_pwrdm = {
-	.name		  = "custefuse_pwrdm",
-	.prcm_offs	  = DRA7XX_PRM_CUSTEFUSE_INST,
-	.prcm_partition	  = DRA7XX_PRM_PARTITION,
-	.pwrsts		  = PWRSTS_ON,
-};
-
 /* ipu_7xx_pwrdm: Audio back end power domain */
 static struct powerdomain ipu_7xx_pwrdm = {
 	.name		  = "ipu_pwrdm",
 	.prcm_offs	  = DRA7XX_PRM_IPU_INST,
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
-	.pwrsts		  = PWRSTS_OFF_ON,
+	.pwrsts		  = PWRSTS_OFF_RET_ON,
+	.pwrsts_logic_ret = PWRSTS_OFF,
 	.banks		  = 2,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* aessmem */
+		[1] = PWRSTS_OFF_RET,	/* periphmem */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* aessmem */
-		[1] = PWRSTS_ON,	/* periphmem */
+		[0] = PWRSTS_OFF_RET,	/* aessmem */
+		[1] = PWRSTS_OFF_RET,	/* periphmem */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -88,10 +94,14 @@ static struct powerdomain dss_7xx_pwrdm = {
 	.name		  = "dss_pwrdm",
 	.prcm_offs	  = DRA7XX_PRM_DSS_INST,
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
-	.pwrsts		  = PWRSTS_OFF_ON,
+	.pwrsts		  = PWRSTS_OFF_RET_ON,
+	.pwrsts_logic_ret = PWRSTS_OFF,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* dss_mem */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* dss_mem */
+		[0] = PWRSTS_OFF_RET,	/* dss_mem */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -101,11 +111,16 @@ static struct powerdomain l4per_7xx_pwrdm = {
 	.name		  = "l4per_pwrdm",
 	.prcm_offs	  = DRA7XX_PRM_L4PER_INST,
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
-	.pwrsts		  = PWRSTS_ON,
+	.pwrsts		  = PWRSTS_RET_ON,
+	.pwrsts_logic_ret = PWRSTS_OFF_RET,
 	.banks		  = 2,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* nonretained_bank */
+		[1] = PWRSTS_OFF_RET,	/* retained_bank */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* nonretained_bank */
-		[1] = PWRSTS_ON,	/* retained_bank */
+		[0] = PWRSTS_OFF_RET,	/* nonretained_bank */
+		[1] = PWRSTS_OFF_RET,	/* retained_bank */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -117,8 +132,11 @@ static struct powerdomain gpu_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* gpu_mem */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* gpu_mem */
+		[0] = PWRSTS_OFF_RET,	/* gpu_mem */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -130,6 +148,8 @@ static struct powerdomain wkupaon_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_ON,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+	},
 	.pwrsts_mem_on	= {
 		[0] = PWRSTS_ON,	/* wkup_bank */
 	},
@@ -140,14 +160,22 @@ static struct powerdomain core_7xx_pwrdm = {
 	.name		  = "core_pwrdm",
 	.prcm_offs	  = DRA7XX_PRM_CORE_INST,
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
-	.pwrsts		  = PWRSTS_ON,
+	.pwrsts		  = PWRSTS_INA_ON,
+	.pwrsts_logic_ret = PWRSTS_RET,
 	.banks		  = 5,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* core_nret_bank */
+		[1] = PWRSTS_OFF_RET,	/* core_ocmram */
+		[2] = PWRSTS_OFF_RET,	/* core_other_bank */
+		[3] = PWRSTS_OFF_RET,	/* ipu_l2ram */
+		[4] = PWRSTS_OFF_RET,	/* ipu_unicache */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* core_nret_bank */
-		[1] = PWRSTS_ON,	/* core_ocmram */
-		[2] = PWRSTS_ON,	/* core_other_bank */
-		[3] = PWRSTS_ON,	/* ipu_l2ram */
-		[4] = PWRSTS_ON,	/* ipu_unicache */
+		[0] = PWRSTS_OFF_RET,	/* core_nret_bank */
+		[1] = PWRSTS_OFF_RET,	/* core_ocmram */
+		[2] = PWRSTS_OFF_RET,	/* core_other_bank */
+		[3] = PWRSTS_OFF_RET,	/* ipu_l2ram */
+		[4] = PWRSTS_OFF_RET,	/* ipu_unicache */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -197,10 +225,14 @@ static struct powerdomain vpe_7xx_pwrdm = {
 	.name		  = "vpe_pwrdm",
 	.prcm_offs	  = DRA7XX_PRM_VPE_INST,
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
-	.pwrsts		  = PWRSTS_OFF_ON,
+	.pwrsts		  = PWRSTS_OFF_RET_ON,
+	.pwrsts_logic_ret = PWRSTS_OFF_RET,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* vpe_bank */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* vpe_bank */
+		[0] = PWRSTS_OFF_RET,	/* vpe_bank */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -218,8 +250,8 @@ static struct powerdomain mpu_7xx_pwrdm = {
 		[1] = PWRSTS_RET,	/* mpu_ram */
 	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* mpu_l2 */
-		[1] = PWRSTS_ON,	/* mpu_ram */
+		[0] = PWRSTS_OFF_RET,	/* mpu_l2 */
+		[1] = PWRSTS_OFF_RET,	/* mpu_ram */
 	},
 };
 
@@ -228,12 +260,18 @@ static struct powerdomain l3init_7xx_pwrdm = {
 	.name		  = "l3init_pwrdm",
 	.prcm_offs	  = DRA7XX_PRM_L3INIT_INST,
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
-	.pwrsts		  = PWRSTS_ON,
+	.pwrsts		  = PWRSTS_RET_ON,
+	.pwrsts_logic_ret = PWRSTS_OFF_RET,
 	.banks		  = 3,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* gmac_bank */
+		[1] = PWRSTS_OFF_RET,	/* l3init_bank1 */
+		[2] = PWRSTS_OFF_RET,	/* l3init_bank2 */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* gmac_bank */
-		[1] = PWRSTS_ON,	/* l3init_bank1 */
-		[2] = PWRSTS_ON,	/* l3init_bank2 */
+		[0] = PWRSTS_OFF_RET,	/* gmac_bank */
+		[1] = PWRSTS_OFF_RET,	/* l3init_bank1 */
+		[2] = PWRSTS_OFF_RET,	/* l3init_bank2 */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -245,8 +283,11 @@ static struct powerdomain eve3_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* eve3_bank */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* eve3_bank */
+		[0] = PWRSTS_OFF_RET,	/* eve3_bank */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -258,8 +299,11 @@ static struct powerdomain emu_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* emu_bank */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* emu_bank */
+		[0] = PWRSTS_OFF_RET,	/* emu_bank */
 	},
 };
 
@@ -270,10 +314,15 @@ static struct powerdomain dsp2_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.banks		  = 3,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* dsp2_edma */
+		[1] = PWRSTS_OFF_RET,	/* dsp2_l1 */
+		[2] = PWRSTS_OFF_RET,	/* dsp2_l2 */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* dsp2_edma */
-		[1] = PWRSTS_ON,	/* dsp2_l1 */
-		[2] = PWRSTS_ON,	/* dsp2_l2 */
+		[0] = PWRSTS_OFF_RET,	/* dsp2_edma */
+		[1] = PWRSTS_OFF_RET,	/* dsp2_l1 */
+		[2] = PWRSTS_OFF_RET,	/* dsp2_l2 */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -285,10 +334,15 @@ static struct powerdomain dsp1_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.banks		  = 3,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* dsp1_edma */
+		[1] = PWRSTS_OFF_RET,	/* dsp1_l1 */
+		[2] = PWRSTS_OFF_RET,	/* dsp1_l2 */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* dsp1_edma */
-		[1] = PWRSTS_ON,	/* dsp1_l1 */
-		[2] = PWRSTS_ON,	/* dsp1_l2 */
+		[0] = PWRSTS_OFF_RET,	/* dsp1_edma */
+		[1] = PWRSTS_OFF_RET,	/* dsp1_l1 */
+		[2] = PWRSTS_OFF_RET,	/* dsp1_l2 */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -300,8 +354,11 @@ static struct powerdomain cam_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* vip_bank */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* vip_bank */
+		[0] = PWRSTS_OFF_RET,	/* vip_bank */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -313,8 +370,11 @@ static struct powerdomain eve4_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* eve4_bank */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* eve4_bank */
+		[0] = PWRSTS_OFF_RET,	/* eve4_bank */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -326,8 +386,11 @@ static struct powerdomain eve2_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* eve2_bank */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* eve2_bank */
+		[0] = PWRSTS_OFF_RET,	/* eve2_bank */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -339,8 +402,11 @@ static struct powerdomain eve1_7xx_pwrdm = {
 	.prcm_partition	  = DRA7XX_PRM_PARTITION,
 	.pwrsts		  = PWRSTS_OFF_ON,
 	.banks		  = 1,
+	.pwrsts_mem_ret	= {
+		[0] = PWRSTS_OFF_RET,	/* eve1_bank */
+	},
 	.pwrsts_mem_on	= {
-		[0] = PWRSTS_ON,	/* eve1_bank */
+		[0] = PWRSTS_OFF_RET,	/* eve1_bank */
 	},
 	.flags		  = PWRDM_HAS_LOWPOWERSTATECHANGE,
 };
@@ -356,6 +422,7 @@ static struct powerdomain eve1_7xx_pwrdm = {
 static struct powerdomain *powerdomains_dra7xx[] __initdata = {
 	&iva_7xx_pwrdm,
 	&rtc_7xx_pwrdm,
+	&custefuse_7xx_pwrdm,
 	&ipu_7xx_pwrdm,
 	&dss_7xx_pwrdm,
 	&l4per_7xx_pwrdm,
@@ -379,32 +446,9 @@ static struct powerdomain *powerdomains_dra7xx[] __initdata = {
 	NULL
 };
 
-static struct powerdomain *powerdomains_dra76x[] __initdata = {
-	&custefuse_aon_7xx_pwrdm,
-	NULL
-};
-
-static struct powerdomain *powerdomains_dra74x[] __initdata = {
-	&custefuse_7xx_pwrdm,
-	NULL
-};
-
-static struct powerdomain *powerdomains_dra72x[] __initdata = {
-	&custefuse_aon_7xx_pwrdm,
-	NULL
-};
-
 void __init dra7xx_powerdomains_init(void)
 {
 	pwrdm_register_platform_funcs(&omap4_pwrdm_operations);
 	pwrdm_register_pwrdms(powerdomains_dra7xx);
-
-	if (soc_is_dra76x())
-		pwrdm_register_pwrdms(powerdomains_dra76x);
-	else if (soc_is_dra74x())
-		pwrdm_register_pwrdms(powerdomains_dra74x);
-	else if (soc_is_dra72x())
-		pwrdm_register_pwrdms(powerdomains_dra72x);
-
 	pwrdm_complete_init();
 }

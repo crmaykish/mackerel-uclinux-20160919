@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*******************************************************************************
  * This file contains main functions related to iSCSI Parameter negotiation.
  *
@@ -6,10 +5,19 @@
  *
  * Author: Nicholas A. Bellinger <nab@linux-iscsi.org>
  *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  ******************************************************************************/
 
 #include <linux/slab.h>
-#include <linux/uio.h> /* struct kvec */
+
 #include <target/iscsi/iscsi_target_core.h>
 #include "iscsi_target_util.h"
 #include "iscsi_target_parameters.h"
@@ -672,7 +680,6 @@ struct iscsi_param *iscsi_find_param_from_key(
 	pr_err("Unable to locate key \"%s\".\n", key);
 	return NULL;
 }
-EXPORT_SYMBOL(iscsi_find_param_from_key);
 
 int iscsi_extract_key_value(char *textbuf, char **key, char **value)
 {
@@ -757,8 +764,7 @@ static int iscsi_check_for_auth_key(char *key)
 	return 0;
 }
 
-static void iscsi_check_proposer_for_optional_reply(struct iscsi_param *param,
-						    bool keys_workaround)
+static void iscsi_check_proposer_for_optional_reply(struct iscsi_param *param)
 {
 	if (IS_TYPE_BOOL_AND(param)) {
 		if (!strcmp(param->value, NO))
@@ -766,31 +772,35 @@ static void iscsi_check_proposer_for_optional_reply(struct iscsi_param *param,
 	} else if (IS_TYPE_BOOL_OR(param)) {
 		if (!strcmp(param->value, YES))
 			SET_PSTATE_REPLY_OPTIONAL(param);
-
-		if (keys_workaround) {
-			/*
-			 * Required for gPXE iSCSI boot client
-			 */
-			if (!strcmp(param->name, IMMEDIATEDATA))
-				SET_PSTATE_REPLY_OPTIONAL(param);
-		}
+		 /*
+		  * Required for gPXE iSCSI boot client
+		  */
+		if (!strcmp(param->name, IMMEDIATEDATA))
+			SET_PSTATE_REPLY_OPTIONAL(param);
 	} else if (IS_TYPE_NUMBER(param)) {
 		if (!strcmp(param->name, MAXRECVDATASEGMENTLENGTH))
 			SET_PSTATE_REPLY_OPTIONAL(param);
-
-		if (keys_workaround) {
-			/*
-			 * Required for Mellanox Flexboot PXE boot ROM
-			 */
-			if (!strcmp(param->name, FIRSTBURSTLENGTH))
-				SET_PSTATE_REPLY_OPTIONAL(param);
-
-			/*
-			 * Required for gPXE iSCSI boot client
-			 */
-			if (!strcmp(param->name, MAXCONNECTIONS))
-				SET_PSTATE_REPLY_OPTIONAL(param);
-		}
+		/*
+		 * The GlobalSAN iSCSI Initiator for MacOSX does
+		 * not respond to MaxBurstLength, FirstBurstLength,
+		 * DefaultTime2Wait or DefaultTime2Retain parameter keys.
+		 * So, we set them to 'reply optional' here, and assume the
+		 * the defaults from iscsi_parameters.h if the initiator
+		 * is not RFC compliant and the keys are not negotiated.
+		 */
+		if (!strcmp(param->name, MAXBURSTLENGTH))
+			SET_PSTATE_REPLY_OPTIONAL(param);
+		if (!strcmp(param->name, FIRSTBURSTLENGTH))
+			SET_PSTATE_REPLY_OPTIONAL(param);
+		if (!strcmp(param->name, DEFAULTTIME2WAIT))
+			SET_PSTATE_REPLY_OPTIONAL(param);
+		if (!strcmp(param->name, DEFAULTTIME2RETAIN))
+			SET_PSTATE_REPLY_OPTIONAL(param);
+		/*
+		 * Required for gPXE iSCSI boot client
+		 */
+		if (!strcmp(param->name, MAXCONNECTIONS))
+			SET_PSTATE_REPLY_OPTIONAL(param);
 	} else if (IS_PHASE_DECLARATIVE(param))
 		SET_PSTATE_REPLY_OPTIONAL(param);
 }
@@ -1262,20 +1272,18 @@ static struct iscsi_param *iscsi_check_key(
 		return param;
 
 	if (!(param->phase & phase)) {
-		char *phase_name;
-
+		pr_err("Key \"%s\" may not be negotiated during ",
+				param->name);
 		switch (phase) {
 		case PHASE_SECURITY:
-			phase_name = "Security";
+			pr_debug("Security phase.\n");
 			break;
 		case PHASE_OPERATIONAL:
-			phase_name = "Operational";
+			pr_debug("Operational phase.\n");
 			break;
 		default:
-			phase_name = "Unknown";
+			pr_debug("Unknown phase.\n");
 		}
-		pr_err("Key \"%s\" may not be negotiated during %s phase.\n",
-				param->name, phase_name);
 		return NULL;
 	}
 
@@ -1374,8 +1382,10 @@ int iscsi_decode_text_input(
 		char *key, *value;
 		struct iscsi_param *param;
 
-		if (iscsi_extract_key_value(start, &key, &value) < 0)
-			goto free_buffer;
+		if (iscsi_extract_key_value(start, &key, &value) < 0) {
+			kfree(tmpbuf);
+			return -1;
+		}
 
 		pr_debug("Got key: %s=%s\n", key, value);
 
@@ -1388,37 +1398,38 @@ int iscsi_decode_text_input(
 
 		param = iscsi_check_key(key, phase, sender, param_list);
 		if (!param) {
-			if (iscsi_add_notunderstood_response(key, value,
-							     param_list) < 0)
-				goto free_buffer;
-
+			if (iscsi_add_notunderstood_response(key,
+					value, param_list) < 0) {
+				kfree(tmpbuf);
+				return -1;
+			}
 			start += strlen(key) + strlen(value) + 2;
 			continue;
 		}
-		if (iscsi_check_value(param, value) < 0)
-			goto free_buffer;
+		if (iscsi_check_value(param, value) < 0) {
+			kfree(tmpbuf);
+			return -1;
+		}
 
 		start += strlen(key) + strlen(value) + 2;
 
 		if (IS_PSTATE_PROPOSER(param)) {
-			if (iscsi_check_proposer_state(param, value) < 0)
-				goto free_buffer;
-
+			if (iscsi_check_proposer_state(param, value) < 0) {
+				kfree(tmpbuf);
+				return -1;
+			}
 			SET_PSTATE_RESPONSE_GOT(param);
 		} else {
-			if (iscsi_check_acceptor_state(param, value, conn) < 0)
-				goto free_buffer;
-
+			if (iscsi_check_acceptor_state(param, value, conn) < 0) {
+				kfree(tmpbuf);
+				return -1;
+			}
 			SET_PSTATE_ACCEPTOR(param);
 		}
 	}
 
 	kfree(tmpbuf);
 	return 0;
-
-free_buffer:
-	kfree(tmpbuf);
-	return -1;
 }
 
 int iscsi_encode_text_output(
@@ -1426,8 +1437,7 @@ int iscsi_encode_text_output(
 	u8 sender,
 	char *textbuf,
 	u32 *length,
-	struct iscsi_param_list *param_list,
-	bool keys_workaround)
+	struct iscsi_param_list *param_list)
 {
 	char *output_buf = NULL;
 	struct iscsi_extra_response *er;
@@ -1463,8 +1473,7 @@ int iscsi_encode_text_output(
 			*length += 1;
 			output_buf = textbuf + *length;
 			SET_PSTATE_PROPOSER(param);
-			iscsi_check_proposer_for_optional_reply(param,
-							        keys_workaround);
+			iscsi_check_proposer_for_optional_reply(param);
 			pr_debug("Sending key: %s=%s\n",
 				param->name, param->value);
 		}
@@ -1659,7 +1668,7 @@ void iscsi_set_session_parameters(
 				param->value);
 		} else if (!strcmp(param->name, INITIALR2T)) {
 			ops->InitialR2T = !strcmp(param->value, YES);
-			pr_debug("InitialR2T:                   %s\n",
+			 pr_debug("InitialR2T:                   %s\n",
 				param->value);
 		} else if (!strcmp(param->name, IMMEDIATEDATA)) {
 			ops->ImmediateData = !strcmp(param->value, YES);

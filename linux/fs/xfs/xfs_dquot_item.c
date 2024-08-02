@@ -1,17 +1,29 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2000-2003 Silicon Graphics, Inc.
  * All Rights Reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it would be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write the Free Software Foundation,
+ * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 #include "xfs.h"
 #include "xfs_fs.h"
-#include "xfs_shared.h"
 #include "xfs_format.h"
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
 #include "xfs_inode.h"
 #include "xfs_quota.h"
+#include "xfs_error.h"
 #include "xfs_trans.h"
 #include "xfs_buf_item.h"
 #include "xfs_trans_priv.h"
@@ -94,6 +106,18 @@ xfs_qm_dquot_logitem_unpin(
 		wake_up(&dqp->q_pinwait);
 }
 
+STATIC xfs_lsn_t
+xfs_qm_dquot_logitem_committed(
+	struct xfs_log_item	*lip,
+	xfs_lsn_t		lsn)
+{
+	/*
+	 * We always re-log the entire dquot when it becomes dirty,
+	 * so, the latest copy _is_ the only one that matters.
+	 */
+	return lsn;
+}
+
 /*
  * This is called to wait for the given dquot to be unpinned.
  * Most of these pin/unpin routines are plagiarized from inode code.
@@ -113,52 +137,19 @@ xfs_qm_dqunpin_wait(
 	wait_event(dqp->q_pinwait, (atomic_read(&dqp->q_pincount) == 0));
 }
 
-/*
- * Callback used to mark a buffer with XFS_LI_FAILED when items in the buffer
- * have been failed during writeback
- *
- * this informs the AIL that the dquot is already flush locked on the next push,
- * and acquires a hold on the buffer to ensure that it isn't reclaimed before
- * dirty data makes it to disk.
- */
-STATIC void
-xfs_dquot_item_error(
-	struct xfs_log_item	*lip,
-	struct xfs_buf		*bp)
-{
-	ASSERT(!completion_done(&DQUOT_ITEM(lip)->qli_dquot->q_flush));
-	xfs_set_li_failed(lip, bp);
-}
-
 STATIC uint
 xfs_qm_dquot_logitem_push(
 	struct xfs_log_item	*lip,
-	struct list_head	*buffer_list)
-		__releases(&lip->li_ailp->ail_lock)
-		__acquires(&lip->li_ailp->ail_lock)
+	struct list_head	*buffer_list) __releases(&lip->li_ailp->xa_lock)
+					      __acquires(&lip->li_ailp->xa_lock)
 {
 	struct xfs_dquot	*dqp = DQUOT_ITEM(lip)->qli_dquot;
-	struct xfs_buf		*bp = lip->li_buf;
+	struct xfs_buf		*bp = NULL;
 	uint			rval = XFS_ITEM_SUCCESS;
 	int			error;
 
 	if (atomic_read(&dqp->q_pincount) > 0)
 		return XFS_ITEM_PINNED;
-
-	/*
-	 * The buffer containing this item failed to be written back
-	 * previously. Resubmit the buffer for IO
-	 */
-	if (test_bit(XFS_LI_FAILED, &lip->li_flags)) {
-		if (!xfs_buf_trylock(bp))
-			return XFS_ITEM_LOCKED;
-
-		if (!xfs_buf_resubmit_failed_buffers(bp, buffer_list))
-			rval = XFS_ITEM_FLUSHING;
-
-		xfs_buf_unlock(bp);
-		return rval;
-	}
 
 	if (!xfs_dqlock_nowait(dqp))
 		return XFS_ITEM_LOCKED;
@@ -182,29 +173,42 @@ xfs_qm_dquot_logitem_push(
 		goto out_unlock;
 	}
 
-	spin_unlock(&lip->li_ailp->ail_lock);
+	spin_unlock(&lip->li_ailp->xa_lock);
 
 	error = xfs_qm_dqflush(dqp, &bp);
-	if (!error) {
+	if (error) {
+		xfs_warn(dqp->q_mount, "%s: push error %d on dqp %p",
+			__func__, error, dqp);
+	} else {
 		if (!xfs_buf_delwri_queue(bp, buffer_list))
 			rval = XFS_ITEM_FLUSHING;
 		xfs_buf_relse(bp);
-	} else if (error == -EAGAIN)
-		rval = XFS_ITEM_LOCKED;
+	}
 
-	spin_lock(&lip->li_ailp->ail_lock);
+	spin_lock(&lip->li_ailp->xa_lock);
 out_unlock:
 	xfs_dqunlock(dqp);
 	return rval;
 }
 
+/*
+ * Unlock the dquot associated with the log item.
+ * Clear the fields of the dquot and dquot log item that
+ * are specific to the current transaction.  If the
+ * hold flags is set, do not unlock the dquot.
+ */
 STATIC void
-xfs_qm_dquot_logitem_release(
+xfs_qm_dquot_logitem_unlock(
 	struct xfs_log_item	*lip)
 {
 	struct xfs_dquot	*dqp = DQUOT_ITEM(lip)->qli_dquot;
 
 	ASSERT(XFS_DQ_IS_LOCKED(dqp));
+
+	/*
+	 * Clear the transaction pointer in the dquot
+	 */
+	dqp->q_transp = NULL;
 
 	/*
 	 * dquots are never 'held' from getting unlocked at the end of
@@ -215,23 +219,30 @@ xfs_qm_dquot_logitem_release(
 	xfs_dqunlock(dqp);
 }
 
+/*
+ * this needs to stamp an lsn into the dquot, I think.
+ * rpc's that look at user dquot's would then have to
+ * push on the dependency recorded in the dquot
+ */
 STATIC void
 xfs_qm_dquot_logitem_committing(
 	struct xfs_log_item	*lip,
-	xfs_lsn_t		commit_lsn)
+	xfs_lsn_t		lsn)
 {
-	return xfs_qm_dquot_logitem_release(lip);
 }
 
+/*
+ * This is the ops vector for dquots
+ */
 static const struct xfs_item_ops xfs_dquot_item_ops = {
 	.iop_size	= xfs_qm_dquot_logitem_size,
 	.iop_format	= xfs_qm_dquot_logitem_format,
 	.iop_pin	= xfs_qm_dquot_logitem_pin,
 	.iop_unpin	= xfs_qm_dquot_logitem_unpin,
-	.iop_release	= xfs_qm_dquot_logitem_release,
-	.iop_committing	= xfs_qm_dquot_logitem_committing,
+	.iop_unlock	= xfs_qm_dquot_logitem_unlock,
+	.iop_committed	= xfs_qm_dquot_logitem_committed,
 	.iop_push	= xfs_qm_dquot_logitem_push,
-	.iop_error	= xfs_dquot_item_error
+	.iop_committing = xfs_qm_dquot_logitem_committing
 };
 
 /*
@@ -290,6 +301,26 @@ xfs_qm_qoff_logitem_format(
 }
 
 /*
+ * Pinning has no meaning for an quotaoff item, so just return.
+ */
+STATIC void
+xfs_qm_qoff_logitem_pin(
+	struct xfs_log_item	*lip)
+{
+}
+
+/*
+ * Since pinning has no meaning for an quotaoff item, unpinning does
+ * not either.
+ */
+STATIC void
+xfs_qm_qoff_logitem_unpin(
+	struct xfs_log_item	*lip,
+	int			remove)
+{
+}
+
+/*
  * There isn't much you can do to push a quotaoff item.  It is simply
  * stuck waiting for the log to be flushed to disk.
  */
@@ -301,6 +332,28 @@ xfs_qm_qoff_logitem_push(
 	return XFS_ITEM_LOCKED;
 }
 
+/*
+ * Quotaoff items have no locking or pushing, so return failure
+ * so that the caller doesn't bother with us.
+ */
+STATIC void
+xfs_qm_qoff_logitem_unlock(
+	struct xfs_log_item	*lip)
+{
+}
+
+/*
+ * The quotaoff-start-item is logged only once and cannot be moved in the log,
+ * so simply return the lsn at which it's been logged.
+ */
+STATIC xfs_lsn_t
+xfs_qm_qoff_logitem_committed(
+	struct xfs_log_item	*lip,
+	xfs_lsn_t		lsn)
+{
+	return lsn;
+}
+
 STATIC xfs_lsn_t
 xfs_qm_qoffend_logitem_committed(
 	struct xfs_log_item	*lip,
@@ -308,60 +361,65 @@ xfs_qm_qoffend_logitem_committed(
 {
 	struct xfs_qoff_logitem	*qfe = QOFF_ITEM(lip);
 	struct xfs_qoff_logitem	*qfs = qfe->qql_start_lip;
+	struct xfs_ail		*ailp = qfs->qql_item.li_ailp;
 
-	xfs_qm_qoff_logitem_relse(qfs);
+	/*
+	 * Delete the qoff-start logitem from the AIL.
+	 * xfs_trans_ail_delete() drops the AIL lock.
+	 */
+	spin_lock(&ailp->xa_lock);
+	xfs_trans_ail_delete(ailp, &qfs->qql_item, SHUTDOWN_LOG_IO_ERROR);
 
-	kmem_free(lip->li_lv_shadow);
+	kmem_free(qfs);
 	kmem_free(qfe);
 	return (xfs_lsn_t)-1;
 }
 
+/*
+ * XXX rcc - don't know quite what to do with this.  I think we can
+ * just ignore it.  The only time that isn't the case is if we allow
+ * the client to somehow see that quotas have been turned off in which
+ * we can't allow that to get back until the quotaoff hits the disk.
+ * So how would that happen?  Also, do we need different routines for
+ * quotaoff start and quotaoff end?  I suspect the answer is yes but
+ * to be sure, I need to look at the recovery code and see how quota off
+ * recovery is handled (do we roll forward or back or do something else).
+ * If we roll forwards or backwards, then we need two separate routines,
+ * one that does nothing and one that stamps in the lsn that matters
+ * (truly makes the quotaoff irrevocable).  If we do something else,
+ * then maybe we don't need two.
+ */
 STATIC void
-xfs_qm_qoff_logitem_release(
-	struct xfs_log_item	*lip)
+xfs_qm_qoff_logitem_committing(
+	struct xfs_log_item	*lip,
+	xfs_lsn_t		commit_lsn)
 {
-	struct xfs_qoff_logitem	*qoff = QOFF_ITEM(lip);
-
-	if (test_bit(XFS_LI_ABORTED, &lip->li_flags)) {
-		if (qoff->qql_start_lip)
-			xfs_qm_qoff_logitem_relse(qoff->qql_start_lip);
-		xfs_qm_qoff_logitem_relse(qoff);
-	}
 }
 
 static const struct xfs_item_ops xfs_qm_qoffend_logitem_ops = {
 	.iop_size	= xfs_qm_qoff_logitem_size,
 	.iop_format	= xfs_qm_qoff_logitem_format,
+	.iop_pin	= xfs_qm_qoff_logitem_pin,
+	.iop_unpin	= xfs_qm_qoff_logitem_unpin,
+	.iop_unlock	= xfs_qm_qoff_logitem_unlock,
 	.iop_committed	= xfs_qm_qoffend_logitem_committed,
 	.iop_push	= xfs_qm_qoff_logitem_push,
-	.iop_release	= xfs_qm_qoff_logitem_release,
-};
-
-static const struct xfs_item_ops xfs_qm_qoff_logitem_ops = {
-	.iop_size	= xfs_qm_qoff_logitem_size,
-	.iop_format	= xfs_qm_qoff_logitem_format,
-	.iop_push	= xfs_qm_qoff_logitem_push,
-	.iop_release	= xfs_qm_qoff_logitem_release,
+	.iop_committing = xfs_qm_qoff_logitem_committing
 };
 
 /*
- * Delete the quotaoff intent from the AIL and free it. On success,
- * this should only be called for the start item. It can be used for
- * either on shutdown or abort.
+ * This is the ops vector shared by all quotaoff-start log items.
  */
-void
-xfs_qm_qoff_logitem_relse(
-	struct xfs_qoff_logitem	*qoff)
-{
-	struct xfs_log_item	*lip = &qoff->qql_item;
-
-	ASSERT(test_bit(XFS_LI_IN_AIL, &lip->li_flags) ||
-	       test_bit(XFS_LI_ABORTED, &lip->li_flags) ||
-	       XFS_FORCED_SHUTDOWN(lip->li_mountp));
-	xfs_trans_ail_remove(lip, SHUTDOWN_LOG_IO_ERROR);
-	kmem_free(lip->li_lv_shadow);
-	kmem_free(qoff);
-}
+static const struct xfs_item_ops xfs_qm_qoff_logitem_ops = {
+	.iop_size	= xfs_qm_qoff_logitem_size,
+	.iop_format	= xfs_qm_qoff_logitem_format,
+	.iop_pin	= xfs_qm_qoff_logitem_pin,
+	.iop_unpin	= xfs_qm_qoff_logitem_unpin,
+	.iop_unlock	= xfs_qm_qoff_logitem_unlock,
+	.iop_committed	= xfs_qm_qoff_logitem_committed,
+	.iop_push	= xfs_qm_qoff_logitem_push,
+	.iop_committing = xfs_qm_qoff_logitem_committing
+};
 
 /*
  * Allocate and initialize an quotaoff item of the correct quota type(s).
@@ -374,7 +432,7 @@ xfs_qm_qoff_logitem_init(
 {
 	struct xfs_qoff_logitem	*qf;
 
-	qf = kmem_zalloc(sizeof(struct xfs_qoff_logitem), 0);
+	qf = kmem_zalloc(sizeof(struct xfs_qoff_logitem), KM_SLEEP);
 
 	xfs_log_item_init(mp, &qf->qql_item, XFS_LI_QUOTAOFF, start ?
 			&xfs_qm_qoffend_logitem_ops : &xfs_qm_qoff_logitem_ops);

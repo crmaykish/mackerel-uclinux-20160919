@@ -1,6 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 1999-2002 Vojtech Pavlik
+*
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
  */
 #ifndef _SERIO_H
 #define _SERIO_H
@@ -28,8 +31,7 @@ struct serio {
 
 	struct serio_device_id id;
 
-	/* Protects critical sections from port's interrupt handler */
-	spinlock_t lock;
+	spinlock_t lock;		/* protects critical sections from port's interrupt handler */
 
 	int (*write)(struct serio *, unsigned char);
 	int (*open)(struct serio *);
@@ -38,29 +40,16 @@ struct serio {
 	void (*stop)(struct serio *);
 
 	struct serio *parent;
-	/* Entry in parent->children list */
-	struct list_head child_node;
+	struct list_head child_node;	/* Entry in parent->children list */
 	struct list_head children;
-	/* Level of nesting in serio hierarchy */
-	unsigned int depth;
+	unsigned int depth;		/* level of nesting in serio hierarchy */
 
-	/*
-	 * serio->drv is accessed from interrupt handlers; when modifying
-	 * caller should acquire serio->drv_mutex and serio->lock.
-	 */
-	struct serio_driver *drv;
-	/* Protects serio->drv so attributes can pin current driver */
-	struct mutex drv_mutex;
+	struct serio_driver *drv;	/* accessed from interrupt, must be protected by serio->lock and serio->sem */
+	struct mutex drv_mutex;		/* protects serio->drv so attributes can pin driver */
 
 	struct device dev;
 
 	struct list_head node;
-
-	/*
-	 * For use by PS/2 layer when several ports share hardware and
-	 * may get indigestion when exposed to concurrent access (i8042).
-	 */
-	struct mutex *ps2_cmd_mutex;
 };
 #define to_serio_port(d)	container_of(d, struct serio, dev)
 
@@ -74,7 +63,6 @@ struct serio_driver {
 	irqreturn_t (*interrupt)(struct serio *, unsigned char, unsigned int);
 	int  (*connect)(struct serio *, struct serio_driver *drv);
 	int  (*reconnect)(struct serio *);
-	int  (*fast_reconnect)(struct serio *);
 	void (*disconnect)(struct serio *);
 	void (*cleanup)(struct serio *);
 

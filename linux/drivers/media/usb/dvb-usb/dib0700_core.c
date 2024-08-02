@@ -1,5 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Linux driver for devices based on the DiBcom DiB0700 USB bridge
+ *
+ *	This program is free software; you can redistribute it and/or modify it
+ *	under the terms of the GNU General Public License as published by the Free
+ *	Software Foundation, version 2.
  *
  *  Copyright (C) 2005-6 DiBcom, SA
  */
@@ -13,7 +16,10 @@ MODULE_PARM_DESC(debug, "set debugging level (1=info,2=fw,4=fwdata,8=data (or-ab
 static int nb_packet_buffer_size = 21;
 module_param(nb_packet_buffer_size, int, 0644);
 MODULE_PARM_DESC(nb_packet_buffer_size,
-	"Set the dib0700 driver data buffer size. This parameter corresponds to the number of TS packets. The actual size of the data buffer corresponds to this parameter multiplied by 188 (default: 21)");
+	"Set the dib0700 driver data buffer size. This parameter "
+	"corresponds to the number of TS packets. The actual size of "
+	"the data buffer corresponds to this parameter "
+	"multiplied by 188 (default: 21)");
 
 DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 
@@ -207,22 +213,13 @@ static int dib0700_i2c_xfer_new(struct i2c_adapter *adap, struct i2c_msg *msg,
 						 usb_rcvctrlpipe(d->udev, 0),
 						 REQUEST_NEW_I2C_READ,
 						 USB_TYPE_VENDOR | USB_DIR_IN,
-						 value, index, st->buf,
+						 value, index, msg[i].buf,
 						 msg[i].len,
 						 USB_CTRL_GET_TIMEOUT);
 			if (result < 0) {
 				deb_info("i2c read error (status = %d)\n", result);
-				goto unlock;
+				break;
 			}
-
-			if (msg[i].len > sizeof(st->buf)) {
-				deb_info("buffer too small to fit %d bytes\n",
-					 msg[i].len);
-				result = -EIO;
-				goto unlock;
-			}
-
-			memcpy(msg[i].buf, st->buf, msg[i].len);
 
 			deb_data("<<< ");
 			debug_dump(msg[i].buf, msg[i].len, deb_data);
@@ -231,8 +228,8 @@ static int dib0700_i2c_xfer_new(struct i2c_adapter *adap, struct i2c_msg *msg,
 			/* Write request */
 			if (mutex_lock_interruptible(&d->usb_mutex) < 0) {
 				err("could not acquire lock");
-				result = -EINTR;
-				goto unlock;
+				mutex_unlock(&d->i2c_mutex);
+				return -EINTR;
 			}
 			st->buf[0] = REQUEST_NEW_I2C_WRITE;
 			st->buf[1] = msg[i].addr << 1;
@@ -241,15 +238,6 @@ static int dib0700_i2c_xfer_new(struct i2c_adapter *adap, struct i2c_msg *msg,
 			/* I2C ctrl + FE bus; */
 			st->buf[3] = ((gen_mode << 6) & 0xC0) |
 				 ((bus_mode << 4) & 0x30);
-
-			if (msg[i].len > sizeof(st->buf) - 4) {
-				deb_info("i2c message to big: %d\n",
-					 msg[i].len);
-				mutex_unlock(&d->usb_mutex);
-				result = -EIO;
-				goto unlock;
-			}
-
 			/* The Actual i2c payload */
 			memcpy(&st->buf[4], msg[i].buf, msg[i].len);
 
@@ -269,11 +257,8 @@ static int dib0700_i2c_xfer_new(struct i2c_adapter *adap, struct i2c_msg *msg,
 			}
 		}
 	}
-	result = i;
-
-unlock:
 	mutex_unlock(&d->i2c_mutex);
-	return result;
+	return i;
 }
 
 /*
@@ -284,7 +269,7 @@ static int dib0700_i2c_xfer_legacy(struct i2c_adapter *adap,
 {
 	struct dvb_usb_device *d = i2c_get_adapdata(adap);
 	struct dib0700_state *st = d->priv;
-	int i, len, result;
+	int i,len;
 
 	if (mutex_lock_interruptible(&d->i2c_mutex) < 0)
 		return -EINTR;
@@ -298,12 +283,6 @@ static int dib0700_i2c_xfer_legacy(struct i2c_adapter *adap,
 		/* fill in the address */
 		st->buf[1] = msg[i].addr << 1;
 		/* fill the buffer */
-		if (msg[i].len > sizeof(st->buf) - 2) {
-			deb_info("i2c xfer to big: %d\n",
-				msg[i].len);
-			result = -EIO;
-			goto unlock;
-		}
 		memcpy(&st->buf[2], msg[i].buf, msg[i].len);
 
 		/* write/read request */
@@ -313,38 +292,26 @@ static int dib0700_i2c_xfer_legacy(struct i2c_adapter *adap,
 
 			/* special thing in the current firmware: when length is zero the read-failed */
 			len = dib0700_ctrl_rd(d, st->buf, msg[i].len + 2,
-					      st->buf, msg[i + 1].len);
+					msg[i+1].buf, msg[i+1].len);
 			if (len <= 0) {
 				deb_info("I2C read failed on address 0x%02x\n",
 						msg[i].addr);
-				result = -EIO;
-				goto unlock;
+				break;
 			}
-
-			if (msg[i + 1].len > sizeof(st->buf)) {
-				deb_info("i2c xfer buffer to small for %d\n",
-					msg[i].len);
-				result = -EIO;
-				goto unlock;
-			}
-			memcpy(msg[i + 1].buf, st->buf, msg[i + 1].len);
 
 			msg[i+1].len = len;
 
 			i++;
 		} else {
 			st->buf[0] = REQUEST_I2C_WRITE;
-			result = dib0700_ctrl_wr(d, st->buf, msg[i].len + 2);
-			if (result < 0)
-				goto unlock;
+			if (dib0700_ctrl_wr(d, st->buf, msg[i].len + 2) < 0)
+				break;
 		}
 	}
-	result = i;
-unlock:
 	mutex_unlock(&d->usb_mutex);
 	mutex_unlock(&d->i2c_mutex);
 
-	return result;
+	return i;
 }
 
 static int dib0700_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg *msg,
@@ -550,7 +517,7 @@ int dib0700_download_firmware(struct usb_device *udev, const struct firmware *fw
 	if (nb_packet_buffer_size < 1)
 		nb_packet_buffer_size = 1;
 
-	/* get the firmware version */
+	/* get the fimware version */
 	usb_control_msg(udev, usb_rcvctrlpipe(udev, 0),
 				  REQUEST_GET_VERSION,
 				  USB_TYPE_VENDOR | USB_DIR_IN, 0, 0,
@@ -616,6 +583,8 @@ int dib0700_streaming_ctrl(struct dvb_usb_adapter *adap, int onoff)
 		deb_info("the endpoint number (%i) is not correct, use the adapter id instead", adap->fe_adap[0].stream.props.endpoint);
 		if (onoff)
 			st->channel_state |=	1 << (adap->id);
+		else
+			st->channel_state |=	1 << ~(adap->id);
 	} else {
 		if (onoff)
 			st->channel_state |=	1 << (adap->fe_adap[0].stream.props.endpoint-2);
@@ -633,7 +602,7 @@ int dib0700_streaming_ctrl(struct dvb_usb_adapter *adap, int onoff)
 	return ret;
 }
 
-int dib0700_change_protocol(struct rc_dev *rc, u64 *rc_proto)
+int dib0700_change_protocol(struct rc_dev *rc, u64 *rc_type)
 {
 	struct dvb_usb_device *d = rc->priv;
 	struct dib0700_state *st = d->priv;
@@ -649,19 +618,19 @@ int dib0700_change_protocol(struct rc_dev *rc, u64 *rc_proto)
 	st->buf[2] = 0;
 
 	/* Set the IR mode */
-	if (*rc_proto & RC_PROTO_BIT_RC5) {
+	if (*rc_type & RC_BIT_RC5) {
 		new_proto = 1;
-		*rc_proto = RC_PROTO_BIT_RC5;
-	} else if (*rc_proto & RC_PROTO_BIT_NEC) {
+		*rc_type = RC_BIT_RC5;
+	} else if (*rc_type & RC_BIT_NEC) {
 		new_proto = 0;
-		*rc_proto = RC_PROTO_BIT_NEC;
-	} else if (*rc_proto & RC_PROTO_BIT_RC6_MCE) {
+		*rc_type = RC_BIT_NEC;
+	} else if (*rc_type & RC_BIT_RC6_MCE) {
 		if (st->fw_version < 0x10200) {
 			ret = -EINVAL;
 			goto out;
 		}
 		new_proto = 2;
-		*rc_proto = RC_PROTO_BIT_RC6_MCE;
+		*rc_type = RC_BIT_RC6_MCE;
 	} else {
 		ret = -EINVAL;
 		goto out;
@@ -675,7 +644,7 @@ int dib0700_change_protocol(struct rc_dev *rc, u64 *rc_proto)
 		goto out;
 	}
 
-	d->props.rc.core.protocol = *rc_proto;
+	d->props.rc.core.protocol = *rc_type;
 
 out:
 	mutex_unlock(&d->usb_mutex);
@@ -707,8 +676,8 @@ static void dib0700_rc_urb_completion(struct urb *purb)
 {
 	struct dvb_usb_device *d = purb->context;
 	struct dib0700_rc_response *poll_reply;
-	enum rc_proto protocol;
-	u32 keycode;
+	enum rc_type protocol;
+	u32 uninitialized_var(keycode);
 	u8 toggle;
 
 	deb_info("%s()\n", __func__);
@@ -740,7 +709,8 @@ static void dib0700_rc_urb_completion(struct urb *purb)
 		 purb->actual_length);
 
 	switch (d->props.rc.core.protocol) {
-	case RC_PROTO_BIT_NEC:
+	case RC_BIT_NEC:
+		protocol = RC_TYPE_NEC;
 		toggle = 0;
 
 		/* NEC protocol sends repeat code as 0 0 0 FF */
@@ -749,8 +719,7 @@ static void dib0700_rc_urb_completion(struct urb *purb)
 		    poll_reply->nec.data       == 0x00 &&
 		    poll_reply->nec.not_data   == 0xff) {
 			poll_reply->data_state = 2;
-			rc_repeat(d->rc_dev);
-			goto resubmit;
+			break;
 		}
 
 		if ((poll_reply->nec.data ^ poll_reply->nec.not_data) != 0xff) {
@@ -759,25 +728,22 @@ static void dib0700_rc_urb_completion(struct urb *purb)
 						     poll_reply->nec.not_system << 16 |
 						     poll_reply->nec.data       << 8  |
 						     poll_reply->nec.not_data);
-			protocol = RC_PROTO_NEC32;
 		} else if ((poll_reply->nec.system ^ poll_reply->nec.not_system) != 0xff) {
 			deb_data("NEC extended protocol\n");
 			keycode = RC_SCANCODE_NECX(poll_reply->nec.system << 8 |
 						    poll_reply->nec.not_system,
 						    poll_reply->nec.data);
 
-			protocol = RC_PROTO_NECX;
 		} else {
 			deb_data("NEC normal protocol\n");
 			keycode = RC_SCANCODE_NEC(poll_reply->nec.system,
 						   poll_reply->nec.data);
-			protocol = RC_PROTO_NEC;
 		}
 
 		break;
 	default:
 		deb_data("RC5 protocol\n");
-		protocol = RC_PROTO_RC5;
+		protocol = RC_TYPE_RC5;
 		toggle = poll_reply->report_id;
 		keycode = RC_SCANCODE_RC5(poll_reply->rc5.system, poll_reply->rc5.data);
 
@@ -816,12 +782,11 @@ int dib0700_rc_setup(struct dvb_usb_device *d, struct usb_interface *intf)
 
 	/* Starting in firmware 1.20, the RC info is provided on a bulk pipe */
 
-	if (intf->cur_altsetting->desc.bNumEndpoints < rc_ep + 1)
-		return -ENODEV;
-
 	purb = usb_alloc_urb(0, GFP_KERNEL);
-	if (purb == NULL)
+	if (purb == NULL) {
+		err("rc usb alloc urb failed");
 		return -ENOMEM;
+	}
 
 	purb->transfer_buffer = kzalloc(RC_MSG_SIZE_V1_20, GFP_KERNEL);
 	if (purb->transfer_buffer == NULL) {
@@ -836,7 +801,7 @@ int dib0700_rc_setup(struct dvb_usb_device *d, struct usb_interface *intf)
 	 * Some devices like the Hauppauge NovaTD model 52009 use an interrupt
 	 * endpoint, while others use a bulk one.
 	 */
-	e = &intf->cur_altsetting->endpoint[rc_ep].desc;
+	e = &intf->altsetting[0].endpoint[rc_ep].desc;
 	if (usb_endpoint_dir_in(e)) {
 		if (usb_endpoint_xfer_bulk(e)) {
 			pipe = usb_rcvbulkpipe(d->udev, rc_ep);
@@ -906,41 +871,17 @@ static int dib0700_probe(struct usb_interface *intf,
 	return -ENODEV;
 }
 
-static void dib0700_disconnect(struct usb_interface *intf)
-{
-	struct dvb_usb_device *d = usb_get_intfdata(intf);
-	struct dib0700_state *st = d->priv;
-	struct i2c_client *client;
-
-	/* remove I2C client for tuner */
-	client = st->i2c_client_tuner;
-	if (client) {
-		module_put(client->dev.driver->owner);
-		i2c_unregister_device(client);
-	}
-
-	/* remove I2C client for demodulator */
-	client = st->i2c_client_demod;
-	if (client) {
-		module_put(client->dev.driver->owner);
-		i2c_unregister_device(client);
-	}
-
-	dvb_usb_device_exit(intf);
-}
-
-
 static struct usb_driver dib0700_driver = {
 	.name       = "dvb_usb_dib0700",
 	.probe      = dib0700_probe,
-	.disconnect = dib0700_disconnect,
+	.disconnect = dvb_usb_device_exit,
 	.id_table   = dib0700_usb_id_table,
 };
 
 module_usb_driver(dib0700_driver);
 
 MODULE_FIRMWARE("dvb-usb-dib0700-1.20.fw");
-MODULE_AUTHOR("Patrick Boettcher <patrick.boettcher@posteo.de>");
+MODULE_AUTHOR("Patrick Boettcher <pboettcher@dibcom.fr>");
 MODULE_DESCRIPTION("Driver for devices based on DiBcom DiB0700 - USB bridge");
 MODULE_VERSION("1.0");
 MODULE_LICENSE("GPL");

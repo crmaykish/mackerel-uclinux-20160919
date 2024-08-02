@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * extcon-sm5502.c - Silicon Mitus SM5502 extcon drvier to support USB switches
  *
  * Copyright (c) 2014 Samsung Electronics Co., Ltd
  * Author: Chanwoo Choi <cw00.choi@samsung.com>
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #include <linux/err.h>
@@ -15,7 +19,7 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
-#include <linux/extcon-provider.h>
+#include <linux/extcon.h>
 
 #include "extcon-sm5502.h"
 
@@ -65,10 +69,6 @@ struct sm5502_muic_info {
 /* Default value of SM5502 register to bring up MUIC device. */
 static struct reg_data sm5502_reg_data[] = {
 	{
-		.reg = SM5502_REG_RESET,
-		.val = SM5502_REG_RESET_MASK,
-		.invert = true,
-	}, {
 		.reg = SM5502_REG_CONTROL,
 		.val = SM5502_REG_CONTROL_MASK_INT_MASK,
 		.invert = false,
@@ -88,13 +88,13 @@ static struct reg_data sm5502_reg_data[] = {
 			| SM5502_REG_INTM2_MHL_MASK,
 		.invert = true,
 	},
+	{ }
 };
 
 /* List of detectable cables */
 static const unsigned int sm5502_extcon_cable[] = {
 	EXTCON_USB,
 	EXTCON_USB_HOST,
-	EXTCON_CHG_USB_SDP,
 	EXTCON_CHG_USB_DCP,
 	EXTCON_NONE,
 };
@@ -134,10 +134,8 @@ enum sm5502_muic_acc_type {
 	SM5502_MUIC_ADC_AUDIO_TYPE1,
 	SM5502_MUIC_ADC_OPEN = 0x1f,
 
-	/*
-	 * The below accessories have same ADC value (0x1f or 0x1e).
-	 * So, Device type1 is used to separate specific accessory.
-	 */
+	/* The below accessories have same ADC value (0x1f or 0x1e).
+	   So, Device type1 is used to separate specific accessory. */
 							/* |---------|--ADC| */
 							/* |    [7:5]|[4:0]| */
 	SM5502_MUIC_ADC_AUDIO_TYPE1_FULL_REMOTE = 0x3e,	/* |      001|11110| */
@@ -412,10 +410,7 @@ static int sm5502_muic_cable_handler(struct sm5502_muic_info *info,
 		return ret;
 
 	/* Change the state of external accessory */
-	extcon_set_state_sync(info->edev, id, attached);
-	if (id == EXTCON_USB)
-		extcon_set_state_sync(info->edev, EXTCON_CHG_USB_SDP,
-					attached);
+	extcon_set_cable_state_(info->edev, id, attached);
 
 	return 0;
 }
@@ -600,7 +595,7 @@ static int sm5022_muic_i2c_probe(struct i2c_client *i2c,
 
 		ret = devm_request_threaded_irq(info->dev, virq, NULL,
 						sm5502_muic_irq_handler,
-						IRQF_NO_SUSPEND | IRQF_ONESHOT,
+						IRQF_NO_SUSPEND,
 						muic_irq->name, info);
 		if (ret) {
 			dev_err(info->dev,
@@ -660,7 +655,7 @@ MODULE_DEVICE_TABLE(of, sm5502_dt_match);
 #ifdef CONFIG_PM_SLEEP
 static int sm5502_muic_suspend(struct device *dev)
 {
-	struct i2c_client *i2c = to_i2c_client(dev);
+	struct i2c_client *i2c = container_of(dev, struct i2c_client, dev);
 	struct sm5502_muic_info *info = i2c_get_clientdata(i2c);
 
 	enable_irq_wake(info->irq);
@@ -670,7 +665,7 @@ static int sm5502_muic_suspend(struct device *dev)
 
 static int sm5502_muic_resume(struct device *dev)
 {
-	struct i2c_client *i2c = to_i2c_client(dev);
+	struct i2c_client *i2c = container_of(dev, struct i2c_client, dev);
 	struct sm5502_muic_info *info = i2c_get_clientdata(i2c);
 
 	disable_irq_wake(info->irq);

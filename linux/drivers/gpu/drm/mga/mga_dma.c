@@ -35,8 +35,8 @@
  * \author Gareth Hughes <gareth@valinux.com>
  */
 
-#include <linux/delay.h>
-
+#include <drm/drmP.h>
+#include <drm/mga_drm.h>
 #include "mga_drv.h"
 
 #define MGA_DEFAULT_USEC_TIMEOUT	10000
@@ -62,7 +62,7 @@ int mga_do_wait_for_idle(drm_mga_private_t *dev_priv)
 			MGA_WRITE8(MGA_CRTC_INDEX, 0);
 			return 0;
 		}
-		udelay(1);
+		DRM_UDELAY(1);
 	}
 
 #if MGA_DMA_DEBUG
@@ -114,7 +114,7 @@ void mga_do_dma_flush(drm_mga_private_t *dev_priv)
 		status = MGA_READ(MGA_STATUS) & MGA_ENGINE_IDLE_MASK;
 		if (status == MGA_ENDPRDMASTS)
 			break;
-		udelay(1);
+		DRM_UDELAY(1);
 	}
 
 	if (primary->tail == primary->last_flush) {
@@ -392,24 +392,6 @@ int mga_driver_load(struct drm_device *dev, unsigned long flags)
 	drm_mga_private_t *dev_priv;
 	int ret;
 
-	/* There are PCI versions of the G450.  These cards have the
-	 * same PCI ID as the AGP G450, but have an additional PCI-to-PCI
-	 * bridge chip.  We detect these cards, which are not currently
-	 * supported by this driver, by looking at the device ID of the
-	 * bus the "card" is on.  If vendor is 0x3388 (Hint Corp) and the
-	 * device is 0x0021 (HB6 Universal PCI-PCI bridge), we reject the
-	 * device.
-	 */
-	if ((dev->pdev->device == 0x0525) && dev->pdev->bus->self
-	    && (dev->pdev->bus->self->vendor == 0x3388)
-	    && (dev->pdev->bus->self->device == 0x0021)
-	    && dev->agp) {
-		/* FIXME: This should be quirked in the pci core, but oh well
-		 * the hw probably stopped existing. */
-		arch_phys_wc_del(dev->agp->agp_mtrr);
-		kfree(dev->agp);
-		dev->agp = NULL;
-	}
 	dev_priv = kzalloc(sizeof(drm_mga_private_t), GFP_KERNEL);
 	if (!dev_priv)
 		return -ENOMEM;
@@ -716,7 +698,7 @@ static int mga_do_pci_dma_bootstrap(struct drm_device *dev,
 static int mga_do_dma_bootstrap(struct drm_device *dev,
 				drm_mga_dma_bootstrap_t *dma_bs)
 {
-	const int is_agp = (dma_bs->agp_mode != 0) && dev->agp;
+	const int is_agp = (dma_bs->agp_mode != 0) && drm_pci_device_is_agp(dev);
 	int err;
 	drm_mga_private_t *const dev_priv =
 	    (drm_mga_private_t *) dev->dev_private;
@@ -1120,7 +1102,7 @@ int mga_dma_buffers(struct drm_device *dev, void *data,
 	 */
 	if (d->send_count != 0) {
 		DRM_ERROR("Process %d trying to send %d buffers via drmDMA\n",
-			  task_pid_nr(current), d->send_count);
+			  DRM_CURRENTPID, d->send_count);
 		return -EINVAL;
 	}
 
@@ -1128,8 +1110,7 @@ int mga_dma_buffers(struct drm_device *dev, void *data,
 	 */
 	if (d->request_count < 0 || d->request_count > dma->buf_count) {
 		DRM_ERROR("Process %d trying to get %d buffers (of %d max)\n",
-			  task_pid_nr(current), d->request_count,
-			  dma->buf_count);
+			  DRM_CURRENTPID, d->request_count, dma->buf_count);
 		return -EINVAL;
 	}
 
@@ -1146,10 +1127,12 @@ int mga_dma_buffers(struct drm_device *dev, void *data,
 /**
  * Called just before the module is unloaded.
  */
-void mga_driver_unload(struct drm_device *dev)
+int mga_driver_unload(struct drm_device *dev)
 {
 	kfree(dev->dev_private);
 	dev->dev_private = NULL;
+
+	return 0;
 }
 
 /**

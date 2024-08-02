@@ -1,10 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * NETJet mISDN driver
  *
  * Author       Karsten Keil <keil@isdn4linux.de>
  *
  * Copyright 2009  by Karsten Keil <keil@isdn4linux.de>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
  */
 
 #include <linux/interrupt.h>
@@ -16,7 +29,7 @@
 #include "ipac.h"
 #include "iohelper.h"
 #include "netjet.h"
-#include "isdnhdlc.h"
+#include <linux/isdn/hdlc.h>
 
 #define NETJET_REV	"2.0"
 
@@ -98,7 +111,7 @@ _set_debug(struct tiger_hw *card)
 }
 
 static int
-set_debug(const char *val, const struct kernel_param *kp)
+set_debug(const char *val, struct kernel_param *kp)
 {
 	int ret;
 	struct tiger_hw *card;
@@ -379,7 +392,7 @@ read_dma(struct tiger_ch *bc, u32 idx, int cnt)
 	}
 	stat = bchannel_get_rxbuf(&bc->bch, cnt);
 	/* only transparent use the count here, HDLC overun is detected later */
-	if (stat == -ENOMEM) {
+	if (stat == ENOMEM) {
 		pr_warning("%s.B%d: No memory for %d bytes\n",
 			   card->name, bc->bch.nr, cnt);
 		return;
@@ -605,7 +618,8 @@ bc_next_frame(struct tiger_ch *bc)
 	if (bc->bch.tx_skb && bc->bch.tx_idx < bc->bch.tx_skb->len) {
 		fill_dma(bc);
 	} else {
-		dev_kfree_skb(bc->bch.tx_skb);
+		if (bc->bch.tx_skb)
+			dev_kfree_skb(bc->bch.tx_skb);
 		if (get_next_bframe(&bc->bch)) {
 			fill_dma(bc);
 			test_and_clear_bit(FLG_TX_EMPTY, &bc->bch.Flags);
@@ -949,14 +963,14 @@ nj_release(struct tiger_hw *card)
 		nj_disable_hwirq(card);
 		mode_tiger(&card->bc[0], ISDN_P_NONE);
 		mode_tiger(&card->bc[1], ISDN_P_NONE);
-		spin_unlock_irqrestore(&card->lock, flags);
 		card->isac.release(&card->isac);
+		spin_unlock_irqrestore(&card->lock, flags);
 		release_region(card->base, card->base_s);
 		card->base_s = 0;
 	}
 	if (card->irq > 0)
 		free_irq(card->irq, card);
-	if (device_is_registered(&card->isac.dch.dev.dev))
+	if (card->isac.dch.dev.dev.class)
 		mISDN_unregister_device(&card->isac.dch.dev);
 
 	for (i = 0; i < 2; i++) {
@@ -1070,7 +1084,7 @@ nj_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return -ENODEV;
 	}
 
-	card = kzalloc(sizeof(struct tiger_hw), GFP_KERNEL);
+	card = kzalloc(sizeof(struct tiger_hw), GFP_ATOMIC);
 	if (!card) {
 		pr_info("No kmem for Netjet\n");
 		return err;
@@ -1100,6 +1114,7 @@ nj_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		card->typ = NETJET_S_TJ300;
 
 	card->base = pci_resource_start(pdev, 0);
+	card->irq = pdev->irq;
 	pci_set_drvdata(pdev, card);
 	err = setup_instance(card);
 	if (err)
@@ -1122,7 +1137,7 @@ static void nj_remove(struct pci_dev *pdev)
 /* We cannot select cards with PCI_SUB... IDs, since here are cards with
  * SUB IDs set to PCI_ANY_ID, so we need to match all and reject
  * known other cards which not work with this driver - see probe function */
-static const struct pci_device_id nj_pci_ids[] = {
+static struct pci_device_id nj_pci_ids[] = {
 	{ PCI_VENDOR_ID_TIGERJET, PCI_DEVICE_ID_TIGERJET_300,
 	  PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{ }

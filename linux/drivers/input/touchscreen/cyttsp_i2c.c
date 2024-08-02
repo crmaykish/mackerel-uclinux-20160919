@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * cyttsp_i2c.c
  * Cypress TrueTouch(TM) Standard Product (TTSP) I2C touchscreen driver.
@@ -10,7 +9,18 @@
  * Copyright (C) 2009, 2010, 2011 Cypress Semiconductor, Inc.
  * Copyright (C) 2012 Javier Martinez Canillas <javier@dowhile0.org>
  *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2, and only version 2, as published by the
+ * Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  * Contact Cypress Semiconductor at www.cypress.com <ttdrivers@cypress.com>
+ *
  */
 
 #include "cyttsp_core.h"
@@ -46,6 +56,15 @@ static int cyttsp_i2c_probe(struct i2c_client *client,
 	return 0;
 }
 
+static int cyttsp_i2c_remove(struct i2c_client *client)
+{
+	struct cyttsp *ts = i2c_get_clientdata(client);
+
+	cyttsp_remove(ts);
+
+	return 0;
+}
+
 static const struct i2c_device_id cyttsp_i2c_id[] = {
 	{ CY_I2C_NAME, 0 },
 	{ }
@@ -58,6 +77,7 @@ static struct i2c_driver cyttsp_i2c_driver = {
 		.pm	= &cyttsp_pm_ops,
 	},
 	.probe		= cyttsp_i2c_probe,
+	.remove		= cyttsp_i2c_remove,
 	.id_table	= cyttsp_i2c_id,
 };
 

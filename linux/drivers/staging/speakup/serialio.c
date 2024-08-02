@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 
@@ -6,12 +5,6 @@
 #include "speakup.h"
 #include "spk_priv.h"
 #include "serialio.h"
-
-#include <linux/serial_core.h>
-/* WARNING:  Do not change this to <linux/serial.h> without testing that
- * SERIAL_PORT_DFNS does get defined to the appropriate value.
- */
-#include <asm/serial.h>
 
 #ifndef SERIAL_PORT_DFNS
 #define SERIAL_PORT_DFNS
@@ -22,40 +15,16 @@ static void start_serial_interrupt(int irq);
 static const struct old_serial_port rs_table[] = {
 	SERIAL_PORT_DFNS
 };
-
 static const struct old_serial_port *serstate;
 static int timeouts;
-
-static int spk_serial_out(struct spk_synth *in_synth, const char ch);
-static void spk_serial_send_xchar(char ch);
-static void spk_serial_tiocmset(unsigned int set, unsigned int clear);
-static unsigned char spk_serial_in(void);
-static unsigned char spk_serial_in_nowait(void);
-static void spk_serial_flush_buffer(void);
-
-struct spk_io_ops spk_serial_io_ops = {
-	.synth_out = spk_serial_out,
-	.send_xchar = spk_serial_send_xchar,
-	.tiocmset = spk_serial_tiocmset,
-	.synth_in = spk_serial_in,
-	.synth_in_nowait = spk_serial_in_nowait,
-	.flush_buffer = spk_serial_flush_buffer,
-};
-EXPORT_SYMBOL_GPL(spk_serial_io_ops);
 
 const struct old_serial_port *spk_serial_init(int index)
 {
 	int baud = 9600, quot = 0;
 	unsigned int cval = 0;
 	int cflag = CREAD | HUPCL | CLOCAL | B9600 | CS8;
-	const struct old_serial_port *ser;
+	const struct old_serial_port *ser = rs_table + index;
 	int err;
-
-	if (index >= ARRAY_SIZE(rs_table)) {
-		pr_info("no port info for ttyS%d\n", index);
-		return NULL;
-	}
-	ser = rs_table + index;
 
 	/*	Divisor, bytesize and parity */
 	quot = ser->baud_base / baud;
@@ -112,12 +81,17 @@ const struct old_serial_port *spk_serial_init(int index)
 static irqreturn_t synth_readbuf_handler(int irq, void *dev_id)
 {
 	unsigned long flags;
+/*printk(KERN_ERR "in irq\n"); */
+/*pr_warn("in IRQ\n"); */
 	int c;
 
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
 	while (inb_p(speakup_info.port_tts + UART_LSR) & UART_LSR_DR) {
-		c = inb_p(speakup_info.port_tts + UART_RX);
-		synth->read_buff_add((u_char)c);
+
+		c = inb_p(speakup_info.port_tts+UART_RX);
+		synth->read_buff_add((u_char) c);
+/*printk(KERN_ERR "c = %d\n", c); */
+/*pr_warn("C = %d\n", c); */
 	}
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
 	return IRQ_HANDLED;
@@ -131,70 +105,22 @@ static void start_serial_interrupt(int irq)
 		return;
 
 	rv = request_irq(irq, synth_readbuf_handler, IRQF_SHARED,
-			 "serial", (void *)synth_readbuf_handler);
+			 "serial", (void *) synth_readbuf_handler);
 
 	if (rv)
 		pr_err("Unable to request Speakup serial I R Q\n");
 	/* Set MCR */
 	outb(UART_MCR_DTR | UART_MCR_RTS | UART_MCR_OUT2,
-	     speakup_info.port_tts + UART_MCR);
+			speakup_info.port_tts + UART_MCR);
 	/* Turn on Interrupts */
-	outb(UART_IER_MSI | UART_IER_RLSI | UART_IER_RDI,
-	     speakup_info.port_tts + UART_IER);
-	inb(speakup_info.port_tts + UART_LSR);
-	inb(speakup_info.port_tts + UART_RX);
-	inb(speakup_info.port_tts + UART_IIR);
-	inb(speakup_info.port_tts + UART_MSR);
+	outb(UART_IER_MSI|UART_IER_RLSI|UART_IER_RDI,
+			speakup_info.port_tts + UART_IER);
+	inb(speakup_info.port_tts+UART_LSR);
+	inb(speakup_info.port_tts+UART_RX);
+	inb(speakup_info.port_tts+UART_IIR);
+	inb(speakup_info.port_tts+UART_MSR);
 	outb(1, speakup_info.port_tts + UART_FCR);	/* Turn FIFO On */
 }
-
-static void spk_serial_send_xchar(char ch)
-{
-	int timeout = SPK_XMITR_TIMEOUT;
-
-	while (spk_serial_tx_busy()) {
-		if (!--timeout)
-			break;
-		udelay(1);
-	}
-	outb(ch, speakup_info.port_tts);
-}
-
-static void spk_serial_tiocmset(unsigned int set, unsigned int clear)
-{
-	int old = inb(speakup_info.port_tts + UART_MCR);
-
-	outb((old & ~clear) | set, speakup_info.port_tts + UART_MCR);
-}
-
-int spk_serial_synth_probe(struct spk_synth *synth)
-{
-	const struct old_serial_port *ser;
-	int failed = 0;
-
-	if ((synth->ser >= SPK_LO_TTY) && (synth->ser <= SPK_HI_TTY)) {
-		ser = spk_serial_init(synth->ser);
-		if (!ser) {
-			failed = -1;
-		} else {
-			outb_p(0, ser->port);
-			mdelay(1);
-			outb_p('\r', ser->port);
-		}
-	} else {
-		failed = -1;
-		pr_warn("ttyS%i is an invalid port\n", synth->ser);
-	}
-	if (failed) {
-		pr_info("%s: not found\n", synth->long_name);
-		return -ENODEV;
-	}
-	pr_info("%s: ttyS%i, Driver Version %s\n",
-		synth->long_name, synth->ser, synth->version);
-	synth->alive = 1;
-	return 0;
-}
-EXPORT_SYMBOL_GPL(spk_serial_synth_probe);
 
 void spk_stop_serial_interrupt(void)
 {
@@ -205,20 +131,19 @@ void spk_stop_serial_interrupt(void)
 		return;
 
 	/* Turn off interrupts */
-	outb(0, speakup_info.port_tts + UART_IER);
+	outb(0, speakup_info.port_tts+UART_IER);
 	/* Free IRQ */
-	free_irq(serstate->irq, (void *)synth_readbuf_handler);
+	free_irq(serstate->irq, (void *) synth_readbuf_handler);
 }
-EXPORT_SYMBOL_GPL(spk_stop_serial_interrupt);
 
-int spk_wait_for_xmitr(struct spk_synth *in_synth)
+int spk_wait_for_xmitr(void)
 {
 	int tmout = SPK_XMITR_TIMEOUT;
 
-	if ((in_synth->alive) && (timeouts >= NUM_DISABLE_TIMEOUTS)) {
+	if ((synth->alive) && (timeouts >= NUM_DISABLE_TIMEOUTS)) {
 		pr_warn("%s: too many timeouts, deactivating speakup\n",
-			in_synth->long_name);
-		in_synth->alive = 0;
+			synth->long_name);
+		synth->alive = 0;
 		/* No synth any more, so nobody will restart TTYs, and we thus
 		 * need to do it ourselves.  Now that there is no synth we can
 		 * let application flood anyway
@@ -229,8 +154,7 @@ int spk_wait_for_xmitr(struct spk_synth *in_synth)
 	}
 	while (spk_serial_tx_busy()) {
 		if (--tmout == 0) {
-			pr_warn("%s: timed out (tx busy)\n",
-				in_synth->long_name);
+			pr_warn("%s: timed out (tx busy)\n", synth->long_name);
 			timeouts++;
 			return 0;
 		}
@@ -240,6 +164,9 @@ int spk_wait_for_xmitr(struct spk_synth *in_synth)
 	while (!((inb_p(speakup_info.port_tts + UART_MSR)) & UART_MSR_CTS)) {
 		/* CTS */
 		if (--tmout == 0) {
+			/* pr_warn("%s: timed out (cts)\n",
+			 * synth->long_name);
+			 */
 			timeouts++;
 			return 0;
 		}
@@ -249,7 +176,7 @@ int spk_wait_for_xmitr(struct spk_synth *in_synth)
 	return 1;
 }
 
-static unsigned char spk_serial_in(void)
+unsigned char spk_serial_in(void)
 {
 	int tmout = SPK_SERIAL_TIMEOUT;
 
@@ -262,8 +189,9 @@ static unsigned char spk_serial_in(void)
 	}
 	return inb_p(speakup_info.port_tts + UART_RX);
 }
+EXPORT_SYMBOL_GPL(spk_serial_in);
 
-static unsigned char spk_serial_in_nowait(void)
+unsigned char spk_serial_in_nowait(void)
 {
 	unsigned char lsr;
 
@@ -272,42 +200,20 @@ static unsigned char spk_serial_in_nowait(void)
 		return 0;
 	return inb_p(speakup_info.port_tts + UART_RX);
 }
+EXPORT_SYMBOL_GPL(spk_serial_in_nowait);
 
-static void spk_serial_flush_buffer(void)
+int spk_serial_out(const char ch)
 {
-	/* TODO: flush the UART 16550 buffer */
-}
-
-static int spk_serial_out(struct spk_synth *in_synth, const char ch)
-{
-	if (in_synth->alive && spk_wait_for_xmitr(in_synth)) {
+	if (synth->alive && spk_wait_for_xmitr()) {
 		outb_p(ch, speakup_info.port_tts);
 		return 1;
 	}
 	return 0;
 }
-
-const char *spk_serial_synth_immediate(struct spk_synth *synth,
-				       const char *buff)
-{
-	u_char ch;
-
-	while ((ch = *buff)) {
-		if (ch == '\n')
-			ch = synth->procspeech;
-		if (spk_wait_for_xmitr(synth))
-			outb(ch, speakup_info.port_tts);
-		else
-			return buff;
-		buff++;
-	}
-	return NULL;
-}
-EXPORT_SYMBOL_GPL(spk_serial_synth_immediate);
+EXPORT_SYMBOL_GPL(spk_serial_out);
 
 void spk_serial_release(void)
 {
-	spk_stop_serial_interrupt();
 	if (speakup_info.port_tts == 0)
 		return;
 	synth_release_region(speakup_info.port_tts, 8);

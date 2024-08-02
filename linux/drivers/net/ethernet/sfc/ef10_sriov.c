@@ -1,9 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /****************************************************************************
  * Driver for Solarflare network controllers and boards
  * Copyright 2015 Solarflare Communications Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation, incorporated herein by reference.
  */
-#include <linux/etherdevice.h>
 #include <linux/pci.h>
 #include <linux/module.h>
 #include "net_driver.h"
@@ -196,7 +198,7 @@ static int efx_ef10_sriov_alloc_vf_vswitching(struct efx_nic *efx)
 		return -ENOMEM;
 
 	for (i = 0; i < efx->vf_count; i++) {
-		eth_random_addr(nic_data->vf[i].mac);
+		random_ether_addr(nic_data->vf[i].mac);
 		nic_data->vf[i].efx = NULL;
 		nic_data->vf[i].vlan = EFX_EF10_NO_VLAN;
 
@@ -230,35 +232,6 @@ fail:
 	return rc;
 }
 
-static int efx_ef10_vadaptor_alloc_set_features(struct efx_nic *efx)
-{
-	struct efx_ef10_nic_data *nic_data = efx->nic_data;
-	u32 port_flags;
-	int rc;
-
-	rc = efx_ef10_vadaptor_alloc(efx, nic_data->vport_id);
-	if (rc)
-		goto fail_vadaptor_alloc;
-
-	rc = efx_ef10_vadaptor_query(efx, nic_data->vport_id,
-				     &port_flags, NULL, NULL);
-	if (rc)
-		goto fail_vadaptor_query;
-
-	if (port_flags &
-	    (1 << MC_CMD_VPORT_ALLOC_IN_FLAG_VLAN_RESTRICT_LBN))
-		efx->fixed_features |= NETIF_F_HW_VLAN_CTAG_FILTER;
-	else
-		efx->fixed_features &= ~NETIF_F_HW_VLAN_CTAG_FILTER;
-
-	return 0;
-
-fail_vadaptor_query:
-	efx_ef10_vadaptor_free(efx, EVB_PORT_ID_ASSIGNED);
-fail_vadaptor_alloc:
-	return rc;
-}
-
 /* On top of the default firmware vswitch setup, create a VEB vswitch and
  * expansion vport for use by this function.
  */
@@ -270,7 +243,7 @@ int efx_ef10_vswitching_probe_pf(struct efx_nic *efx)
 
 	if (pci_sriov_get_totalvfs(efx->pci_dev) <= 0) {
 		/* vswitch not needed as we have no VFs */
-		efx_ef10_vadaptor_alloc_set_features(efx);
+		efx_ef10_vadaptor_alloc(efx, nic_data->vport_id);
 		return 0;
 	}
 
@@ -290,7 +263,7 @@ int efx_ef10_vswitching_probe_pf(struct efx_nic *efx)
 		goto fail3;
 	ether_addr_copy(nic_data->vport_mac, net_dev->dev_addr);
 
-	rc = efx_ef10_vadaptor_alloc_set_features(efx);
+	rc = efx_ef10_vadaptor_alloc(efx, nic_data->vport_id);
 	if (rc)
 		goto fail4;
 
@@ -309,7 +282,9 @@ fail1:
 
 int efx_ef10_vswitching_probe_vf(struct efx_nic *efx)
 {
-	return efx_ef10_vadaptor_alloc_set_features(efx);
+	struct efx_ef10_nic_data *nic_data = efx->nic_data;
+
+	return efx_ef10_vadaptor_alloc(efx, nic_data->vport_id);
 }
 
 int efx_ef10_vswitching_restore_pf(struct efx_nic *efx)
@@ -403,18 +378,12 @@ fail1:
 	return rc;
 }
 
-/* Disable SRIOV and remove VFs
- * If some VFs are attached to a guest (using Xen, only) nothing is
- * done if force=false, and vports are freed if force=true (for the non
- * attachedc ones, only) but SRIOV is not disabled and VFs are not
- * removed in either case.
- */
 static int efx_ef10_pci_sriov_disable(struct efx_nic *efx, bool force)
 {
 	struct pci_dev *dev = efx->pci_dev;
-	struct efx_ef10_nic_data *nic_data = efx->nic_data;
-	unsigned int vfs_assigned = pci_vfs_assigned(dev);
-	int i, rc = 0;
+	unsigned int vfs_assigned = 0;
+
+	vfs_assigned = pci_vfs_assigned(dev);
 
 	if (vfs_assigned && !force) {
 		netif_info(efx, drv, efx->net_dev, "VFs are assigned to guests; "
@@ -422,17 +391,12 @@ static int efx_ef10_pci_sriov_disable(struct efx_nic *efx, bool force)
 		return -EBUSY;
 	}
 
-	if (!vfs_assigned) {
-		for (i = 0; i < efx->vf_count; i++)
-			nic_data->vf[i].pci_dev = NULL;
+	if (!vfs_assigned)
 		pci_disable_sriov(dev);
-	} else {
-		rc = -EBUSY;
-	}
 
 	efx_ef10_sriov_free_vf_vswitching(efx);
 	efx->vf_count = 0;
-	return rc;
+	return 0;
 }
 
 int efx_ef10_sriov_configure(struct efx_nic *efx, int num_vfs)
@@ -451,6 +415,7 @@ int efx_ef10_sriov_init(struct efx_nic *efx)
 void efx_ef10_sriov_fini(struct efx_nic *efx)
 {
 	struct efx_ef10_nic_data *nic_data = efx->nic_data;
+	unsigned int i;
 	int rc;
 
 	if (!nic_data->vf) {
@@ -460,7 +425,14 @@ void efx_ef10_sriov_fini(struct efx_nic *efx)
 		return;
 	}
 
-	/* Disable SRIOV and remove any VFs in the host */
+	/* Remove any VFs in the host */
+	for (i = 0; i < efx->vf_count; ++i) {
+		struct efx_nic *vf_efx = nic_data->vf[i].efx;
+
+		if (vf_efx)
+			vf_efx->pci_dev->driver->remove(vf_efx->pci_dev);
+	}
+
 	rc = efx_ef10_pci_sriov_disable(efx, true);
 	if (rc)
 		netif_dbg(efx, drv, efx->net_dev,
@@ -549,13 +521,13 @@ int efx_ef10_sriov_set_vf_mac(struct efx_nic *efx, int vf_i, u8 *mac)
 		vf->efx->type->filter_table_probe(vf->efx);
 		up_write(&vf->efx->filter_sem);
 		efx_net_open(vf->efx->net_dev);
-		efx_device_attach_if_not_resetting(vf->efx);
+		netif_device_attach(vf->efx->net_dev);
 	}
 
 	return 0;
 
 fail:
-	eth_zero_addr(vf->mac);
+	memset(vf->mac, 0, ETH_ALEN);
 	return rc;
 }
 
@@ -564,7 +536,7 @@ int efx_ef10_sriov_set_vf_vlan(struct efx_nic *efx, int vf_i, u16 vlan,
 {
 	struct efx_ef10_nic_data *nic_data = efx->nic_data;
 	struct ef10_vf *vf;
-	u16 new_vlan;
+	u16 old_vlan, new_vlan;
 	int rc = 0, rc2 = 0;
 
 	if (vf_i >= efx->vf_count)
@@ -582,7 +554,6 @@ int efx_ef10_sriov_set_vf_vlan(struct efx_nic *efx, int vf_i, u16 vlan,
 		efx_device_detach_sync(vf->efx);
 		efx_net_stop(vf->efx->net_dev);
 
-		mutex_lock(&vf->efx->mac_lock);
 		down_write(&vf->efx->filter_sem);
 		vf->efx->type->filter_table_remove(vf->efx);
 
@@ -619,6 +590,7 @@ int efx_ef10_sriov_set_vf_vlan(struct efx_nic *efx, int vf_i, u16 vlan,
 	}
 
 	/* Do the actual vlan change */
+	old_vlan = vf->vlan;
 	vf->vlan = new_vlan;
 
 	/* Restore everything in reverse order */
@@ -658,21 +630,21 @@ restore_filters:
 			goto reset_nic_up_write;
 
 		up_write(&vf->efx->filter_sem);
-		mutex_unlock(&vf->efx->mac_lock);
+
+		up_write(&vf->efx->filter_sem);
 
 		rc2 = efx_net_open(vf->efx->net_dev);
 		if (rc2)
 			goto reset_nic;
 
-		efx_device_attach_if_not_resetting(vf->efx);
+		netif_device_attach(vf->efx->net_dev);
 	}
 	return rc;
 
 reset_nic_up_write:
-	if (vf->efx) {
+	if (vf->efx)
 		up_write(&vf->efx->filter_sem);
-		mutex_unlock(&vf->efx->mac_lock);
-	}
+
 reset_nic:
 	if (vf->efx) {
 		netif_err(efx, drv, efx->net_dev,
@@ -755,6 +727,20 @@ int efx_ef10_sriov_get_vf_config(struct efx_nic *efx, int vf_i,
 	if (outlen < MC_CMD_LINK_STATE_MODE_OUT_LEN)
 		return -EIO;
 	ivf->linkstate = MCDI_DWORD(outbuf, LINK_STATE_MODE_OUT_OLD_MODE);
+
+	return 0;
+}
+
+int efx_ef10_sriov_get_phys_port_id(struct efx_nic *efx,
+				    struct netdev_phys_item_id *ppid)
+{
+	struct efx_ef10_nic_data *nic_data = efx->nic_data;
+
+	if (!is_valid_ether_addr(nic_data->port_id))
+		return -EOPNOTSUPP;
+
+	ppid->id_len = ETH_ALEN;
+	memcpy(ppid->id, nic_data->port_id, ppid->id_len);
 
 	return 0;
 }

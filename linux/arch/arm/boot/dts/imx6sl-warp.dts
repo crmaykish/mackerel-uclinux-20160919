@@ -54,8 +54,7 @@
 	model = "WaRP Board";
 	compatible = "warp,imx6sl-warp", "fsl,imx6sl";
 
-	memory@80000000 {
-		device_type = "memory";
+	memory {
 		reg = <0x80000000 0x20000000>;
 	};
 
@@ -85,7 +84,7 @@
 &uart5 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_uart5>;
-	uart-has-rtscts;
+	fsl,uart-has-rtscts;
 	status = "okay";
 };
 
@@ -119,7 +118,7 @@
 	bus-width = <4>;
 	non-removable;
 	keep-power-in-suspend;
-	wakeup-source;
+	enable-sdio-wakeup;
 	mmc-pwrseq = <&usdhc3_pwrseq>;
 	status = "okay";
 };

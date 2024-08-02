@@ -1,4 +1,4 @@
-#!/usr/bin/env perl
+#!/usr/bin/perl -w
 #
 #	namespace.pl.  Mon Aug 30 2004
 #
@@ -62,17 +62,16 @@
 #	  result.
 #
 
-use warnings;
+require 5;	# at least perl 5
 use strict;
 use File::Find;
-use File::Spec;
 
 my $nm = ($ENV{'NM'} || "nm") . " -p";
 my $objdump = ($ENV{'OBJDUMP'} || "objdump") . " -s -j .comment";
-my $srctree = File::Spec->curdir();
-my $objtree = File::Spec->curdir();
-$srctree = File::Spec->rel2abs($ENV{'srctree'}) if (exists($ENV{'srctree'}));
-$objtree = File::Spec->rel2abs($ENV{'objtree'}) if (exists($ENV{'objtree'}));
+my $srctree = "";
+my $objtree = "";
+$srctree = "$ENV{'srctree'}/" if (exists($ENV{'srctree'}));
+$objtree = "$ENV{'objtree'}/" if (exists($ENV{'objtree'}));
 
 if ($#ARGV != -1) {
 	print STDERR "usage: $0 takes no parameters\n";
@@ -118,8 +117,6 @@ my %nameexception = (
     'kallsyms_names'	=> 1,
     'kallsyms_num_syms'	=> 1,
     'kallsyms_addresses'=> 1,
-    'kallsyms_offsets'	=> 1,
-    'kallsyms_relative_base'=> 1,
     '__this_module'	=> 1,
     '_etext'		=> 1,
     '_edata'		=> 1,
@@ -165,7 +162,7 @@ sub linux_objects
 	s:^\./::;
 	if (/.*\.o$/ &&
 		! (
-		m:/built-in.a$:
+		m:/built-in.o$:
 		|| m:arch/x86/vdso/:
 		|| m:arch/x86/boot/:
 		|| m:arch/ia64/ia32/ia32.o$:
@@ -232,9 +229,9 @@ sub do_nm
 	}
 	($source = $basename) =~ s/\.o$//;
 	if (-e "$source.c" || -e "$source.S") {
-		$source = File::Spec->catfile($objtree, $File::Find::dir, $source)
+		$source = "$objtree$File::Find::dir/$source";
 	} else {
-		$source = File::Spec->catfile($srctree, $File::Find::dir, $source)
+		$source = "$srctree$File::Find::dir/$source";
 	}
 	if (! -e "$source.c" && ! -e "$source.S") {
 		# No obvious source, exclude the object if it is conglomerate

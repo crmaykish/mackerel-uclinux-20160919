@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *	inftl.h -- defines to support the Inverse NAND Flash Translation Layer
  *
@@ -45,6 +44,7 @@ struct INFTLrecord {
 	unsigned int nb_blocks;		/* number of physical blocks */
 	unsigned int nb_boot_blocks;	/* number of blocks used by the bios */
 	struct erase_info instr;
+	struct nand_ecclayout oobinfo;
 };
 
 int INFTL_mount(struct INFTLrecord *s);

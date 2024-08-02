@@ -1,10 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * mach-imx27_visstrim_m10.c
  *
  * Copyright 2010  Javier Martin <javier.martin@vista-silicon.com>
  *
  * Based on mach-pcm038.c, mach-pca100.c, mach-mx27ads.c and others.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+ * MA 02110-1301, USA.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -231,6 +245,7 @@ static phys_addr_t mx2_camera_base __initdata;
 static void __init visstrim_analog_camera_init(void)
 {
 	struct platform_device *pdev;
+	int dma;
 
 	gpio_set_value(TVP5150_PWDN, 1);
 	ndelay(1);
@@ -243,8 +258,12 @@ static void __init visstrim_analog_camera_init(void)
 	if (IS_ERR(pdev))
 		return;
 
-	dma_declare_coherent_memory(&pdev->dev, mx2_camera_base,
-				    mx2_camera_base, MX2_CAMERA_BUF_SIZE);
+	dma = dma_declare_coherent_memory(&pdev->dev,
+				mx2_camera_base, mx2_camera_base,
+				MX2_CAMERA_BUF_SIZE,
+				DMA_MEMORY_MAP | DMA_MEMORY_EXCLUSIVE);
+	if (!(dma & DMA_MEMORY_MAP))
+		return;
 }
 
 static void __init visstrim_reserve(void)
@@ -425,12 +444,16 @@ static const struct imx_ssi_platform_data visstrim_m10_ssi_pdata __initconst = {
 static void __init visstrim_coda_init(void)
 {
 	struct platform_device *pdev;
+	int dma;
 
 	pdev = imx27_add_coda();
-	dma_declare_coherent_memory(&pdev->dev,
-				    mx2_camera_base + MX2_CAMERA_BUF_SIZE,
-				    mx2_camera_base + MX2_CAMERA_BUF_SIZE,
-				    MX2_CAMERA_BUF_SIZE);
+	dma = dma_declare_coherent_memory(&pdev->dev,
+					  mx2_camera_base + MX2_CAMERA_BUF_SIZE,
+					  mx2_camera_base + MX2_CAMERA_BUF_SIZE,
+					  MX2_CAMERA_BUF_SIZE,
+					  DMA_MEMORY_MAP | DMA_MEMORY_EXCLUSIVE);
+	if (!(dma & DMA_MEMORY_MAP))
+		return;
 }
 
 /* DMA deinterlace */
@@ -443,20 +466,24 @@ static void __init visstrim_deinterlace_init(void)
 {
 	int ret = -ENOMEM;
 	struct platform_device *pdev = &visstrim_deinterlace;
+	int dma;
 
 	ret = platform_device_register(pdev);
 
-	dma_declare_coherent_memory(&pdev->dev,
-				    mx2_camera_base + 2 * MX2_CAMERA_BUF_SIZE,
-				    mx2_camera_base + 2 * MX2_CAMERA_BUF_SIZE,
-				    MX2_CAMERA_BUF_SIZE);
+	dma = dma_declare_coherent_memory(&pdev->dev,
+					  mx2_camera_base + 2 * MX2_CAMERA_BUF_SIZE,
+					  mx2_camera_base + 2 * MX2_CAMERA_BUF_SIZE,
+					  MX2_CAMERA_BUF_SIZE,
+					  DMA_MEMORY_MAP | DMA_MEMORY_EXCLUSIVE);
+	if (!(dma & DMA_MEMORY_MAP))
+		return;
 }
 
 /* Emma-PrP for format conversion */
 static void __init visstrim_emmaprp_init(void)
 {
 	struct platform_device *pdev;
-	int ret;
+	int dma;
 
 	pdev = imx27_add_mx2_emmaprp();
 	if (IS_ERR(pdev))
@@ -466,10 +493,11 @@ static void __init visstrim_emmaprp_init(void)
 	 * Use the same memory area as the analog camera since both
 	 * devices are, by nature, exclusive.
 	 */
-	ret = dma_declare_coherent_memory(&pdev->dev,
+	dma = dma_declare_coherent_memory(&pdev->dev,
 				mx2_camera_base, mx2_camera_base,
-				MX2_CAMERA_BUF_SIZE);
-	if (ret)
+				MX2_CAMERA_BUF_SIZE,
+				DMA_MEMORY_MAP | DMA_MEMORY_EXCLUSIVE);
+	if (!(dma & DMA_MEMORY_MAP))
 		pr_err("Failed to declare memory for emmaprp\n");
 }
 
@@ -512,6 +540,7 @@ static void __init visstrim_m10_revision(void)
 static void __init visstrim_m10_board_init(void)
 {
 	int ret;
+	int mo_version;
 
 	imx27_soc_init();
 	visstrim_m10_revision();
@@ -520,6 +549,11 @@ static void __init visstrim_m10_board_init(void)
 			ARRAY_SIZE(visstrim_m10_pins), "VISSTRIM_M10");
 	if (ret)
 		pr_err("Failed to setup pins (%d)\n", ret);
+
+	ret = gpio_request_array(visstrim_m10_gpios,
+				ARRAY_SIZE(visstrim_m10_gpios));
+	if (ret)
+		pr_err("Failed to request gpios (%d)\n", ret);
 
 	imx27_add_imx_ssi(0, &visstrim_m10_ssi_pdata);
 	imx27_add_imx_uart0(&uart_pdata);
@@ -532,26 +566,12 @@ static void __init visstrim_m10_board_init(void)
 	imx27_add_mxc_mmc(0, &visstrim_m10_sdhc_pdata);
 	imx27_add_mxc_ehci_otg(&visstrim_m10_usbotg_pdata);
 	imx27_add_fec(NULL);
-
-	platform_add_devices(platform_devices, ARRAY_SIZE(platform_devices));
-}
-
-static void __init visstrim_m10_late_init(void)
-{
-	int mo_version, ret;
-
-	ret = gpio_request_array(visstrim_m10_gpios,
-				 ARRAY_SIZE(visstrim_m10_gpios));
-	if (ret)
-		pr_err("Failed to request gpios (%d)\n", ret);
-
 	imx_add_gpio_keys(&visstrim_gpio_keys_platform_data);
-
+	platform_add_devices(platform_devices, ARRAY_SIZE(platform_devices));
 	imx_add_platform_device("mx27vis", 0, NULL, 0, &snd_mx27vis_pdata,
 				sizeof(snd_mx27vis_pdata));
 	platform_device_register_resndata(NULL, "soc-camera-pdrv", 0, NULL, 0,
 				      &iclink_tvp5150, sizeof(iclink_tvp5150));
-
 	gpio_led_register_device(0, &visstrim_m10_led_data);
 
 	/* Use mother board version to decide what video devices we shall use */
@@ -571,7 +591,6 @@ static void __init visstrim_m10_late_init(void)
 		visstrim_deinterlace_init();
 		visstrim_analog_camera_init();
 	}
-
 	visstrim_coda_init();
 }
 
@@ -588,6 +607,5 @@ MACHINE_START(IMX27_VISSTRIM_M10, "Vista Silicon Visstrim_M10")
 	.init_irq = mx27_init_irq,
 	.init_time	= visstrim_m10_timer_init,
 	.init_machine = visstrim_m10_board_init,
-	.init_late	= visstrim_m10_late_init,
 	.restart	= mxc_restart,
 MACHINE_END

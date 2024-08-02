@@ -778,12 +778,7 @@ static int arkfb_set_par(struct fb_info *info)
 		return -EINVAL;
 	}
 
-	value = (hdiv * info->var.pixclock) / hmul;
-	if (!value) {
-		fb_dbg(info, "invalid pixclock\n");
-		value = 1;
-	}
-	ark_set_pixclock(info, value);
+	ark_set_pixclock(info, (hdiv * info->var.pixclock) / hmul);
 	svga_set_timings(par->state.vgabase, &ark_timing_regs, &(info->var), hmul, hdiv,
 			 (info->var.vmode & FB_VMODE_DOUBLE)     ? 2 : 1,
 			 (info->var.vmode & FB_VMODE_INTERLACED) ? 2 : 1,
@@ -794,8 +789,6 @@ static int arkfb_set_par(struct fb_info *info)
 	value = ((value * hmul / hdiv) / 8) - 5;
 	vga_wcrt(par->state.vgabase, 0x42, (value + 1) / 2);
 
-	if (screen_size > info->screen_size)
-		screen_size = info->screen_size;
 	memset_io(info->screen_base, 0x00, screen_size);
 	/* Device and screen back on */
 	svga_wcrt_mask(par->state.vgabase, 0x17, 0x80, 0x80);
@@ -961,8 +954,10 @@ static int ark_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 
 	/* Allocate and fill driver data structure */
 	info = framebuffer_alloc(sizeof(struct arkfb_info), &(dev->dev));
-	if (!info)
+	if (! info) {
+		dev_err(&(dev->dev), "cannot allocate memory\n");
 		return -ENOMEM;
+	}
 
 	par = info->par;
 	mutex_init(&par->open_lock);
@@ -1162,7 +1157,7 @@ fail:
 
 /* List of boards that we are trying to support */
 
-static const struct pci_device_id ark_devices[] = {
+static struct pci_device_id ark_devices[] = {
 	{PCI_DEVICE(0xEDD8, 0xA099)},
 	{0, 0, 0, 0, 0, 0, 0}
 };

@@ -1,7 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *   pata-legacy.c - Legacy port PATA/SATA controller driver.
  *   Copyright 2005/2006 Red Hat, all rights reserved.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2, or (at your option)
+ *  any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; see the file COPYING.  If not, write to
+ *  the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.
  *
  *   An ATA driver for the legacy ATA ports.
  *
@@ -42,6 +55,7 @@
  *
  *  For now use autospeed and pio_mask as above with the W83759A. This may
  *  change.
+ *
  */
 
 #include <linux/async.h>
@@ -114,6 +128,8 @@ static int legacy_port[NR_HOST] = { 0x1f0, 0x170, 0x1e8, 0x168, 0x1e0, 0x160 };
 static struct legacy_probe probe_list[NR_HOST];
 static struct legacy_data legacy_data[NR_HOST];
 static struct ata_host *legacy_host[NR_HOST];
+static int nr_legacy_host;
+
 
 static int probe_all;		/* Set to check all ISA port ranges */
 static int ht6560a;		/* HT 6560A on primary 1, second 2, both 3 */
@@ -230,12 +246,12 @@ static const struct ata_port_operations legacy_base_port_ops = {
 
 static struct ata_port_operations simple_port_ops = {
 	.inherits	= &legacy_base_port_ops,
-	.sff_data_xfer	= ata_sff_data_xfer32,
+	.sff_data_xfer	= ata_sff_data_xfer_noirq,
 };
 
 static struct ata_port_operations legacy_port_ops = {
 	.inherits	= &legacy_base_port_ops,
-	.sff_data_xfer	= ata_sff_data_xfer32,
+	.sff_data_xfer	= ata_sff_data_xfer_noirq,
 	.set_mode	= legacy_set_mode,
 };
 
@@ -276,10 +292,9 @@ static void pdc20230_set_piomode(struct ata_port *ap, struct ata_device *adev)
 	outb(inb(0x1F4) & 0x07, 0x1F4);
 
 	rt = inb(0x1F3);
-	rt &= ~(0x07 << (3 * !adev->devno));
+	rt &= 0x07 << (3 * adev->devno);
 	if (pio)
-		rt |= (1 + 3 * pio) << (3 * !adev->devno);
-	outb(rt, 0x1F3);
+		rt |= (1 + 3 * pio) << (3 * adev->devno);
 
 	udelay(100);
 	outb(inb(0x1F2) | 0x01, 0x1F2);
@@ -288,12 +303,11 @@ static void pdc20230_set_piomode(struct ata_port *ap, struct ata_device *adev)
 
 }
 
-static unsigned int pdc_data_xfer_vlb(struct ata_queued_cmd *qc,
+static unsigned int pdc_data_xfer_vlb(struct ata_device *dev,
 			unsigned char *buf, unsigned int buflen, int rw)
 {
-	struct ata_device *dev = qc->dev;
-	struct ata_port *ap = dev->link->ap;
 	int slop = buflen & 3;
+	struct ata_port *ap = dev->link->ap;
 
 	/* 32bit I/O capable *and* we need to write a whole number of dwords */
 	if (ata_id_has_dword_io(dev->id) && (slop == 0 || slop == 3)
@@ -314,8 +328,7 @@ static unsigned int pdc_data_xfer_vlb(struct ata_queued_cmd *qc,
 			iowrite32_rep(ap->ioaddr.data_addr, buf, buflen >> 2);
 
 		if (unlikely(slop)) {
-			__le32 pad = 0;
-
+			__le32 pad;
 			if (rw == READ) {
 				pad = cpu_to_le32(ioread32(ap->ioaddr.data_addr));
 				memcpy(buf + buflen - slop, &pad, slop);
@@ -327,7 +340,7 @@ static unsigned int pdc_data_xfer_vlb(struct ata_queued_cmd *qc,
 		}
 		local_irq_restore(flags);
 	} else
-		buflen = ata_sff_data_xfer32(qc, buf, buflen, rw);
+		buflen = ata_sff_data_xfer_noirq(dev, buf, buflen, rw);
 
 	return buflen;
 }
@@ -689,11 +702,9 @@ static unsigned int qdi_qc_issue(struct ata_queued_cmd *qc)
 	return ata_sff_qc_issue(qc);
 }
 
-static unsigned int vlb32_data_xfer(struct ata_queued_cmd *qc,
-				    unsigned char *buf,
-				    unsigned int buflen, int rw)
+static unsigned int vlb32_data_xfer(struct ata_device *adev, unsigned char *buf,
+					unsigned int buflen, int rw)
 {
-	struct ata_device *adev = qc->dev;
 	struct ata_port *ap = adev->link->ap;
 	int slop = buflen & 3;
 
@@ -705,8 +716,7 @@ static unsigned int vlb32_data_xfer(struct ata_queued_cmd *qc,
 			ioread32_rep(ap->ioaddr.data_addr, buf, buflen >> 2);
 
 		if (unlikely(slop)) {
-			__le32 pad = 0;
-
+			__le32 pad;
 			if (rw == WRITE) {
 				memcpy(&pad, buf + buflen - slop, slop);
 				iowrite32(le32_to_cpu(pad), ap->ioaddr.data_addr);
@@ -717,7 +727,7 @@ static unsigned int vlb32_data_xfer(struct ata_queued_cmd *qc,
 		}
 		return (buflen + 3) & ~3;
 	} else
-		return ata_sff_data_xfer(qc, buf, buflen, rw);
+		return ata_sff_data_xfer(adev, buf, buflen, rw);
 }
 
 static int qdi_port(struct platform_device *dev,
@@ -1237,11 +1247,9 @@ static __exit void legacy_exit(void)
 {
 	int i;
 
-	for (i = 0; i < NR_HOST; i++) {
+	for (i = 0; i < nr_legacy_host; i++) {
 		struct legacy_data *ld = &legacy_data[i];
-
-		if (legacy_host[i])
-			ata_host_detach(legacy_host[i]);
+		ata_host_detach(legacy_host[i]);
 		platform_device_unregister(ld->platform_dev);
 	}
 }

@@ -1,11 +1,8 @@
-# SPDX-License-Identifier: GPL-2.0-only
 menuconfig ARCH_SIRF
-	bool "CSR SiRF"
-	depends on ARCH_MULTI_V7
+	bool "CSR SiRF" if ARCH_MULTI_V7
 	select ARCH_HAS_RESET_CONTROLLER
-	select RESET_CONTROLLER
+	select ARCH_REQUIRE_GPIOLIB
 	select GENERIC_IRQ_CHIP
-	select GPIOLIB
 	select NO_IOPORT_MAP
 	select REGMAP
 	select PINCTRL
@@ -28,7 +25,7 @@ config ARCH_ATLAS7
 	bool "CSR SiRFSoC ATLAS7 ARM Cortex A7 Platform"
 	default y
 	select ARM_GIC
-	select ATLAS7_TIMER
+	select CPU_V7
 	select HAVE_ARM_SCU if SMP
 	select HAVE_SMP
 	help
@@ -39,7 +36,6 @@ config ARCH_PRIMA2
 	default y
 	select SIRF_IRQ
 	select ZONE_DMA
-	select PRIMA2_TIMER
 	help
           Support for CSR SiRFSoC ARM Cortex A9 Platform
 

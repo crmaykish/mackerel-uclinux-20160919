@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
  /*
   * Copyright (c) 1997-2000 LAN Media Corporation (LMC)
   * All rights reserved.  www.lanmedia.com
@@ -13,6 +12,9 @@
   * David Boggs
   * Ron Crane
   * Allan Cox
+  *
+  * This software may be used and distributed according to the terms
+  * of the GNU General Public License version 2, incorporated herein by reference.
   *
   * Driver for the LanMedia LMC5200, LMC5245, LMC1000, LMC1200 cards.
   */
@@ -101,13 +103,17 @@ __be16 lmc_proto_type(lmc_softc_t *sc, struct sk_buff *skb) /*FOLD00*/
     switch(sc->if_type){
     case LMC_PPP:
 	    return hdlc_type_trans(skb, sc->lmc_device);
+	    break;
     case LMC_NET:
         return htons(ETH_P_802_2);
+        break;
     case LMC_RAW: /* Packet type for skbuff kind of useless */
         return htons(ETH_P_802_2);
+        break;
     default:
         printk(KERN_WARNING "%s: No protocol set for this interface, assuming 802.2 (which is wrong!!)\n", sc->name);
         return htons(ETH_P_802_2);
+        break;
     }
     lmc_trace(sc->lmc_device, "lmc_proto_tye out");
 

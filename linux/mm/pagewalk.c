@@ -1,5 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
-#include <linux/pagewalk.h>
+#include <linux/mm.h>
 #include <linux/highmem.h>
 #include <linux/sched.h>
 #include <linux/hugetlb.h>
@@ -9,16 +8,15 @@ static int walk_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
 {
 	pte_t *pte;
 	int err = 0;
-	const struct mm_walk_ops *ops = walk->ops;
 
 	pte = pte_offset_map(pmd, addr);
 	for (;;) {
-		err = ops->pte_entry(pte, addr, addr + PAGE_SIZE, walk);
+		err = walk->pte_entry(pte, addr, addr + PAGE_SIZE, walk);
 		if (err)
 		       break;
-		if (addr >= end - PAGE_SIZE)
-			break;
 		addr += PAGE_SIZE;
+		if (addr == end)
+			break;
 		pte++;
 	}
 
@@ -31,16 +29,15 @@ static int walk_pmd_range(pud_t *pud, unsigned long addr, unsigned long end,
 {
 	pmd_t *pmd;
 	unsigned long next;
-	const struct mm_walk_ops *ops = walk->ops;
 	int err = 0;
 
 	pmd = pmd_offset(pud, addr);
 	do {
 again:
 		next = pmd_addr_end(addr, end);
-		if (pmd_none(*pmd)) {
-			if (ops->pte_hole)
-				err = ops->pte_hole(addr, next, walk);
+		if (pmd_none(*pmd) || !walk->vma) {
+			if (walk->pte_hole)
+				err = walk->pte_hole(addr, next, walk);
 			if (err)
 				break;
 			continue;
@@ -49,8 +46,8 @@ again:
 		 * This implies that each ->pmd_entry() handler
 		 * needs to know about pmd_trans_huge() pmds
 		 */
-		if (ops->pmd_entry)
-			err = ops->pmd_entry(pmd, addr, next, walk);
+		if (walk->pmd_entry)
+			err = walk->pmd_entry(pmd, addr, next, walk);
 		if (err)
 			break;
 
@@ -58,10 +55,10 @@ again:
 		 * Check this here so we only break down trans_huge
 		 * pages when we _need_ to
 		 */
-		if (!ops->pte_entry)
+		if (!walk->pte_entry)
 			continue;
 
-		split_huge_pmd(walk->vma, pmd, addr);
+		split_huge_page_pmd_mm(walk->mm, addr, pmd);
 		if (pmd_trans_unstable(pmd))
 			goto again;
 		err = walk_pte_range(pmd, addr, next, walk);
@@ -72,74 +69,28 @@ again:
 	return err;
 }
 
-static int walk_pud_range(p4d_t *p4d, unsigned long addr, unsigned long end,
+static int walk_pud_range(pgd_t *pgd, unsigned long addr, unsigned long end,
 			  struct mm_walk *walk)
 {
 	pud_t *pud;
 	unsigned long next;
-	const struct mm_walk_ops *ops = walk->ops;
 	int err = 0;
 
-	pud = pud_offset(p4d, addr);
+	pud = pud_offset(pgd, addr);
 	do {
- again:
 		next = pud_addr_end(addr, end);
-		if (pud_none(*pud)) {
-			if (ops->pte_hole)
-				err = ops->pte_hole(addr, next, walk);
+		if (pud_none_or_clear_bad(pud)) {
+			if (walk->pte_hole)
+				err = walk->pte_hole(addr, next, walk);
 			if (err)
 				break;
 			continue;
 		}
-
-		if (ops->pud_entry) {
-			spinlock_t *ptl = pud_trans_huge_lock(pud, walk->vma);
-
-			if (ptl) {
-				err = ops->pud_entry(pud, addr, next, walk);
-				spin_unlock(ptl);
-				if (err)
-					break;
-				continue;
-			}
-		}
-
-		split_huge_pud(walk->vma, pud, addr);
-		if (pud_none(*pud))
-			goto again;
-
-		if (ops->pmd_entry || ops->pte_entry)
+		if (walk->pmd_entry || walk->pte_entry)
 			err = walk_pmd_range(pud, addr, next, walk);
 		if (err)
 			break;
 	} while (pud++, addr = next, addr != end);
-
-	return err;
-}
-
-static int walk_p4d_range(pgd_t *pgd, unsigned long addr, unsigned long end,
-			  struct mm_walk *walk)
-{
-	p4d_t *p4d;
-	unsigned long next;
-	const struct mm_walk_ops *ops = walk->ops;
-	int err = 0;
-
-	p4d = p4d_offset(pgd, addr);
-	do {
-		next = p4d_addr_end(addr, end);
-		if (p4d_none_or_clear_bad(p4d)) {
-			if (ops->pte_hole)
-				err = ops->pte_hole(addr, next, walk);
-			if (err)
-				break;
-			continue;
-		}
-		if (ops->pmd_entry || ops->pte_entry)
-			err = walk_pud_range(p4d, addr, next, walk);
-		if (err)
-			break;
-	} while (p4d++, addr = next, addr != end);
 
 	return err;
 }
@@ -149,21 +100,20 @@ static int walk_pgd_range(unsigned long addr, unsigned long end,
 {
 	pgd_t *pgd;
 	unsigned long next;
-	const struct mm_walk_ops *ops = walk->ops;
 	int err = 0;
 
 	pgd = pgd_offset(walk->mm, addr);
 	do {
 		next = pgd_addr_end(addr, end);
 		if (pgd_none_or_clear_bad(pgd)) {
-			if (ops->pte_hole)
-				err = ops->pte_hole(addr, next, walk);
+			if (walk->pte_hole)
+				err = walk->pte_hole(addr, next, walk);
 			if (err)
 				break;
 			continue;
 		}
-		if (ops->pmd_entry || ops->pte_entry)
-			err = walk_p4d_range(pgd, addr, next, walk);
+		if (walk->pmd_entry || walk->pte_entry)
+			err = walk_pud_range(pgd, addr, next, walk);
 		if (err)
 			break;
 	} while (pgd++, addr = next, addr != end);
@@ -186,20 +136,14 @@ static int walk_hugetlb_range(unsigned long addr, unsigned long end,
 	struct hstate *h = hstate_vma(vma);
 	unsigned long next;
 	unsigned long hmask = huge_page_mask(h);
-	unsigned long sz = huge_page_size(h);
 	pte_t *pte;
-	const struct mm_walk_ops *ops = walk->ops;
 	int err = 0;
 
 	do {
 		next = hugetlb_entry_end(h, addr, end);
-		pte = huge_pte_offset(walk->mm, addr & hmask, sz);
-
-		if (pte)
-			err = ops->hugetlb_entry(pte, hmask, addr, next, walk);
-		else if (ops->pte_hole)
-			err = ops->pte_hole(addr, next, walk);
-
+		pte = huge_pte_offset(walk->mm, addr & hmask);
+		if (pte && walk->hugetlb_entry)
+			err = walk->hugetlb_entry(pte, hmask, addr, next, walk);
 		if (err)
 			break;
 	} while (addr = next, addr != end);
@@ -226,10 +170,9 @@ static int walk_page_test(unsigned long start, unsigned long end,
 			struct mm_walk *walk)
 {
 	struct vm_area_struct *vma = walk->vma;
-	const struct mm_walk_ops *ops = walk->ops;
 
-	if (ops->test_walk)
-		return ops->test_walk(start, end, walk);
+	if (walk->test_walk)
+		return walk->test_walk(start, end, walk);
 
 	/*
 	 * vma(VM_PFNMAP) doesn't have any valid struct pages behind VM_PFNMAP
@@ -241,8 +184,8 @@ static int walk_page_test(unsigned long start, unsigned long end,
 	 */
 	if (vma->vm_flags & VM_PFNMAP) {
 		int err = 1;
-		if (ops->pte_hole)
-			err = ops->pte_hole(start, end, walk);
+		if (walk->pte_hole)
+			err = walk->pte_hole(start, end, walk);
 		return err ? err : 1;
 	}
 	return 0;
@@ -254,8 +197,8 @@ static int __walk_page_range(unsigned long start, unsigned long end,
 	int err = 0;
 	struct vm_area_struct *vma = walk->vma;
 
-	if (is_vm_hugetlb_page(vma)) {
-		if (walk->ops->hugetlb_entry)
+	if (vma && is_vm_hugetlb_page(vma)) {
+		if (walk->hugetlb_entry)
 			err = walk_hugetlb_range(start, end, walk);
 	} else
 		err = walk_pgd_range(start, end, walk);
@@ -265,19 +208,13 @@ static int __walk_page_range(unsigned long start, unsigned long end,
 
 /**
  * walk_page_range - walk page table with caller specific callbacks
- * @mm:		mm_struct representing the target process of page table walk
- * @start:	start address of the virtual address range
- * @end:	end address of the virtual address range
- * @ops:	operation to call during the walk
- * @private:	private data for callbacks' usage
  *
- * Recursively walk the page table tree of the process represented by @mm
+ * Recursively walk the page table tree of the process represented by @walk->mm
  * within the virtual address range [@start, @end). During walking, we can do
  * some caller-specific works for each entry, by setting up pmd_entry(),
  * pte_entry(), and/or hugetlb_entry(). If you don't set up for some of these
  * callbacks, the associated entries/pages are just ignored.
  * The return values of these callbacks are commonly defined like below:
- *
  *  - 0  : succeeded to handle the current entry, and if you don't reach the
  *         end address yet, continue to walk.
  *  - >0 : succeeded to handle the current entry, and return to the caller
@@ -287,56 +224,47 @@ static int __walk_page_range(unsigned long start, unsigned long end,
  *
  * Before starting to walk page table, some callers want to check whether
  * they really want to walk over the current vma, typically by checking
- * its vm_flags. walk_page_test() and @ops->test_walk() are used for this
+ * its vm_flags. walk_page_test() and @walk->test_walk() are used for this
  * purpose.
  *
  * struct mm_walk keeps current values of some common data like vma and pmd,
  * which are useful for the access from callbacks. If you want to pass some
- * caller-specific data to callbacks, @private should be helpful.
+ * caller-specific data to callbacks, @walk->private should be helpful.
  *
  * Locking:
- *   Callers of walk_page_range() and walk_page_vma() should hold @mm->mmap_sem,
- *   because these function traverse vma list and/or access to vma's data.
+ *   Callers of walk_page_range() and walk_page_vma() should hold
+ *   @walk->mm->mmap_sem, because these function traverse vma list and/or
+ *   access to vma's data.
  */
-int walk_page_range(struct mm_struct *mm, unsigned long start,
-		unsigned long end, const struct mm_walk_ops *ops,
-		void *private)
+int walk_page_range(unsigned long start, unsigned long end,
+		    struct mm_walk *walk)
 {
 	int err = 0;
 	unsigned long next;
 	struct vm_area_struct *vma;
-	struct mm_walk walk = {
-		.ops		= ops,
-		.mm		= mm,
-		.private	= private,
-	};
 
 	if (start >= end)
 		return -EINVAL;
 
-	if (!walk.mm)
+	if (!walk->mm)
 		return -EINVAL;
 
-	lockdep_assert_held(&walk.mm->mmap_sem);
+	VM_BUG_ON_MM(!rwsem_is_locked(&walk->mm->mmap_sem), walk->mm);
 
-	vma = find_vma(walk.mm, start);
+	vma = find_vma(walk->mm, start);
 	do {
 		if (!vma) { /* after the last vma */
-			walk.vma = NULL;
+			walk->vma = NULL;
 			next = end;
-			if (ops->pte_hole)
-				err = ops->pte_hole(start, next, &walk);
 		} else if (start < vma->vm_start) { /* outside vma */
-			walk.vma = NULL;
+			walk->vma = NULL;
 			next = min(end, vma->vm_start);
-			if (ops->pte_hole)
-				err = ops->pte_hole(start, next, &walk);
 		} else { /* inside vma */
-			walk.vma = vma;
+			walk->vma = vma;
 			next = min(end, vma->vm_end);
 			vma = vma->vm_next;
 
-			err = walk_page_test(start, next, &walk);
+			err = walk_page_test(start, next, walk);
 			if (err > 0) {
 				/*
 				 * positive return values are purely for
@@ -348,34 +276,29 @@ int walk_page_range(struct mm_struct *mm, unsigned long start,
 			}
 			if (err < 0)
 				break;
-			err = __walk_page_range(start, next, &walk);
 		}
+		if (walk->vma || walk->pte_hole)
+			err = __walk_page_range(start, next, walk);
 		if (err)
 			break;
 	} while (start = next, start < end);
 	return err;
 }
 
-int walk_page_vma(struct vm_area_struct *vma, const struct mm_walk_ops *ops,
-		void *private)
+int walk_page_vma(struct vm_area_struct *vma, struct mm_walk *walk)
 {
-	struct mm_walk walk = {
-		.ops		= ops,
-		.mm		= vma->vm_mm,
-		.vma		= vma,
-		.private	= private,
-	};
 	int err;
 
-	if (!walk.mm)
+	if (!walk->mm)
 		return -EINVAL;
 
-	lockdep_assert_held(&walk.mm->mmap_sem);
-
-	err = walk_page_test(vma->vm_start, vma->vm_end, &walk);
+	VM_BUG_ON(!rwsem_is_locked(&walk->mm->mmap_sem));
+	VM_BUG_ON(!vma);
+	walk->vma = vma;
+	err = walk_page_test(vma->vm_start, vma->vm_end, walk);
 	if (err > 0)
 		return 0;
 	if (err < 0)
 		return err;
-	return __walk_page_range(vma->vm_start, vma->vm_end, &walk);
+	return __walk_page_range(vma->vm_start, vma->vm_end, walk);
 }

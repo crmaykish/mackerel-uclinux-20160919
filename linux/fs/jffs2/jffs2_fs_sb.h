@@ -38,7 +38,6 @@ struct jffs2_mount_opts {
 	 * users. This is implemented simply by means of not allowing the
 	 * latter users to write to the file system if the amount if the
 	 * available space is less then 'rp_size'. */
-	bool set_rp_size;
 	unsigned int rp_size;
 };
 
@@ -50,7 +49,7 @@ struct jffs2_sb_info {
 	struct mtd_info *mtd;
 
 	uint32_t highest_ino;
-	uint32_t check_ino;		/* *NEXT* inode to be checked */
+	uint32_t checked_ino;
 
 	unsigned int flags;
 

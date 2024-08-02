@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef STICORE_H
 #define STICORE_H
 
@@ -237,7 +236,7 @@ struct sti_rom_font {
 	 u8 height;
 	 u8 font_type;		/* language type */
 	 u8 bytes_per_char;
-	s32 next_font;		/* note: signed int */
+	u32 next_font;
 	 u8 underline_height;
 	 u8 underline_pos;
 	 u8 res008[2];

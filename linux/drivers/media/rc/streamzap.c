@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Streamzap Remote Control driver
  *
@@ -16,12 +15,25 @@
  *
  * This driver is based on the USB skeleton driver packaged with the
  * kernel; copyright (C) 2001-2003 Greg Kroah-Hartman (greg@kroah.com)
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <linux/ktime.h>
 #include <linux/usb.h>
 #include <linux/usb/input.h>
 #include <media/rc-core.h>
@@ -34,7 +46,7 @@
 #define USB_STREAMZAP_PRODUCT_ID	0x0000
 
 /* table of devices that work with this driver */
-static const struct usb_device_id streamzap_table[] = {
+static struct usb_device_id streamzap_table[] = {
 	/* Streamzap Remote Control */
 	{ USB_DEVICE(USB_STREAMZAP_VENDOR_ID, USB_STREAMZAP_PRODUCT_ID) },
 	/* Terminating entry */
@@ -84,8 +96,8 @@ struct streamzap_ir {
 	/* sum of signal lengths received since signal start */
 	unsigned long		sum;
 	/* start time of signal; necessary for gap tracking */
-	ktime_t			signal_last;
-	ktime_t			signal_start;
+	struct timeval		signal_last;
+	struct timeval		signal_start;
 	bool			timeout_enabled;
 
 	char			name[128];
@@ -121,21 +133,23 @@ static void sz_push(struct streamzap_ir *sz, struct ir_raw_event rawir)
 static void sz_push_full_pulse(struct streamzap_ir *sz,
 			       unsigned char value)
 {
-	struct ir_raw_event rawir = {};
+	DEFINE_IR_RAW_EVENT(rawir);
 
 	if (sz->idle) {
-		int delta;
+		long deltv;
 
 		sz->signal_last = sz->signal_start;
-		sz->signal_start = ktime_get_real();
+		do_gettimeofday(&sz->signal_start);
 
-		delta = ktime_us_delta(sz->signal_start, sz->signal_last);
+		deltv = sz->signal_start.tv_sec - sz->signal_last.tv_sec;
 		rawir.pulse = false;
-		if (delta > (15 * USEC_PER_SEC)) {
+		if (deltv > 15) {
 			/* really long time */
 			rawir.duration = IR_MAX_DURATION;
 		} else {
-			rawir.duration = delta;
+			rawir.duration = (int)(deltv * 1000000 +
+				sz->signal_start.tv_usec -
+				sz->signal_last.tv_usec);
 			rawir.duration -= sz->sum;
 			rawir.duration = US_TO_NS(rawir.duration);
 			rawir.duration = (rawir.duration > IR_MAX_DURATION) ?
@@ -166,7 +180,7 @@ static void sz_push_half_pulse(struct streamzap_ir *sz,
 static void sz_push_full_space(struct streamzap_ir *sz,
 			       unsigned char value)
 {
-	struct ir_raw_event rawir = {};
+	DEFINE_IR_RAW_EVENT(rawir);
 
 	rawir.pulse = false;
 	rawir.duration = ((int) value) * SZ_RESOLUTION;
@@ -182,7 +196,7 @@ static void sz_push_half_space(struct streamzap_ir *sz,
 	sz_push_full_space(sz, value & SZ_SPACE_MASK);
 }
 
-/*
+/**
  * streamzap_callback - usb IRQ handler callback
  *
  * This procedure is invoked on reception of data from
@@ -240,10 +254,10 @@ static void streamzap_callback(struct urb *urb)
 			break;
 		case FullSpace:
 			if (sz->buf_in[i] == SZ_TIMEOUT) {
-				struct ir_raw_event rawir = {
-					.pulse = false,
-					.duration = sz->rdev->timeout
-				};
+				DEFINE_IR_RAW_EVENT(rawir);
+
+				rawir.pulse = false;
+				rawir.duration = sz->rdev->timeout;
 				sz->idle = true;
 				if (sz->timeout_enabled)
 					sz_push(sz, rawir);
@@ -278,24 +292,26 @@ static struct rc_dev *streamzap_init_rc_dev(struct streamzap_ir *sz)
 	struct device *dev = sz->dev;
 	int ret;
 
-	rdev = rc_allocate_device(RC_DRIVER_IR_RAW);
+	rdev = rc_allocate_device();
 	if (!rdev) {
 		dev_err(dev, "remote dev allocation failed\n");
 		goto out;
 	}
 
-	snprintf(sz->name, sizeof(sz->name), "Streamzap PC Remote Infrared Receiver (%04x:%04x)",
+	snprintf(sz->name, sizeof(sz->name), "Streamzap PC Remote Infrared "
+		 "Receiver (%04x:%04x)",
 		 le16_to_cpu(sz->usbdev->descriptor.idVendor),
 		 le16_to_cpu(sz->usbdev->descriptor.idProduct));
 	usb_make_path(sz->usbdev, sz->phys, sizeof(sz->phys));
 	strlcat(sz->phys, "/input0", sizeof(sz->phys));
 
-	rdev->device_name = sz->name;
+	rdev->input_name = sz->name;
 	rdev->input_phys = sz->phys;
 	usb_to_input_id(sz->usbdev, &rdev->input_id);
 	rdev->dev.parent = dev;
 	rdev->priv = sz;
-	rdev->allowed_protocols = RC_PROTO_BIT_ALL_IR_DECODER;
+	rdev->driver_type = RC_DRIVER_IR_RAW;
+	rdev->allowed_protocols = RC_BIT_ALL;
 	rdev->driver_name = DRIVER_NAME;
 	rdev->map_name = RC_MAP_STREAMZAP;
 
@@ -312,7 +328,7 @@ out:
 	return NULL;
 }
 
-/*
+/**
  *	streamzap_probe
  *
  *	Called by usb-core to associated with a candidate device
@@ -349,15 +365,15 @@ static int streamzap_probe(struct usb_interface *intf,
 
 	sz->endpoint = &(iface_host->endpoint[0].desc);
 	if (!usb_endpoint_dir_in(sz->endpoint)) {
-		dev_err(&intf->dev, "%s: endpoint doesn't match input device 02%02x\n",
-			__func__, sz->endpoint->bEndpointAddress);
+		dev_err(&intf->dev, "%s: endpoint doesn't match input device "
+			"02%02x\n", __func__, sz->endpoint->bEndpointAddress);
 		retval = -ENODEV;
 		goto free_sz;
 	}
 
 	if (!usb_endpoint_xfer_int(sz->endpoint)) {
-		dev_err(&intf->dev, "%s: endpoint attributes don't match xfer 02%02x\n",
-			__func__, sz->endpoint->bmAttributes);
+		dev_err(&intf->dev, "%s: endpoint attributes don't match xfer "
+			"02%02x\n", __func__, sz->endpoint->bmAttributes);
 		retval = -ENODEV;
 		goto free_sz;
 	}
@@ -387,7 +403,7 @@ static int streamzap_probe(struct usb_interface *intf,
 	if (usbdev->descriptor.iManufacturer
 	    && usb_string(usbdev, usbdev->descriptor.iManufacturer,
 			  buf, sizeof(buf)) > 0)
-		strscpy(name, buf, sizeof(name));
+		strlcpy(name, buf, sizeof(name));
 
 	if (usbdev->descriptor.iProduct
 	    && usb_string(usbdev, usbdev->descriptor.iProduct,
@@ -412,7 +428,7 @@ static int streamzap_probe(struct usb_interface *intf,
 	sz->max_timeout = US_TO_NS(SZ_TIMEOUT * SZ_RESOLUTION);
 	#endif
 
-	sz->signal_start = ktime_get_real();
+	do_gettimeofday(&sz->signal_start);
 
 	/* Complete final initialisations */
 	usb_fill_int_urb(sz->urb_in, usbdev, pipe, sz->buf_in,
@@ -441,7 +457,7 @@ free_sz:
 	return retval;
 }
 
-/*
+/**
  * streamzap_disconnect
  *
  * Called by the usb core when the device is removed from the system.
@@ -484,7 +500,7 @@ static int streamzap_resume(struct usb_interface *intf)
 	struct streamzap_ir *sz = usb_get_intfdata(intf);
 
 	if (usb_submit_urb(sz->urb_in, GFP_ATOMIC)) {
-		dev_err(sz->dev, "Error submitting urb\n");
+		dev_err(sz->dev, "Error sumbiting urb\n");
 		return -EIO;
 	}
 

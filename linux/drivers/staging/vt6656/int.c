@@ -1,7 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
  *
  * File: int.c
  *
@@ -39,20 +53,18 @@ static const u8 fallback_rate1[5][5] = {
 	{RATE_54M, RATE_54M, RATE_36M, RATE_18M, RATE_18M}
 };
 
-int vnt_int_start_interrupt(struct vnt_private *priv)
+void vnt_int_start_interrupt(struct vnt_private *priv)
 {
-	int ret = 0;
 	unsigned long flags;
+	int status;
 
 	dev_dbg(&priv->usb->dev, "---->Interrupt Polling Thread\n");
 
 	spin_lock_irqsave(&priv->lock, flags);
 
-	ret = vnt_start_interrupt_urb(priv);
+	status = vnt_start_interrupt_urb(priv);
 
 	spin_unlock_irqrestore(&priv->lock, flags);
-
-	return ret;
 }
 
 static int vnt_int_report_rate(struct vnt_private *priv, u8 pkt_no, u8 tsr)
@@ -89,7 +101,7 @@ static int vnt_int_report_rate(struct vnt_private *priv, u8 pkt_no, u8 tsr)
 		else if (context->fb_option == AUTO_FB_1)
 			tx_rate = fallback_rate1[tx_rate][retry];
 
-		if (info->band == NL80211_BAND_5GHZ)
+		if (info->band == IEEE80211_BAND_5GHZ)
 			idx = tx_rate - RATE_6M;
 		else
 			idx = tx_rate;
@@ -99,11 +111,9 @@ static int vnt_int_report_rate(struct vnt_private *priv, u8 pkt_no, u8 tsr)
 
 	info->status.rates[0].count = tx_retry;
 
-	if (!(tsr & TSR_TMO)) {
+	if (!(tsr & (TSR_TMO | TSR_RETRYTMO))) {
 		info->status.rates[0].idx = idx;
-
-		if (!(info->flags & IEEE80211_TX_CTL_NO_ACK))
-			info->flags |= IEEE80211_TX_STAT_ACK;
+		info->flags |= IEEE80211_TX_STAT_ACK;
 	}
 
 	ieee80211_tx_status_irqsafe(priv->hw, context->skb);
@@ -136,7 +146,7 @@ void vnt_int_process_data(struct vnt_private *priv)
 
 	if (int_data->isr0 != 0) {
 		if (int_data->isr0 & ISR_BNTX &&
-		    priv->op_mode == NL80211_IFTYPE_AP)
+				priv->op_mode == NL80211_IFTYPE_AP)
 			vnt_schedule_command(priv, WLAN_CMD_BECON_SEND);
 
 		if (int_data->isr0 & ISR_TBTT &&
@@ -145,8 +155,7 @@ void vnt_int_process_data(struct vnt_private *priv)
 				priv->wake_up_count =
 					priv->hw->conf.listen_interval;
 
-			if (priv->wake_up_count)
-				--priv->wake_up_count;
+			--priv->wake_up_count;
 
 			/* Turn on wake up to listen next beacon */
 			if (priv->wake_up_count == 1)

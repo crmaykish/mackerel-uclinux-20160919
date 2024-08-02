@@ -77,17 +77,13 @@ g84_pll_mapping[] = {
 	{}
 };
 
-static u32
+static u16
 pll_limits_table(struct nvkm_bios *bios, u8 *ver, u8 *hdr, u8 *cnt, u8 *len)
 {
 	struct bit_entry bit_C;
-	u32 data = 0x0000;
 
-	if (!bit_entry(bios, 'C', &bit_C)) {
-		if (bit_C.version == 1 && bit_C.length >= 10)
-			data = nvbios_rd16(bios, bit_C.offset + 8);
-		if (bit_C.version == 2 && bit_C.length >= 4)
-			data = nvbios_rd32(bios, bit_C.offset + 0);
+	if (!bit_entry(bios, 'C', &bit_C) && bit_C.length >= 10) {
+		u16 data = nvbios_rd16(bios, bit_C.offset + 8);
 		if (data) {
 			*ver = nvbios_rd08(bios, data + 0);
 			*hdr = nvbios_rd08(bios, data + 1);
@@ -98,7 +94,7 @@ pll_limits_table(struct nvkm_bios *bios, u8 *ver, u8 *hdr, u8 *cnt, u8 *len)
 	}
 
 	if (bmp_version(bios) >= 0x0524) {
-		data = nvbios_rd16(bios, bios->bmp_offset + 142);
+		u16 data = nvbios_rd16(bios, bios->bmp_offset + 142);
 		if (data) {
 			*ver = nvbios_rd08(bios, data + 0);
 			*hdr = 1;
@@ -109,7 +105,7 @@ pll_limits_table(struct nvkm_bios *bios, u8 *ver, u8 *hdr, u8 *cnt, u8 *len)
 	}
 
 	*ver = 0x00;
-	return data;
+	return 0x0000;
 }
 
 static struct pll_mapping *
@@ -134,18 +130,17 @@ pll_map(struct nvkm_bios *bios)
 		    device->chipset == 0xaa ||
 		    device->chipset == 0xac)
 			return g84_pll_mapping;
-		/* fall through */
 	default:
 		return NULL;
 	}
 }
 
-static u32
+static u16
 pll_map_reg(struct nvkm_bios *bios, u32 reg, u32 *type, u8 *ver, u8 *len)
 {
 	struct pll_mapping *map;
 	u8  hdr, cnt;
-	u32 data;
+	u16 data;
 
 	data = pll_limits_table(bios, ver, &hdr, &cnt, len);
 	if (data && *ver >= 0x30) {
@@ -161,9 +156,9 @@ pll_map_reg(struct nvkm_bios *bios, u32 reg, u32 *type, u8 *ver, u8 *len)
 	}
 
 	map = pll_map(bios);
-	while (map && map->reg) {
+	while (map->reg) {
 		if (map->reg == reg && *ver >= 0x20) {
-			u32 addr = (data += hdr);
+			u16 addr = (data += hdr);
 			*type = map->type;
 			while (cnt--) {
 				if (nvbios_rd32(bios, data) == map->reg)
@@ -182,22 +177,19 @@ pll_map_reg(struct nvkm_bios *bios, u32 reg, u32 *type, u8 *ver, u8 *len)
 	return 0x0000;
 }
 
-static u32
+static u16
 pll_map_type(struct nvkm_bios *bios, u8 type, u32 *reg, u8 *ver, u8 *len)
 {
 	struct pll_mapping *map;
 	u8  hdr, cnt;
-	u32 data;
+	u16 data;
 
 	data = pll_limits_table(bios, ver, &hdr, &cnt, len);
 	if (data && *ver >= 0x30) {
 		data += hdr;
 		while (cnt--) {
 			if (nvbios_rd08(bios, data + 0) == type) {
-				if (*ver < 0x50)
-					*reg = nvbios_rd32(bios, data + 3);
-				else
-					*reg = 0;
+				*reg = nvbios_rd32(bios, data + 3);
 				return data;
 			}
 			data += *len;
@@ -206,9 +198,9 @@ pll_map_type(struct nvkm_bios *bios, u8 type, u32 *reg, u8 *ver, u8 *len)
 	}
 
 	map = pll_map(bios);
-	while (map && map->reg) {
+	while (map->reg) {
 		if (map->type == type && *ver >= 0x20) {
-			u32 addr = (data += hdr);
+			u16 addr = (data += hdr);
 			*reg = map->reg;
 			while (cnt--) {
 				if (nvbios_rd32(bios, data) == map->reg)
@@ -234,7 +226,7 @@ nvbios_pll_parse(struct nvkm_bios *bios, u32 type, struct nvbios_pll *info)
 	struct nvkm_device *device = subdev->device;
 	u8  ver, len;
 	u32 reg = type;
-	u32 data;
+	u16 data;
 
 	if (type > PLL_MAX) {
 		reg  = type;
@@ -364,20 +356,6 @@ nvbios_pll_parse(struct nvkm_bios *bios, u32 type, struct nvbios_pll *info)
 		info->vco1.max_n = nvbios_rd08(bios, data + 11);
 		info->min_p = nvbios_rd08(bios, data + 12);
 		info->max_p = nvbios_rd08(bios, data + 13);
-		break;
-	case 0x50:
-		info->refclk = nvbios_rd16(bios, data + 1) * 1000;
-		/* info->refclk_alt = nvbios_rd16(bios, data + 3) * 1000; */
-		info->vco1.min_freq = nvbios_rd16(bios, data + 5) * 1000;
-		info->vco1.max_freq = nvbios_rd16(bios, data + 7) * 1000;
-		info->vco1.min_inputfreq = nvbios_rd16(bios, data + 9) * 1000;
-		info->vco1.max_inputfreq = nvbios_rd16(bios, data + 11) * 1000;
-		info->vco1.min_m = nvbios_rd08(bios, data + 13);
-		info->vco1.max_m = nvbios_rd08(bios, data + 14);
-		info->vco1.min_n = nvbios_rd08(bios, data + 15);
-		info->vco1.max_n = nvbios_rd08(bios, data + 16);
-		info->min_p = nvbios_rd08(bios, data + 17);
-		info->max_p = nvbios_rd08(bios, data + 18);
 		break;
 	default:
 		nvkm_error(subdev, "unknown pll limits version 0x%02x\n", ver);

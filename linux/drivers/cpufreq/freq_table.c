@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/drivers/cpufreq/freq_table.c
  *
  * Copyright (C) 2002 - 2003 Dominik Brodowski
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -59,8 +63,10 @@ int cpufreq_frequency_table_cpuinfo(struct cpufreq_policy *policy,
 	else
 		return 0;
 }
+EXPORT_SYMBOL_GPL(cpufreq_frequency_table_cpuinfo);
 
-int cpufreq_frequency_table_verify(struct cpufreq_policy_data *policy,
+
+int cpufreq_frequency_table_verify(struct cpufreq_policy *policy,
 				   struct cpufreq_frequency_table *table)
 {
 	struct cpufreq_frequency_table *pos;
@@ -100,18 +106,22 @@ EXPORT_SYMBOL_GPL(cpufreq_frequency_table_verify);
  * Generic routine to verify policy & frequency table, requires driver to set
  * policy->freq_table prior to it.
  */
-int cpufreq_generic_frequency_table_verify(struct cpufreq_policy_data *policy)
+int cpufreq_generic_frequency_table_verify(struct cpufreq_policy *policy)
 {
-	if (!policy->freq_table)
+	struct cpufreq_frequency_table *table =
+		cpufreq_frequency_get_table(policy->cpu);
+	if (!table)
 		return -ENODEV;
 
-	return cpufreq_frequency_table_verify(policy, policy->freq_table);
+	return cpufreq_frequency_table_verify(policy, table);
 }
 EXPORT_SYMBOL_GPL(cpufreq_generic_frequency_table_verify);
 
-int cpufreq_table_index_unsorted(struct cpufreq_policy *policy,
-				 unsigned int target_freq,
-				 unsigned int relation)
+int cpufreq_frequency_table_target(struct cpufreq_policy *policy,
+				   struct cpufreq_frequency_table *table,
+				   unsigned int target_freq,
+				   unsigned int relation,
+				   unsigned int *index)
 {
 	struct cpufreq_frequency_table optimal = {
 		.driver_data = ~0,
@@ -122,9 +132,7 @@ int cpufreq_table_index_unsorted(struct cpufreq_policy *policy,
 		.frequency = 0,
 	};
 	struct cpufreq_frequency_table *pos;
-	struct cpufreq_frequency_table *table = policy->freq_table;
 	unsigned int freq, diff, i = 0;
-	int index;
 
 	pr_debug("request for target %u kHz (relation: %u) for cpu %u\n",
 					target_freq, relation, policy->cpu);
@@ -139,9 +147,10 @@ int cpufreq_table_index_unsorted(struct cpufreq_policy *policy,
 		break;
 	}
 
-	cpufreq_for_each_valid_entry_idx(pos, table, i) {
+	cpufreq_for_each_valid_entry(pos, table) {
 		freq = pos->frequency;
 
+		i = pos - table;
 		if ((freq < policy->min) || (freq > policy->max))
 			continue;
 		if (freq == target_freq) {
@@ -187,35 +196,33 @@ int cpufreq_table_index_unsorted(struct cpufreq_policy *policy,
 		}
 	}
 	if (optimal.driver_data > i) {
-		if (suboptimal.driver_data > i) {
-			WARN(1, "Invalid frequency table: %d\n", policy->cpu);
-			return 0;
-		}
-
-		index = suboptimal.driver_data;
+		if (suboptimal.driver_data > i)
+			return -EINVAL;
+		*index = suboptimal.driver_data;
 	} else
-		index = optimal.driver_data;
+		*index = optimal.driver_data;
 
-	pr_debug("target index is %u, freq is:%u kHz\n", index,
-		 table[index].frequency);
-	return index;
+	pr_debug("target index is %u, freq is:%u kHz\n", *index,
+		 table[*index].frequency);
+
+	return 0;
 }
-EXPORT_SYMBOL_GPL(cpufreq_table_index_unsorted);
+EXPORT_SYMBOL_GPL(cpufreq_frequency_table_target);
 
 int cpufreq_frequency_table_get_index(struct cpufreq_policy *policy,
 		unsigned int freq)
 {
-	struct cpufreq_frequency_table *pos, *table = policy->freq_table;
-	int idx;
+	struct cpufreq_frequency_table *pos, *table;
 
+	table = cpufreq_frequency_get_table(policy->cpu);
 	if (unlikely(!table)) {
 		pr_debug("%s: Unable to find frequency table\n", __func__);
 		return -ENOENT;
 	}
 
-	cpufreq_for_each_valid_entry_idx(pos, table, idx)
+	cpufreq_for_each_valid_entry(pos, table)
 		if (pos->frequency == freq)
-			return idx;
+			return pos - table;
 
 	return -EINVAL;
 }
@@ -286,78 +293,24 @@ EXPORT_SYMBOL_GPL(cpufreq_freq_attr_scaling_boost_freqs);
 
 struct freq_attr *cpufreq_generic_attr[] = {
 	&cpufreq_freq_attr_scaling_available_freqs,
+#ifdef CONFIG_CPU_FREQ_BOOST_SW
+	&cpufreq_freq_attr_scaling_boost_freqs,
+#endif
 	NULL,
 };
 EXPORT_SYMBOL_GPL(cpufreq_generic_attr);
 
-static int set_freq_table_sorted(struct cpufreq_policy *policy)
+int cpufreq_table_validate_and_show(struct cpufreq_policy *policy,
+				      struct cpufreq_frequency_table *table)
 {
-	struct cpufreq_frequency_table *pos, *table = policy->freq_table;
-	struct cpufreq_frequency_table *prev = NULL;
-	int ascending = 0;
+	int ret = cpufreq_frequency_table_cpuinfo(policy, table);
 
-	policy->freq_table_sorted = CPUFREQ_TABLE_UNSORTED;
+	if (!ret)
+		policy->freq_table = table;
 
-	cpufreq_for_each_valid_entry(pos, table) {
-		if (!prev) {
-			prev = pos;
-			continue;
-		}
-
-		if (pos->frequency == prev->frequency) {
-			pr_warn("Duplicate freq-table entries: %u\n",
-				pos->frequency);
-			return -EINVAL;
-		}
-
-		/* Frequency increased from prev to pos */
-		if (pos->frequency > prev->frequency) {
-			/* But frequency was decreasing earlier */
-			if (ascending < 0) {
-				pr_debug("Freq table is unsorted\n");
-				return 0;
-			}
-
-			ascending++;
-		} else {
-			/* Frequency decreased from prev to pos */
-
-			/* But frequency was increasing earlier */
-			if (ascending > 0) {
-				pr_debug("Freq table is unsorted\n");
-				return 0;
-			}
-
-			ascending--;
-		}
-
-		prev = pos;
-	}
-
-	if (ascending > 0)
-		policy->freq_table_sorted = CPUFREQ_TABLE_SORTED_ASCENDING;
-	else
-		policy->freq_table_sorted = CPUFREQ_TABLE_SORTED_DESCENDING;
-
-	pr_debug("Freq table is sorted in %s order\n",
-		 ascending > 0 ? "ascending" : "descending");
-
-	return 0;
+	return ret;
 }
-
-int cpufreq_table_validate_and_sort(struct cpufreq_policy *policy)
-{
-	int ret;
-
-	if (!policy->freq_table)
-		return 0;
-
-	ret = cpufreq_frequency_table_cpuinfo(policy, policy->freq_table);
-	if (ret)
-		return ret;
-
-	return set_freq_table_sorted(policy);
-}
+EXPORT_SYMBOL_GPL(cpufreq_table_validate_and_show);
 
 MODULE_AUTHOR("Dominik Brodowski <linux@brodo.de>");
 MODULE_DESCRIPTION("CPUfreq frequency table helpers");

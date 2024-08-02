@@ -1,6 +1,17 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012, NVIDIA CORPORATION.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __SOC_TEGRA_FUSE_H__
@@ -15,7 +26,6 @@
 
 #define TEGRA_FUSE_SKU_CALIB_0	0xf0
 #define TEGRA30_FUSE_SATA_CALIB	0x124
-#define TEGRA_FUSE_USB_CALIB_EXT_0 0x250
 
 #ifndef __ASSEMBLY__
 
@@ -49,11 +59,10 @@ struct tegra_sku_info {
 
 u32 tegra_read_straps(void);
 u32 tegra_read_ram_code(void);
+u32 tegra_read_chipid(void);
 int tegra_fuse_readl(unsigned long offset, u32 *value);
 
 extern struct tegra_sku_info tegra_sku_info;
-
-struct device *tegra_soc_device_register(void);
 
 #endif /* __ASSEMBLY__ */
 

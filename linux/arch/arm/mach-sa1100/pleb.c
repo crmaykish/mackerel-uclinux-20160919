@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * linux/arch/arm/mach-sa1100/pleb.c
  */
@@ -46,7 +45,7 @@ static struct resource smc91x_resources[] = {
 };
 
 static struct smc91x_platdata smc91x_platdata = {
-	.flags = SMC91X_USE_16BIT | SMC91X_USE_8BIT | SMC91X_NOWAIT,
+	.flags = SMC91X_USE_16BIT | SMC91X_NOWAIT,
 };
 
 static struct platform_device smc91x_device = {

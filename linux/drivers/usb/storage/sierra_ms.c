@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <scsi/scsi.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_cmnd.h>
@@ -23,7 +22,7 @@
 #define TRU_FORCE_MS 			0x02
 #define TRU_FORCE_MODEM 		0x03
 
-static unsigned int swi_tru_install = 1;
+static unsigned int swi_tru_install = 3;
 module_param(swi_tru_install, uint, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(swi_tru_install, "TRU-Install mode (1=Full Logic (def),"
 		 " 2=Force CD-Rom, 3=Force Modem)");
@@ -90,7 +89,7 @@ static void debug_swoc(const struct device *dev, struct swoc_info *swocInfo)
 }
 
 
-static ssize_t truinst_show(struct device *dev, struct device_attribute *attr,
+static ssize_t show_truinst(struct device *dev, struct device_attribute *attr,
 			char *buf)
 {
 	struct swoc_info *swocInfo;
@@ -122,7 +121,7 @@ static ssize_t truinst_show(struct device *dev, struct device_attribute *attr,
 	}
 	return result;
 }
-static DEVICE_ATTR_RO(truinst);
+static DEVICE_ATTR(truinst, S_IRUGO, show_truinst, NULL);
 
 int sierra_ms_init(struct us_data *us)
 {
@@ -178,8 +177,7 @@ int sierra_ms_init(struct us_data *us)
 
 		debug_swoc(&us->pusb_dev->dev, swocInfo);
 
-		/*
-		 * If there is not Linux software on the TRU-Install device
+		/* If there is not Linux software on the TRU-Install device
 		 * then switch to modem mode
 		 */
 		if (!containsFullLinuxPackage(swocInfo)) {
@@ -194,6 +192,8 @@ int sierra_ms_init(struct us_data *us)
 		kfree(swocInfo);
 	}
 complete:
-	return device_create_file(&us->pusb_intf->dev, &dev_attr_truinst);
+	result = device_create_file(&us->pusb_intf->dev, &dev_attr_truinst);
+
+	return 0;
 }
 

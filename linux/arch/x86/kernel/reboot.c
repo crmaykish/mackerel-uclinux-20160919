@@ -1,7 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/reboot.h>
 #include <linux/init.h>
 #include <linux/pm.h>
@@ -10,7 +9,6 @@
 #include <linux/sched.h>
 #include <linux/tboot.h>
 #include <linux/delay.h>
-#include <linux/frame.h>
 #include <acpi/reboot.h>
 #include <asm/io.h>
 #include <asm/apic.h>
@@ -39,6 +37,8 @@
 void (*pm_power_off)(void);
 EXPORT_SYMBOL(pm_power_off);
 
+static const struct desc_ptr no_idt = {};
+
 /*
  * This is set if we need to go through the 'emergency' path.
  * When machine_emergency_restart() is called, we may be on
@@ -55,19 +55,6 @@ bool port_cf9_safe = false;
  */
 
 /*
- * Some machines require the "reboot=a" commandline options
- */
-static int __init set_acpi_reboot(const struct dmi_system_id *d)
-{
-	if (reboot_type != BOOT_ACPI) {
-		reboot_type = BOOT_ACPI;
-		pr_info("%s series board detected. Selecting %s-method for reboots.\n",
-			d->ident, "ACPI");
-	}
-	return 0;
-}
-
-/*
  * Some machines require the "reboot=b" or "reboot=k"  commandline options,
  * this quirk makes that automatic.
  */
@@ -77,19 +64,6 @@ static int __init set_bios_reboot(const struct dmi_system_id *d)
 		reboot_type = BOOT_BIOS;
 		pr_info("%s series board detected. Selecting %s-method for reboots.\n",
 			d->ident, "BIOS");
-	}
-	return 0;
-}
-
-/*
- * Some machines don't handle the default ACPI reboot method and
- * require the EFI reboot method:
- */
-static int __init set_efi_reboot(const struct dmi_system_id *d)
-{
-	if (reboot_type != BOOT_EFI && !efi_runtime_disabled()) {
-		reboot_type = BOOT_EFI;
-		pr_info("%s series board detected. Selecting EFI-method for reboot.\n", d->ident);
 	}
 	return 0;
 }
@@ -113,9 +87,13 @@ void __noreturn machine_real_restart(unsigned int type)
 	spin_unlock(&rtc_lock);
 
 	/*
-	 * Switch to the trampoline page table.
+	 * Switch back to the initial page table.
 	 */
-	load_trampoline_pgtable();
+#ifdef CONFIG_X86_32
+	load_cr3(initial_page_table);
+#else
+	write_cr3(real_mode_header->trampoline_pgd);
+#endif
 
 	/* Jump to the identity-mapped low memory code */
 #ifdef CONFIG_X86_32
@@ -132,7 +110,6 @@ void __noreturn machine_real_restart(unsigned int type)
 #ifdef CONFIG_APM_MODULE
 EXPORT_SYMBOL(machine_real_restart);
 #endif
-STACK_FRAME_NON_STANDARD(machine_real_restart);
 
 /*
  * Some Apple MacBook and MacBookPro's needs reboot=p to be able to reboot
@@ -160,7 +137,7 @@ static int __init set_kbd_reboot(const struct dmi_system_id *d)
 /*
  * This is a single dmi_table handling all reboot quirks.
  */
-static const struct dmi_system_id reboot_dmi_table[] __initconst = {
+static struct dmi_system_id __initdata reboot_dmi_table[] = {
 
 	/* Acer */
 	{	/* Handle reboot issue on Acer Aspire one */
@@ -171,14 +148,6 @@ static const struct dmi_system_id reboot_dmi_table[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "AOA110"),
 		},
 	},
-	{	/* Handle reboot issue on Acer TravelMate X514-51T */
-		.callback = set_efi_reboot,
-		.ident = "Acer TravelMate X514-51T",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "TravelMate X514-51T"),
-		},
-	},
 
 	/* Apple */
 	{	/* Handle problems with rebooting on Apple MacBook5 */
@@ -187,14 +156,6 @@ static const struct dmi_system_id reboot_dmi_table[] __initconst = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
 			DMI_MATCH(DMI_PRODUCT_NAME, "MacBook5"),
-		},
-	},
-	{	/* Handle problems with rebooting on Apple MacBook6,1 */
-		.callback = set_pci_reboot,
-		.ident = "Apple MacBook6,1",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "MacBook6,1"),
 		},
 	},
 	{	/* Handle problems with rebooting on Apple MacBookPro5 */
@@ -221,14 +182,6 @@ static const struct dmi_system_id reboot_dmi_table[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "iMac9,1"),
 		},
 	},
-	{	/* Handle problems with rebooting on the iMac10,1. */
-		.callback = set_pci_reboot,
-		.ident = "Apple iMac10,1",
-		.matches = {
-		    DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
-		    DMI_MATCH(DMI_PRODUCT_NAME, "iMac10,1"),
-		},
-	},
 
 	/* ASRock */
 	{	/* Handle problems with rebooting on ASRock Q1900DC-ITX */
@@ -247,22 +200,6 @@ static const struct dmi_system_id reboot_dmi_table[] __initconst = {
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "ASUSTeK Computer INC."),
 			DMI_MATCH(DMI_BOARD_NAME, "P4S800"),
-		},
-	},
-	{	/* Handle problems with rebooting on ASUS EeeBook X205TA */
-		.callback = set_acpi_reboot,
-		.ident = "ASUS EeeBook X205TA",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "X205TA"),
-		},
-	},
-	{	/* Handle problems with rebooting on ASUS EeeBook X205TAW */
-		.callback = set_acpi_reboot,
-		.ident = "ASUS EeeBook X205TAW",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "X205TAW"),
 		},
 	},
 
@@ -380,11 +317,10 @@ static const struct dmi_system_id reboot_dmi_table[] __initconst = {
 	},
 	{	/* Handle problems with rebooting on the OptiPlex 990. */
 		.callback = set_pci_reboot,
-		.ident = "Dell OptiPlex 990 BIOS A0x",
+		.ident = "Dell OptiPlex 990",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
 			DMI_MATCH(DMI_PRODUCT_NAME, "OptiPlex 990"),
-			DMI_MATCH(DMI_BIOS_VERSION, "A0"),
 		},
 	},
 	{	/* Handle problems with rebooting on Dell 300's */
@@ -451,14 +387,6 @@ static const struct dmi_system_id reboot_dmi_table[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Dell XPS710"),
 		},
 	},
-	{	/* Handle problems with rebooting on Dell Optiplex 7450 AIO */
-		.callback = set_acpi_reboot,
-		.ident = "Dell OptiPlex 7450 AIO",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
-			DMI_MATCH(DMI_PRODUCT_NAME, "OptiPlex 7450 AIO"),
-		},
-	},
 
 	/* Hewlett-Packard */
 	{	/* Handle problems with rebooting on HP laptops */
@@ -467,15 +395,6 @@ static const struct dmi_system_id reboot_dmi_table[] __initconst = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Hewlett-Packard"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "HP Compaq"),
-		},
-	},
-
-	{	/* PCIe Wifi card isn't detected after reboot otherwise */
-		.callback = set_pci_reboot,
-		.ident = "Zotac ZBOX CI327 nano",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "NA"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "ZBOX-CI327NANO-GS-01"),
 		},
 	},
 
@@ -505,12 +424,12 @@ static int __init reboot_init(void)
 
 	/*
 	 * The DMI quirks table takes precedence. If no quirks entry
-	 * matches and the ACPI Hardware Reduced bit is set and EFI
-	 * runtime services are enabled, force EFI reboot.
+	 * matches and the ACPI Hardware Reduced bit is set, force EFI
+	 * reboot.
 	 */
 	rv = dmi_check_system(reboot_dmi_table);
 
-	if (!rv && efi_reboot_required() && !efi_runtime_disabled())
+	if (!rv && efi_reboot_required())
 		reboot_type = BOOT_EFI;
 
 	return 0;
@@ -528,29 +447,42 @@ static inline void kb_wait(void)
 	}
 }
 
-static inline void nmi_shootdown_cpus_on_restart(void);
+static void vmxoff_nmi(int cpu, struct pt_regs *regs)
+{
+	cpu_emergency_vmxoff();
+}
 
-static void emergency_reboot_disable_virtualization(void)
+/* Use NMIs as IPIs to tell all CPUs to disable virtualization */
+static void emergency_vmx_disable_all(void)
 {
 	/* Just make sure we won't change CPUs while doing this */
 	local_irq_disable();
 
 	/*
-	 * Disable virtualization on all CPUs before rebooting to avoid hanging
-	 * the system, as VMX and SVM block INIT when running in the host.
+	 * We need to disable VMX on all CPUs before rebooting, otherwise
+	 * we risk hanging up the machine, because the CPU ignore INIT
+	 * signals when VMX is enabled.
 	 *
-	 * We can't take any locks and we may be on an inconsistent state, so
-	 * use NMIs as IPIs to tell the other CPUs to disable VMX/SVM and halt.
+	 * We can't take any locks and we may be on an inconsistent
+	 * state, so we use NMIs as IPIs to tell the other CPUs to disable
+	 * VMX and halt.
 	 *
-	 * Do the NMI shootdown even if virtualization is off on _this_ CPU, as
-	 * other CPUs may have virtualization enabled.
+	 * For safety, we will avoid running the nmi_shootdown_cpus()
+	 * stuff unnecessarily, but we don't have a way to check
+	 * if other CPUs have VMX enabled. So we will call it only if the
+	 * CPU we are running on has VMX enabled.
+	 *
+	 * We will miss cases where VMX is not enabled on all CPUs. This
+	 * shouldn't do much harm because KVM always enable VMX on all
+	 * CPUs anyway. But we can miss it on the small window where KVM
+	 * is still enabling VMX.
 	 */
-	if (cpu_has_vmx() || cpu_has_svm(NULL)) {
-		/* Safely force _this_ CPU out of VMX/SVM operation. */
-		cpu_emergency_disable_virtualization();
+	if (cpu_has_vmx() && cpu_vmx_enabled()) {
+		/* Disable VMX on this CPU. */
+		cpu_vmxoff();
 
-		/* Disable VMX/SVM and halt on other CPUs. */
-		nmi_shootdown_cpus_on_restart();
+		/* Halt and disable VMX on the other CPUs */
+		nmi_shootdown_cpus(vmxoff_nmi);
 
 	}
 }
@@ -587,22 +519,13 @@ static void native_machine_emergency_restart(void)
 	unsigned short mode;
 
 	if (reboot_emergency)
-		emergency_reboot_disable_virtualization();
+		emergency_vmx_disable_all();
 
 	tboot_shutdown(TB_SHUTDOWN_REBOOT);
 
 	/* Tell the BIOS if we want cold or warm reboot */
 	mode = reboot_mode == REBOOT_WARM ? 0x1234 : 0;
 	*((unsigned short *)__va(0x472)) = mode;
-
-	/*
-	 * If an EFI capsule has been registered with the firmware then
-	 * override the reboot= parameter.
-	 */
-	if (efi_capsule_pending(NULL)) {
-		pr_info("EFI capsule is pending, forcing EFI reboot.\n");
-		reboot_type = BOOT_EFI;
-	}
 
 	for (;;) {
 		/* Could also try the reset bit in the Hammer NB */
@@ -659,7 +582,7 @@ static void native_machine_emergency_restart(void)
 			break;
 
 		case BOOT_TRIPLE:
-			idt_invalidate(NULL);
+			load_idt(&no_idt);
 			__asm__ __volatile__("int3");
 
 			/* We're probably dead after this, but... */
@@ -684,7 +607,7 @@ void native_machine_shutdown(void)
 	 * Even without the erratum, it still makes sense to quiet IO APIC
 	 * before disabling Local APIC.
 	 */
-	clear_IO_APIC();
+	disable_IO_APIC();
 #endif
 
 #ifdef CONFIG_SMP
@@ -698,7 +621,6 @@ void native_machine_shutdown(void)
 #endif
 
 	lapic_shutdown();
-	restore_boot_irq_mode();
 
 #ifdef CONFIG_HPET_TIMER
 	hpet_disable();
@@ -745,7 +667,7 @@ static void native_machine_power_off(void)
 	tboot_shutdown(TB_SHUTDOWN_HALT);
 }
 
-struct machine_ops machine_ops __ro_after_init = {
+struct machine_ops machine_ops = {
 	.power_off = native_machine_power_off,
 	.shutdown = native_machine_shutdown,
 	.emergency_restart = native_machine_emergency_restart,
@@ -789,26 +711,13 @@ void machine_crash_shutdown(struct pt_regs *regs)
 #endif
 
 
-/* This is the CPU performing the emergency shutdown work. */
-int crashing_cpu = -1;
-
-/*
- * Disable virtualization, i.e. VMX or SVM, to ensure INIT is recognized during
- * reboot.  VMX blocks INIT if the CPU is post-VMXON, and SVM blocks INIT if
- * GIF=0, i.e. if the crash occurred between CLGI and STGI.
- */
-void cpu_emergency_disable_virtualization(void)
-{
-	cpu_emergency_vmxoff();
-	cpu_emergency_svm_disable();
-}
-
 #if defined(CONFIG_SMP)
 
+/* This keeps a track of which one is crashing cpu. */
+static int crashing_cpu;
 static nmi_shootdown_cb shootdown_callback;
 
 static atomic_t waiting_for_crash_ipi;
-static int crash_ipi_issued;
 
 static int crash_nmi_callback(unsigned int val, struct pt_regs *regs)
 {
@@ -825,14 +734,7 @@ static int crash_nmi_callback(unsigned int val, struct pt_regs *regs)
 		return NMI_HANDLED;
 	local_irq_disable();
 
-	if (shootdown_callback)
-		shootdown_callback(cpu, regs);
-
-	/*
-	 * Prepare the CPU for reboot _after_ invoking the callback so that the
-	 * callback can safely use virtualization instructions, e.g. VMCLEAR.
-	 */
-	cpu_emergency_disable_virtualization();
+	shootdown_callback(cpu, regs);
 
 	atomic_dec(&waiting_for_crash_ipi);
 	/* Assume hlt works */
@@ -843,31 +745,22 @@ static int crash_nmi_callback(unsigned int val, struct pt_regs *regs)
 	return NMI_HANDLED;
 }
 
-/**
- * nmi_shootdown_cpus - Stop other CPUs via NMI
- * @callback:	Optional callback to be invoked from the NMI handler
+static void smp_send_nmi_allbutself(void)
+{
+	apic->send_IPI_allbutself(NMI_VECTOR);
+}
+
+/*
+ * Halt all other CPUs, calling the specified function on each of them
  *
- * The NMI handler on the remote CPUs invokes @callback, if not
- * NULL, first and then disables virtualization to ensure that
- * INIT is recognized during reboot.
- *
- * nmi_shootdown_cpus() can only be invoked once. After the first
- * invocation all other CPUs are stuck in crash_nmi_callback() and
- * cannot respond to a second NMI.
+ * This function can be used to halt all other CPUs on crash
+ * or emergency reboot time. The function passed as parameter
+ * will be called inside a NMI handler on all CPUs.
  */
 void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 {
 	unsigned long msecs;
-
 	local_irq_disable();
-
-	/*
-	 * Avoid certain doom if a shootdown already occurred; re-registering
-	 * the NMI handler will cause list corruption, modifying the callback
-	 * will do who knows what, etc...
-	 */
-	if (WARN_ON_ONCE(crash_ipi_issued))
-		return;
 
 	/* Make a note of crashing cpu. Will be used in NMI callback. */
 	crashing_cpu = safe_smp_processor_id();
@@ -885,10 +778,7 @@ void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 	 */
 	wmb();
 
-	apic_send_IPI_allbutself(NMI_VECTOR);
-
-	/* Kick CPUs looping in NMI context. */
-	WRITE_ONCE(crash_ipi_issued, 1);
+	smp_send_nmi_allbutself();
 
 	msecs = 1000; /* Wait at most a second for the other cpus to stop */
 	while ((atomic_read(&waiting_for_crash_ipi) > 0) && msecs) {
@@ -896,49 +786,11 @@ void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 		msecs--;
 	}
 
-	/*
-	 * Leave the nmi callback set, shootdown is a one-time thing.  Clearing
-	 * the callback could result in a NULL pointer dereference if a CPU
-	 * (finally) responds after the timeout expires.
-	 */
+	/* Leave the nmi callback set */
 }
-
-static inline void nmi_shootdown_cpus_on_restart(void)
-{
-	if (!crash_ipi_issued)
-		nmi_shootdown_cpus(NULL);
-}
-
-/*
- * Check if the crash dumping IPI got issued and if so, call its callback
- * directly. This function is used when we have already been in NMI handler.
- * It doesn't return.
- */
-void run_crash_ipi_callback(struct pt_regs *regs)
-{
-	if (crash_ipi_issued)
-		crash_nmi_callback(0, regs);
-}
-
-/* Override the weak function in kernel/panic.c */
-void nmi_panic_self_stop(struct pt_regs *regs)
-{
-	while (1) {
-		/* If no CPU is preparing crash dump, we simply loop here. */
-		run_crash_ipi_callback(regs);
-		cpu_relax();
-	}
-}
-
 #else /* !CONFIG_SMP */
 void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 {
 	/* No other CPUs to shoot down */
-}
-
-static inline void nmi_shootdown_cpus_on_restart(void) { }
-
-void run_crash_ipi_callback(struct pt_regs *regs)
-{
 }
 #endif

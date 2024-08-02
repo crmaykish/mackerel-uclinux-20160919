@@ -1,9 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* -*- linux-c -*- --------------------------------------------------------- *
  *
  * linux/include/linux/devpts_fs.h
  *
  *  Copyright 1998-2004 H. Peter Anvin -- All Rights Reserved
+ *
+ * This file is part of the Linux kernel and is made available under
+ * the terms of the GNU General Public License, version 2, or at your
+ * option, any later version, incorporated herein by reference.
  *
  * ------------------------------------------------------------------------- */
 
@@ -14,31 +17,32 @@
 
 #ifdef CONFIG_UNIX98_PTYS
 
-struct pts_fs_info;
-
-struct vfsmount *devpts_mntget(struct file *, struct pts_fs_info *);
-struct pts_fs_info *devpts_acquire(struct file *);
-void devpts_release(struct pts_fs_info *);
-
-int devpts_new_index(struct pts_fs_info *);
-void devpts_kill_index(struct pts_fs_info *, int);
-
+int devpts_new_index(struct inode *ptmx_inode);
+void devpts_kill_index(struct inode *ptmx_inode, int idx);
 /* mknod in devpts */
-struct dentry *devpts_pty_new(struct pts_fs_info *, int, void *);
+struct inode *devpts_pty_new(struct inode *ptmx_inode, dev_t device, int index,
+		void *priv);
 /* get private structure */
-void *devpts_get_priv(struct dentry *);
+void *devpts_get_priv(struct inode *pts_inode);
 /* unlink */
-void devpts_pty_kill(struct dentry *);
-
-/* in pty.c */
-int ptm_open_peer(struct file *master, struct tty_struct *tty, int flags);
+void devpts_pty_kill(struct inode *inode);
 
 #else
-static inline int
-ptm_open_peer(struct file *master, struct tty_struct *tty, int flags)
+
+/* Dummy stubs in the no-pty case */
+static inline int devpts_new_index(struct inode *ptmx_inode) { return -EINVAL; }
+static inline void devpts_kill_index(struct inode *ptmx_inode, int idx) { }
+static inline struct inode *devpts_pty_new(struct inode *ptmx_inode,
+		dev_t device, int index, void *priv)
 {
-	return -EIO;
+	return ERR_PTR(-EINVAL);
 }
+static inline void *devpts_get_priv(struct inode *pts_inode)
+{
+	return NULL;
+}
+static inline void devpts_pty_kill(struct inode *inode) { }
+
 #endif
 
 

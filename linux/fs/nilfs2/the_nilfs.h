@@ -1,10 +1,23 @@
-/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * the_nilfs.h - the_nilfs shared structure.
  *
  * Copyright (C) 2005-2008 Nippon Telegraph and Telephone Corporation.
  *
- * Written by Ryusuke Konishi.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * Written by Ryusuke Konishi <ryusuke@osrg.net>
  *
  */
 
@@ -18,7 +31,6 @@
 #include <linux/blkdev.h>
 #include <linux/backing-dev.h>
 #include <linux/slab.h>
-#include <linux/refcount.h>
 
 struct nilfs_sc_info;
 struct nilfs_sysfs_dev_subgroups;
@@ -29,14 +41,12 @@ enum {
 	THE_NILFS_DISCONTINUED,	/* 'next' pointer chain has broken */
 	THE_NILFS_GC_RUNNING,	/* gc process is running */
 	THE_NILFS_SB_DIRTY,	/* super block is dirty */
-	THE_NILFS_PURGING,	/* disposing dirty files for cleanup */
 };
 
 /**
  * struct the_nilfs - struct to supervise multiple nilfs mount points
  * @ns_flags: flags
  * @ns_flushed_device: flag indicating if all volatile data was flushed
- * @ns_sb: back pointer to super block instance
  * @ns_bdev: block device
  * @ns_sem: semaphore for shared states
  * @ns_snapshot_mount_mutex: mutex to protect snapshot mounts
@@ -96,7 +106,6 @@ struct the_nilfs {
 	unsigned long		ns_flags;
 	int			ns_flushed_device;
 
-	struct super_block     *ns_sb;
 	struct block_device    *ns_bdev;
 	struct rw_semaphore	ns_sem;
 	struct mutex		ns_snapshot_mount_mutex;
@@ -108,23 +117,26 @@ struct the_nilfs {
 	 */
 	struct buffer_head     *ns_sbh[2];
 	struct nilfs_super_block *ns_sbp[2];
-	time64_t		ns_sbwtime;
-	unsigned int		ns_sbwcount;
-	unsigned int		ns_sbsize;
-	unsigned int		ns_mount_state;
-	unsigned int		ns_sb_update_freq;
+	time_t			ns_sbwtime;
+	unsigned		ns_sbwcount;
+	unsigned		ns_sbsize;
+	unsigned		ns_mount_state;
+	unsigned		ns_sb_update_freq;
 
 	/*
-	 * The following fields are updated by a writable FS-instance.
-	 * These fields are protected by ns_segctor_sem outside load_nilfs().
+	 * Following fields are dedicated to a writable FS-instance.
+	 * Except for the period seeking checkpoint, code outside the segment
+	 * constructor must lock a segment semaphore while accessing these
+	 * fields.
+	 * The writable FS-instance is sole during a lifetime of the_nilfs.
 	 */
 	u64			ns_seg_seq;
 	__u64			ns_segnum;
 	__u64			ns_nextnum;
 	unsigned long		ns_pseg_offset;
 	__u64			ns_cno;
-	time64_t		ns_ctime;
-	time64_t		ns_nongc_ctime;
+	time_t			ns_ctime;
+	time_t			ns_nongc_ctime;
 	atomic_t		ns_ndirtyblks;
 
 	/*
@@ -182,7 +194,7 @@ struct the_nilfs {
 	unsigned long		ns_nrsvsegs;
 	unsigned long		ns_first_data_block;
 	int			ns_inode_size;
-	unsigned int		ns_first_ino;
+	int			ns_first_ino;
 	u32			ns_crc_seed;
 
 	/* /sys/fs/<nilfs>/<device> */
@@ -209,20 +221,20 @@ THE_NILFS_FNS(INIT, init)
 THE_NILFS_FNS(DISCONTINUED, discontinued)
 THE_NILFS_FNS(GC_RUNNING, gc_running)
 THE_NILFS_FNS(SB_DIRTY, sb_dirty)
-THE_NILFS_FNS(PURGING, purging)
 
 /*
  * Mount option operations
  */
 #define nilfs_clear_opt(nilfs, opt)  \
-	((nilfs)->ns_mount_opt &= ~NILFS_MOUNT_##opt)
+	do { (nilfs)->ns_mount_opt &= ~NILFS_MOUNT_##opt; } while (0)
 #define nilfs_set_opt(nilfs, opt)  \
-	((nilfs)->ns_mount_opt |= NILFS_MOUNT_##opt)
+	do { (nilfs)->ns_mount_opt |= NILFS_MOUNT_##opt; } while (0)
 #define nilfs_test_opt(nilfs, opt) ((nilfs)->ns_mount_opt & NILFS_MOUNT_##opt)
 #define nilfs_write_opt(nilfs, mask, opt)				\
-	((nilfs)->ns_mount_opt =					\
+	do { (nilfs)->ns_mount_opt =					\
 		(((nilfs)->ns_mount_opt & ~NILFS_MOUNT_##mask) |	\
-		 NILFS_MOUNT_##opt))					\
+		 NILFS_MOUNT_##opt);					\
+	} while (0)
 
 /**
  * struct nilfs_root - nilfs root object
@@ -240,7 +252,7 @@ struct nilfs_root {
 	__u64 cno;
 	struct rb_node rb_node;
 
-	refcount_t count;
+	atomic_t count;
 	struct the_nilfs *nilfs;
 	struct inode *ifile;
 
@@ -260,8 +272,7 @@ struct nilfs_root {
 
 static inline int nilfs_sb_need_update(struct the_nilfs *nilfs)
 {
-	u64 t = ktime_get_real_seconds();
-
+	u64 t = get_seconds();
 	return t < nilfs->ns_sbwtime ||
 		t > nilfs->ns_sbwtime + nilfs->ns_sb_update_freq;
 }
@@ -269,12 +280,11 @@ static inline int nilfs_sb_need_update(struct the_nilfs *nilfs)
 static inline int nilfs_sb_will_flip(struct the_nilfs *nilfs)
 {
 	int flip_bits = nilfs->ns_sbwcount & 0x0FL;
-
 	return (flip_bits != 0x08 && flip_bits != 0x0F);
 }
 
 void nilfs_set_last_segment(struct the_nilfs *, sector_t, u64, __u64);
-struct the_nilfs *alloc_nilfs(struct super_block *sb);
+struct the_nilfs *alloc_nilfs(struct block_device *bdev);
 void destroy_nilfs(struct the_nilfs *nilfs);
 int init_nilfs(struct the_nilfs *nilfs, struct super_block *sb, char *data);
 int load_nilfs(struct the_nilfs *nilfs, struct super_block *sb);
@@ -293,12 +303,12 @@ void nilfs_swap_super_block(struct the_nilfs *);
 
 static inline void nilfs_get_root(struct nilfs_root *root)
 {
-	refcount_inc(&root->count);
+	atomic_inc(&root->count);
 }
 
 static inline int nilfs_valid_fs(struct the_nilfs *nilfs)
 {
-	unsigned int valid_fs;
+	unsigned valid_fs;
 
 	down_read(&nilfs->ns_sem);
 	valid_fs = (nilfs->ns_mount_state & NILFS_VALID_FS);

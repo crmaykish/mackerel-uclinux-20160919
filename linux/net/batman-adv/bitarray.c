@@ -1,15 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) 2006-2019  B.A.T.M.A.N. contributors:
+/* Copyright (C) 2006-2015 B.A.T.M.A.N. contributors:
  *
  * Simon Wunderlich, Marek Lindner
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of version 2 of the GNU General Public
+ * License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "bitarray.h"
 #include "main.h"
 
 #include <linux/bitmap.h>
-
-#include "log.h"
 
 /* shift the packet array by n places. */
 static void batadv_bitmap_shift_left(unsigned long *seq_bits, s32 n)
@@ -20,20 +29,14 @@ static void batadv_bitmap_shift_left(unsigned long *seq_bits, s32 n)
 	bitmap_shift_left(seq_bits, seq_bits, n, BATADV_TQ_LOCAL_WINDOW_SIZE);
 }
 
-/**
- * batadv_bit_get_packet() - receive and process one packet within the sequence
- *  number window
- * @priv: the bat priv with all the soft interface information
- * @seq_bits: pointer to the sequence number receive packet
- * @seq_num_diff: difference between the current/received sequence number and
- *  the last sequence number
- * @set_mark: whether this packet should be marked in seq_bits
+/* receive and process one packet within the sequence number window.
  *
- * Return: true if the window was moved (either new or very old),
- *  false if the window was not moved/shifted.
+ * returns:
+ *  1 if the window was moved (either new or very old)
+ *  0 if the window was not moved/shifted.
  */
-bool batadv_bit_get_packet(void *priv, unsigned long *seq_bits,
-			   s32 seq_num_diff, int set_mark)
+int batadv_bit_get_packet(void *priv, unsigned long *seq_bits, s32 seq_num_diff,
+			  int set_mark)
 {
 	struct batadv_priv *bat_priv = priv;
 
@@ -43,7 +46,7 @@ bool batadv_bit_get_packet(void *priv, unsigned long *seq_bits,
 	if (seq_num_diff <= 0 && seq_num_diff > -BATADV_TQ_LOCAL_WINDOW_SIZE) {
 		if (set_mark)
 			batadv_set_bit(seq_bits, -seq_num_diff);
-		return false;
+		return 0;
 	}
 
 	/* sequence number is slightly newer, so we shift the window and
@@ -54,7 +57,7 @@ bool batadv_bit_get_packet(void *priv, unsigned long *seq_bits,
 
 		if (set_mark)
 			batadv_set_bit(seq_bits, 0);
-		return true;
+		return 1;
 	}
 
 	/* sequence number is much newer, probably missed a lot of packets */
@@ -66,7 +69,7 @@ bool batadv_bit_get_packet(void *priv, unsigned long *seq_bits,
 		bitmap_zero(seq_bits, BATADV_TQ_LOCAL_WINDOW_SIZE);
 		if (set_mark)
 			batadv_set_bit(seq_bits, 0);
-		return true;
+		return 1;
 	}
 
 	/* received a much older packet. The other host either restarted
@@ -85,5 +88,5 @@ bool batadv_bit_get_packet(void *priv, unsigned long *seq_bits,
 	if (set_mark)
 		batadv_set_bit(seq_bits, 0);
 
-	return true;
+	return 1;
 }

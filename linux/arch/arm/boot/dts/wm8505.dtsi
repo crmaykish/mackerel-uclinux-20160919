@@ -1,13 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * wm8505.dtsi - Device tree file for Wondermedia WM8505 SoC
  *
  * Copyright (C) 2012 Tony Prisk <linux@prisktech.co.nz>
+ *
+ * Licensed under GPLv2 or later
  */
 
+/include/ "skeleton.dtsi"
+
 / {
-	#address-cells = <1>;
-	#size-cells = <1>;
 	compatible = "wm,wm8505";
 
 	cpus {
@@ -18,11 +19,6 @@
 			device_type = "cpu";
 			compatible = "arm,arm926ej-s";
 		};
-	};
-
-	memory {
-		device_type = "memory";
-		reg = <0x0 0x0>;
 	};
 
  	aliases {
@@ -285,8 +281,8 @@
 
 		sdhc@d800a000 {
 			compatible = "wm,wm8505-sdhc";
-			reg = <0xd800a000 0x400>;
-			interrupts = <20>, <21>;
+			reg = <0xd800a000 0x1000>;
+			interrupts = <20 21>;
 			clocks = <&clksdhc>;
 			bus-width = <4>;
 		};

@@ -1,9 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * SPEAr thermal driver.
  *
  * Copyright (C) 2011-2012 ST Microelectronics
  * Author: Vincenzo Frascino <vincenzo.frascino@st.com>
+ *
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/clk.h>
@@ -45,9 +54,11 @@ static struct thermal_zone_device_ops ops = {
 	.get_temp = thermal_get_temp,
 };
 
-static int __maybe_unused spear_thermal_suspend(struct device *dev)
+#ifdef CONFIG_PM
+static int spear_thermal_suspend(struct device *dev)
 {
-	struct thermal_zone_device *spear_thermal = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct thermal_zone_device *spear_thermal = platform_get_drvdata(pdev);
 	struct spear_thermal_dev *stdev = spear_thermal->devdata;
 	unsigned int actual_mask = 0;
 
@@ -61,16 +72,17 @@ static int __maybe_unused spear_thermal_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused spear_thermal_resume(struct device *dev)
+static int spear_thermal_resume(struct device *dev)
 {
-	struct thermal_zone_device *spear_thermal = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct thermal_zone_device *spear_thermal = platform_get_drvdata(pdev);
 	struct spear_thermal_dev *stdev = spear_thermal->devdata;
 	unsigned int actual_mask = 0;
 	int ret = 0;
 
 	ret = clk_enable(stdev->clk);
 	if (ret) {
-		dev_err(dev, "Can't enable clock\n");
+		dev_err(&pdev->dev, "Can't enable clock\n");
 		return ret;
 	}
 
@@ -82,6 +94,7 @@ static int __maybe_unused spear_thermal_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
 static SIMPLE_DEV_PM_OPS(spear_thermal_pm_ops, spear_thermal_suspend,
 		spear_thermal_resume);

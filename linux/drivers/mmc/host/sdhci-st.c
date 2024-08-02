@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Support for SDHCI on STMicroelectronics SoCs
  *
@@ -7,6 +6,16 @@
  * Contributors: Peter Griffin <peter.griffin@linaro.org>
  *
  * Based on sdhci-cns3xxx.c
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/io.h>
@@ -19,7 +28,6 @@
 
 struct st_mmc_platform_data {
 	struct  reset_control *rstc;
-	struct  clk *icnclk;
 	void __iomem *top_ioaddr;
 };
 
@@ -175,7 +183,7 @@ static void st_mmcss_cconfig(struct device_node *np, struct sdhci_host *host)
 
 	writel_relaxed(cconf2, host->ioaddr + ST_MMC_CCONFIG_REG_2);
 
-	if (!mmc_card_is_removable(mhost))
+	if (mhost->caps & MMC_CAP_NONREMOVABLE)
 		cconf3 |= ST_MMC_CCONFIG_EMMC_SLOT_TYPE;
 	else
 		/* CARD _D ET_CTRL */
@@ -243,7 +251,7 @@ static int sdhci_st_set_dll_for_clock(struct sdhci_host *host)
 {
 	int ret = 0;
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct st_mmc_platform_data *pdata = sdhci_pltfm_priv(pltfm_host);
+	struct st_mmc_platform_data *pdata = pltfm_host->priv;
 
 	if (host->clock > CLK_TO_CHECK_DLL_LOCK) {
 		st_mmcss_set_dll(pdata->top_ioaddr);
@@ -257,7 +265,7 @@ static void sdhci_st_set_uhs_signaling(struct sdhci_host *host,
 					unsigned int uhs)
 {
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct st_mmc_platform_data *pdata = sdhci_pltfm_priv(pltfm_host);
+	struct st_mmc_platform_data *pdata = pltfm_host->priv;
 	u16 ctrl_2 = sdhci_readw(host, SDHCI_HOST_CONTROL2);
 	int ret = 0;
 
@@ -345,11 +353,14 @@ static int sdhci_st_probe(struct platform_device *pdev)
 	struct sdhci_host *host;
 	struct st_mmc_platform_data *pdata;
 	struct sdhci_pltfm_host *pltfm_host;
-	struct clk *clk, *icnclk;
+	struct clk *clk;
 	int ret = 0;
 	u16 host_version;
 	struct resource *res;
-	struct reset_control *rstc;
+
+	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
+	if (!pdata)
+		return -ENOMEM;
 
 	clk =  devm_clk_get(&pdev->dev, "mmc");
 	if (IS_ERR(clk)) {
@@ -357,27 +368,18 @@ static int sdhci_st_probe(struct platform_device *pdev)
 		return PTR_ERR(clk);
 	}
 
-	/* ICN clock isn't compulsory, but use it if it's provided. */
-	icnclk = devm_clk_get(&pdev->dev, "icn");
-	if (IS_ERR(icnclk))
-		icnclk = NULL;
-
-	rstc = devm_reset_control_get_exclusive(&pdev->dev, NULL);
-	if (IS_ERR(rstc))
-		rstc = NULL;
+	pdata->rstc = devm_reset_control_get(&pdev->dev, NULL);
+	if (IS_ERR(pdata->rstc))
+		pdata->rstc = NULL;
 	else
-		reset_control_deassert(rstc);
+		reset_control_deassert(pdata->rstc);
 
-	host = sdhci_pltfm_init(pdev, &sdhci_st_pdata, sizeof(*pdata));
+	host = sdhci_pltfm_init(pdev, &sdhci_st_pdata, 0);
 	if (IS_ERR(host)) {
 		dev_err(&pdev->dev, "Failed sdhci_pltfm_init\n");
 		ret = PTR_ERR(host);
 		goto err_pltfm_init;
 	}
-
-	pltfm_host = sdhci_priv(host);
-	pdata = sdhci_pltfm_priv(pltfm_host);
-	pdata->rstc = rstc;
 
 	ret = mmc_of_parse(host->mmc);
 	if (ret) {
@@ -385,17 +387,7 @@ static int sdhci_st_probe(struct platform_device *pdev)
 		goto err_of;
 	}
 
-	ret = clk_prepare_enable(clk);
-	if (ret) {
-		dev_err(&pdev->dev, "Failed to prepare clock\n");
-		goto err_of;
-	}
-
-	ret = clk_prepare_enable(icnclk);
-	if (ret) {
-		dev_err(&pdev->dev, "Failed to prepare icn clock\n");
-		goto err_icnclk;
-	}
+	clk_prepare_enable(clk);
 
 	/* Configure the FlashSS Top registers for setting eMMC TX/RX delay */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
@@ -406,15 +398,20 @@ static int sdhci_st_probe(struct platform_device *pdev)
 		pdata->top_ioaddr = NULL;
 	}
 
+	pltfm_host = sdhci_priv(host);
+	pltfm_host->priv = pdata;
 	pltfm_host->clk = clk;
-	pdata->icnclk = icnclk;
 
 	/* Configure the Arasan HC inside the flashSS */
 	st_mmcss_cconfig(np, host);
 
 	ret = sdhci_add_host(host);
-	if (ret)
+	if (ret) {
+		dev_err(&pdev->dev, "Failed sdhci_add_host\n");
 		goto err_out;
+	}
+
+	platform_set_drvdata(pdev, host);
 
 	host_version = readw_relaxed((host->ioaddr + SDHCI_HOST_VERSION));
 
@@ -426,14 +423,12 @@ static int sdhci_st_probe(struct platform_device *pdev)
 	return 0;
 
 err_out:
-	clk_disable_unprepare(icnclk);
-err_icnclk:
 	clk_disable_unprepare(clk);
 err_of:
 	sdhci_pltfm_free(pdev);
 err_pltfm_init:
-	if (rstc)
-		reset_control_assert(rstc);
+	if (pdata->rstc)
+		reset_control_assert(pdata->rstc);
 
 	return ret;
 }
@@ -442,16 +437,13 @@ static int sdhci_st_remove(struct platform_device *pdev)
 {
 	struct sdhci_host *host = platform_get_drvdata(pdev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct st_mmc_platform_data *pdata = sdhci_pltfm_priv(pltfm_host);
-	struct reset_control *rstc = pdata->rstc;
+	struct st_mmc_platform_data *pdata = pltfm_host->priv;
 	int ret;
 
 	ret = sdhci_pltfm_unregister(pdev);
 
-	clk_disable_unprepare(pdata->icnclk);
-
-	if (rstc)
-		reset_control_assert(rstc);
+	if (pdata->rstc)
+		reset_control_assert(pdata->rstc);
 
 	return ret;
 }
@@ -461,20 +453,15 @@ static int sdhci_st_suspend(struct device *dev)
 {
 	struct sdhci_host *host = dev_get_drvdata(dev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct st_mmc_platform_data *pdata = sdhci_pltfm_priv(pltfm_host);
-	int ret;
+	struct st_mmc_platform_data *pdata = pltfm_host->priv;
+	int ret = sdhci_suspend_host(host);
 
-	if (host->tuning_mode != SDHCI_TUNING_MODE_3)
-		mmc_retune_needed(host->mmc);
-
-	ret = sdhci_suspend_host(host);
 	if (ret)
 		goto out;
 
 	if (pdata->rstc)
 		reset_control_assert(pdata->rstc);
 
-	clk_disable_unprepare(pdata->icnclk);
 	clk_disable_unprepare(pltfm_host->clk);
 out:
 	return ret;
@@ -484,19 +471,10 @@ static int sdhci_st_resume(struct device *dev)
 {
 	struct sdhci_host *host = dev_get_drvdata(dev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct st_mmc_platform_data *pdata = sdhci_pltfm_priv(pltfm_host);
+	struct st_mmc_platform_data *pdata = pltfm_host->priv;
 	struct device_node *np = dev->of_node;
-	int ret;
 
-	ret = clk_prepare_enable(pltfm_host->clk);
-	if (ret)
-		return ret;
-
-	ret = clk_prepare_enable(pdata->icnclk);
-	if (ret) {
-		clk_disable_unprepare(pltfm_host->clk);
-		return ret;
-	}
+	clk_prepare_enable(pltfm_host->clk);
 
 	if (pdata->rstc)
 		reset_control_deassert(pdata->rstc);

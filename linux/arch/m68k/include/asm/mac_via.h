@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *	6522 Versatile Interface Adapter (VIA)
  *
@@ -257,7 +256,6 @@ extern int rbv_present,via_alt_mapping;
 
 struct irq_desc;
 
-extern void via_l2_flush(int writeback);
 extern void via_register_interrupts(void);
 extern void via_irq_enable(int);
 extern void via_irq_disable(int);

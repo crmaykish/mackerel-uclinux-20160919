@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Philips UCB1400 GPIO driver
  *
  * Author: Marek Vasut <marek.vasut@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #include <linux/module.h>
@@ -11,7 +15,7 @@
 static int ucb1400_gpio_dir_in(struct gpio_chip *gc, unsigned off)
 {
 	struct ucb1400_gpio *gpio;
-	gpio = gpiochip_get_data(gc);
+	gpio = container_of(gc, struct ucb1400_gpio, gc);
 	ucb1400_gpio_set_direction(gpio->ac97, off, 0);
 	return 0;
 }
@@ -19,7 +23,7 @@ static int ucb1400_gpio_dir_in(struct gpio_chip *gc, unsigned off)
 static int ucb1400_gpio_dir_out(struct gpio_chip *gc, unsigned off, int val)
 {
 	struct ucb1400_gpio *gpio;
-	gpio = gpiochip_get_data(gc);
+	gpio = container_of(gc, struct ucb1400_gpio, gc);
 	ucb1400_gpio_set_direction(gpio->ac97, off, 1);
 	ucb1400_gpio_set_value(gpio->ac97, off, val);
 	return 0;
@@ -28,15 +32,14 @@ static int ucb1400_gpio_dir_out(struct gpio_chip *gc, unsigned off, int val)
 static int ucb1400_gpio_get(struct gpio_chip *gc, unsigned off)
 {
 	struct ucb1400_gpio *gpio;
-
-	gpio = gpiochip_get_data(gc);
-	return !!ucb1400_gpio_get_value(gpio->ac97, off);
+	gpio = container_of(gc, struct ucb1400_gpio, gc);
+	return ucb1400_gpio_get_value(gpio->ac97, off);
 }
 
 static void ucb1400_gpio_set(struct gpio_chip *gc, unsigned off, int val)
 {
 	struct ucb1400_gpio *gpio;
-	gpio = gpiochip_get_data(gc);
+	gpio = container_of(gc, struct ucb1400_gpio, gc);
 	ucb1400_gpio_set_value(gpio->ac97, off, val);
 }
 
@@ -63,7 +66,7 @@ static int ucb1400_gpio_probe(struct platform_device *dev)
 	ucb->gc.set = ucb1400_gpio_set;
 	ucb->gc.can_sleep = true;
 
-	err = devm_gpiochip_add_data(&dev->dev, &ucb->gc, ucb);
+	err = gpiochip_add(&ucb->gc);
 	if (err)
 		goto err;
 
@@ -86,6 +89,7 @@ static int ucb1400_gpio_remove(struct platform_device *dev)
 			return err;
 	}
 
+	gpiochip_remove(&ucb->gc);
 	return err;
 }
 

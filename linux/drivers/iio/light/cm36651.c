@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2013 Samsung Electronics Co., Ltd.
  * Author: Beomho Seo <beomho.seo@samsung.com>
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General Public License version 2, as published
+ * by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -265,7 +268,7 @@ static irqreturn_t cm36651_irq_handler(int irq, void *data)
 				CM36651_CMD_READ_RAW_PROXIMITY,
 				IIO_EV_TYPE_THRESH, ev_dir);
 
-	iio_push_event(indio_dev, ev_code, iio_get_time_ns(indio_dev));
+	iio_push_event(indio_dev, ev_code, iio_get_time_ns());
 
 	return IRQ_HANDLED;
 }
@@ -609,6 +612,7 @@ static const struct attribute_group cm36651_attribute_group = {
 };
 
 static const struct iio_info cm36651_info = {
+	.driver_module		= THIS_MODULE,
 	.read_raw		= &cm36651_read_raw,
 	.write_raw		= &cm36651_write_raw,
 	.read_event_value	= &cm36651_read_prox_thresh,
@@ -646,18 +650,18 @@ static int cm36651_probe(struct i2c_client *client,
 	i2c_set_clientdata(client, indio_dev);
 
 	cm36651->client = client;
-	cm36651->ps_client = i2c_new_dummy_device(client->adapter,
+	cm36651->ps_client = i2c_new_dummy(client->adapter,
 						     CM36651_I2C_ADDR_PS);
-	if (IS_ERR(cm36651->ps_client)) {
+	if (!cm36651->ps_client) {
 		dev_err(&client->dev, "%s: new i2c device failed\n", __func__);
-		ret = PTR_ERR(cm36651->ps_client);
+		ret = -ENODEV;
 		goto error_disable_reg;
 	}
 
-	cm36651->ara_client = i2c_new_dummy_device(client->adapter, CM36651_ARA);
-	if (IS_ERR(cm36651->ara_client)) {
+	cm36651->ara_client = i2c_new_dummy(client->adapter, CM36651_ARA);
+	if (!cm36651->ara_client) {
 		dev_err(&client->dev, "%s: new i2c device failed\n", __func__);
-		ret = PTR_ERR(cm36651->ara_client);
+		ret = -ENODEV;
 		goto error_i2c_unregister_ps;
 	}
 

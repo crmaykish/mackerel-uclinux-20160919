@@ -14,6 +14,7 @@
 #include <linux/errno.h>
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
+#include <linux/kconfig.h>
 #include <linux/moduleloader.h>
 #include <linux/netdevice.h>
 #include <linux/string.h>
@@ -365,12 +366,6 @@ static inline void emit_half_load(unsigned int reg, unsigned int base,
 	emit_instr(ctx, lh, reg, offset, base);
 }
 
-static inline void emit_half_load_unsigned(unsigned int reg, unsigned int base,
-					   unsigned int offset, struct jit_ctx *ctx)
-{
-	emit_instr(ctx, lhu, reg, offset, base);
-}
-
 static inline void emit_mul(unsigned int dst, unsigned int src1,
 			    unsigned int src2, struct jit_ctx *ctx)
 {
@@ -431,7 +426,7 @@ static inline void emit_load_ptr(unsigned int dst, unsigned int src,
 static inline void emit_load_func(unsigned int reg, ptr imm,
 				  struct jit_ctx *ctx)
 {
-	if (IS_ENABLED(CONFIG_64BIT)) {
+	if (config_enabled(CONFIG_64BIT)) {
 		/* At this point imm is always 64-bit */
 		emit_load_imm(r_tmp, (u64)imm >> 32, ctx);
 		emit_dsll(r_tmp_imm, r_tmp, 16, ctx); /* left shift by 16 */
@@ -521,7 +516,7 @@ static inline void emit_jr(unsigned int reg, struct jit_ctx *ctx)
 static inline u16 align_sp(unsigned int num)
 {
 	/* Double word alignment for 32-bit, quadword for 64-bit */
-	unsigned int align = IS_ENABLED(CONFIG_64BIT) ? 16 : 8;
+	unsigned int align = config_enabled(CONFIG_64BIT) ? 16 : 8;
 	num = (num + (align - 1)) & -align;
 	return num;
 }
@@ -532,8 +527,7 @@ static void save_bpf_jit_regs(struct jit_ctx *ctx, unsigned offset)
 	u32 sflags, tmp_flags;
 
 	/* Adjust the stack pointer */
-	if (offset)
-		emit_stack_offset(-align_sp(offset), ctx);
+	emit_stack_offset(-align_sp(offset), ctx);
 
 	tmp_flags = sflags = ctx->flags >> SEEN_SREG_SFT;
 	/* sflags is essentially a bitmap */
@@ -585,8 +579,7 @@ static void restore_bpf_jit_regs(struct jit_ctx *ctx,
 		emit_load_stack_reg(r_ra, r_sp, real_off, ctx);
 
 	/* Restore the sp and discard the scrach memory */
-	if (offset)
-		emit_stack_offset(align_sp(offset), ctx);
+	emit_stack_offset(align_sp(offset), ctx);
 }
 
 static unsigned int get_stack_depth(struct jit_ctx *ctx)
@@ -633,14 +626,8 @@ static void build_prologue(struct jit_ctx *ctx)
 	if (ctx->flags & SEEN_X)
 		emit_jit_reg_move(r_X, r_zero, ctx);
 
-	/*
-	 * Do not leak kernel data to userspace, we only need to clear
-	 * r_A if it is ever used.  In fact if it is never used, we
-	 * will not save/restore it, so clearing it in this case would
-	 * corrupt the state of the caller.
-	 */
-	if (bpf_needs_clear_a(&ctx->skf->insns[0]) &&
-	    (ctx->flags & SEEN_A))
+	/* Do not leak kernel data to userspace */
+	if (bpf_needs_clear_a(&ctx->skf->insns[0]))
 		emit_jit_reg_move(r_A, r_zero, ctx);
 }
 
@@ -661,11 +648,6 @@ static void build_epilogue(struct jit_ctx *ctx)
 #define CHOOSE_LOAD_FUNC(K, func) \
 	((int)K < 0 ? ((int)K >= SKF_LL_OFF ? func##_negative : func) : \
 	 func##_positive)
-
-static bool is_bad_offset(int b_off)
-{
-	return b_off > 0x1ffff || b_off < -0x20000;
-}
 
 static int build_body(struct jit_ctx *ctx)
 {
@@ -733,10 +715,7 @@ load_common:
 			/* Load return register on DS for failures */
 			emit_reg_move(r_ret, r_zero, ctx);
 			/* Return with error */
-			b_off = b_imm(prog->len, ctx);
-			if (is_bad_offset(b_off))
-				return -E2BIG;
-			emit_b(b_off, ctx);
+			emit_b(b_imm(prog->len, ctx), ctx);
 			emit_nop(ctx);
 			break;
 		case BPF_LD | BPF_W | BPF_IND:
@@ -783,10 +762,8 @@ load_ind:
 			emit_jalr(MIPS_R_RA, r_s0, ctx);
 			emit_reg_move(MIPS_R_A0, r_skb, ctx); /* delay slot */
 			/* Check the error value */
-			b_off = b_imm(prog->len, ctx);
-			if (is_bad_offset(b_off))
-				return -E2BIG;
-			emit_bcond(MIPS_COND_NE, r_ret, 0, b_off, ctx);
+			emit_bcond(MIPS_COND_NE, r_ret, 0,
+				   b_imm(prog->len, ctx), ctx);
 			emit_reg_move(r_ret, r_zero, ctx);
 			/* We are good */
 			/* X <- P[1:K] & 0xf */
@@ -865,10 +842,8 @@ load_ind:
 			/* A /= X */
 			ctx->flags |= SEEN_X | SEEN_A;
 			/* Check if r_X is zero */
-			b_off = b_imm(prog->len, ctx);
-			if (is_bad_offset(b_off))
-				return -E2BIG;
-			emit_bcond(MIPS_COND_EQ, r_X, r_zero, b_off, ctx);
+			emit_bcond(MIPS_COND_EQ, r_X, r_zero,
+				   b_imm(prog->len, ctx), ctx);
 			emit_load_imm(r_ret, 0, ctx); /* delay slot */
 			emit_div(r_A, r_X, ctx);
 			break;
@@ -876,10 +851,8 @@ load_ind:
 			/* A %= X */
 			ctx->flags |= SEEN_X | SEEN_A;
 			/* Check if r_X is zero */
-			b_off = b_imm(prog->len, ctx);
-			if (is_bad_offset(b_off))
-				return -E2BIG;
-			emit_bcond(MIPS_COND_EQ, r_X, r_zero, b_off, ctx);
+			emit_bcond(MIPS_COND_EQ, r_X, r_zero,
+				   b_imm(prog->len, ctx), ctx);
 			emit_load_imm(r_ret, 0, ctx); /* delay slot */
 			emit_mod(r_A, r_X, ctx);
 			break;
@@ -940,10 +913,7 @@ load_ind:
 			break;
 		case BPF_JMP | BPF_JA:
 			/* pc += K */
-			b_off = b_imm(i + k + 1, ctx);
-			if (is_bad_offset(b_off))
-				return -E2BIG;
-			emit_b(b_off, ctx);
+			emit_b(b_imm(i + k + 1, ctx), ctx);
 			emit_nop(ctx);
 			break;
 		case BPF_JMP | BPF_JEQ | BPF_K:
@@ -1073,16 +1043,12 @@ jmp_cmp:
 			break;
 		case BPF_RET | BPF_A:
 			ctx->flags |= SEEN_A;
-			if (i != prog->len - 1) {
+			if (i != prog->len - 1)
 				/*
 				 * If this is not the last instruction
 				 * then jump to the epilogue
 				 */
-				b_off = b_imm(prog->len, ctx);
-				if (is_bad_offset(b_off))
-					return -E2BIG;
-				emit_b(b_off, ctx);
-			}
+				emit_b(b_imm(prog->len, ctx), ctx);
 			emit_reg_move(r_ret, r_A, ctx); /* delay slot */
 			break;
 		case BPF_RET | BPF_K:
@@ -1096,10 +1062,7 @@ jmp_cmp:
 				 * If this is not the last instruction
 				 * then jump to the epilogue
 				 */
-				b_off = b_imm(prog->len, ctx);
-				if (is_bad_offset(b_off))
-					return -E2BIG;
-				emit_b(b_off, ctx);
+				emit_b(b_imm(prog->len, ctx), ctx);
 				emit_nop(ctx);
 			}
 			break;
@@ -1150,27 +1113,18 @@ jmp_cmp:
 			break;
 		case BPF_ANC | SKF_AD_IFINDEX:
 			/* A = skb->dev->ifindex */
-		case BPF_ANC | SKF_AD_HATYPE:
-			/* A = skb->dev->type */
 			ctx->flags |= SEEN_SKB | SEEN_A;
 			off = offsetof(struct sk_buff, dev);
 			/* Load *dev pointer */
 			emit_load_ptr(r_s0, r_skb, off, ctx);
 			/* error (0) in the delay slot */
-			b_off = b_imm(prog->len, ctx);
-			if (is_bad_offset(b_off))
-				return -E2BIG;
-			emit_bcond(MIPS_COND_EQ, r_s0, r_zero, b_off, ctx);
+			emit_bcond(MIPS_COND_EQ, r_s0, r_zero,
+				   b_imm(prog->len, ctx), ctx);
 			emit_reg_move(r_ret, r_zero, ctx);
-			if (code == (BPF_ANC | SKF_AD_IFINDEX)) {
-				BUILD_BUG_ON(FIELD_SIZEOF(struct net_device, ifindex) != 4);
-				off = offsetof(struct net_device, ifindex);
-				emit_load(r_A, r_s0, off, ctx);
-			} else { /* (code == (BPF_ANC | SKF_AD_HATYPE) */
-				BUILD_BUG_ON(FIELD_SIZEOF(struct net_device, type) != 2);
-				off = offsetof(struct net_device, type);
-				emit_half_load_unsigned(r_A, r_s0, off, ctx);
-			}
+			BUILD_BUG_ON(FIELD_SIZEOF(struct net_device,
+						  ifindex) != 4);
+			off = offsetof(struct net_device, ifindex);
+			emit_load(r_A, r_s0, off, ctx);
 			break;
 		case BPF_ANC | SKF_AD_MARK:
 			ctx->flags |= SEEN_SKB | SEEN_A;
@@ -1185,19 +1139,19 @@ jmp_cmp:
 			emit_load(r_A, r_skb, off, ctx);
 			break;
 		case BPF_ANC | SKF_AD_VLAN_TAG:
+		case BPF_ANC | SKF_AD_VLAN_TAG_PRESENT:
 			ctx->flags |= SEEN_SKB | SEEN_A;
 			BUILD_BUG_ON(FIELD_SIZEOF(struct sk_buff,
 						  vlan_tci) != 2);
 			off = offsetof(struct sk_buff, vlan_tci);
-			emit_half_load_unsigned(r_A, r_skb, off, ctx);
-			break;
-		case BPF_ANC | SKF_AD_VLAN_TAG_PRESENT:
-			ctx->flags |= SEEN_SKB | SEEN_A;
-			emit_load_byte(r_A, r_skb, PKT_VLAN_PRESENT_OFFSET(), ctx);
-			if (PKT_VLAN_PRESENT_BIT)
-				emit_srl(r_A, r_A, PKT_VLAN_PRESENT_BIT, ctx);
-			if (PKT_VLAN_PRESENT_BIT < 7)
-				emit_andi(r_A, r_A, 1, ctx);
+			emit_half_load(r_s0, r_skb, off, ctx);
+			if (code == (BPF_ANC | SKF_AD_VLAN_TAG)) {
+				emit_andi(r_A, r_s0, (u16)~VLAN_TAG_PRESENT, ctx);
+			} else {
+				emit_andi(r_A, r_s0, VLAN_TAG_PRESENT, ctx);
+				/* return 1 if present */
+				emit_sltu(r_A, r_zero, r_A, ctx);
+			}
 			break;
 		case BPF_ANC | SKF_AD_PKTTYPE:
 			ctx->flags |= SEEN_SKB;
@@ -1217,7 +1171,7 @@ jmp_cmp:
 			BUILD_BUG_ON(offsetof(struct sk_buff,
 					      queue_mapping) > 0xff);
 			off = offsetof(struct sk_buff, queue_mapping);
-			emit_half_load_unsigned(r_A, r_skb, off, ctx);
+			emit_half_load(r_A, r_skb, off, ctx);
 			break;
 		default:
 			pr_debug("%s: Unhandled opcode: 0x%02x\n", __FILE__,
@@ -1233,6 +1187,8 @@ jmp_cmp:
 	return 0;
 }
 
+int bpf_jit_enable __read_mostly;
+
 void bpf_jit_compile(struct bpf_prog *fp)
 {
 	struct jit_ctx ctx;
@@ -1243,7 +1199,7 @@ void bpf_jit_compile(struct bpf_prog *fp)
 
 	memset(&ctx, 0, sizeof(ctx));
 
-	ctx.offsets = kcalloc(fp->len + 1, sizeof(*ctx.offsets), GFP_KERNEL);
+	ctx.offsets = kcalloc(fp->len, sizeof(*ctx.offsets), GFP_KERNEL);
 	if (ctx.offsets == NULL)
 		return;
 
@@ -1270,10 +1226,7 @@ void bpf_jit_compile(struct bpf_prog *fp)
 
 	/* Generate the actual JIT code */
 	build_prologue(&ctx);
-	if (build_body(&ctx)) {
-		module_memfree(ctx.target);
-		goto out;
-	}
+	build_body(&ctx);
 	build_epilogue(&ctx);
 
 	/* Update the icache */

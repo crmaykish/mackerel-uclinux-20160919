@@ -1,13 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * lib80211 crypt: host-based WEP encryption implementation for lib80211
  *
  * Copyright (c) 2002-2004, Jouni Malinen <j@w1.fi>
  * Copyright (c) 2008, John W. Linville <linville@tuxdriver.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation. See README and COPYING for
+ * more details.
  */
 
 #include <linux/err.h>
-#include <linux/fips.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -19,7 +22,7 @@
 
 #include <net/lib80211.h>
 
-#include <crypto/arc4.h>
+#include <linux/crypto.h>
 #include <linux/crc32.h>
 
 MODULE_AUTHOR("Jouni Malinen");
@@ -32,31 +35,56 @@ struct lib80211_wep_data {
 	u8 key[WEP_KEY_LEN + 1];
 	u8 key_len;
 	u8 key_idx;
-	struct arc4_ctx tx_ctx;
-	struct arc4_ctx rx_ctx;
+	struct crypto_blkcipher *tx_tfm;
+	struct crypto_blkcipher *rx_tfm;
 };
 
 static void *lib80211_wep_init(int keyidx)
 {
 	struct lib80211_wep_data *priv;
 
-	if (fips_enabled)
-		return NULL;
-
 	priv = kzalloc(sizeof(*priv), GFP_ATOMIC);
 	if (priv == NULL)
-		return NULL;
+		goto fail;
 	priv->key_idx = keyidx;
 
+	priv->tx_tfm = crypto_alloc_blkcipher("ecb(arc4)", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(priv->tx_tfm)) {
+		priv->tx_tfm = NULL;
+		goto fail;
+	}
+
+	priv->rx_tfm = crypto_alloc_blkcipher("ecb(arc4)", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(priv->rx_tfm)) {
+		priv->rx_tfm = NULL;
+		goto fail;
+	}
 	/* start WEP IV from a random value */
 	get_random_bytes(&priv->iv, 4);
 
 	return priv;
+
+      fail:
+	if (priv) {
+		if (priv->tx_tfm)
+			crypto_free_blkcipher(priv->tx_tfm);
+		if (priv->rx_tfm)
+			crypto_free_blkcipher(priv->rx_tfm);
+		kfree(priv);
+	}
+	return NULL;
 }
 
 static void lib80211_wep_deinit(void *priv)
 {
-	kzfree(priv);
+	struct lib80211_wep_data *_priv = priv;
+	if (_priv) {
+		if (_priv->tx_tfm)
+			crypto_free_blkcipher(_priv->tx_tfm);
+		if (_priv->rx_tfm)
+			crypto_free_blkcipher(_priv->rx_tfm);
+	}
+	kfree(priv);
 }
 
 /* Add WEP IV/key info to a frame that has at least 4 bytes of headroom */
@@ -105,8 +133,10 @@ static int lib80211_wep_build_iv(struct sk_buff *skb, int hdr_len,
 static int lib80211_wep_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 {
 	struct lib80211_wep_data *wep = priv;
+	struct blkcipher_desc desc = { .tfm = wep->tx_tfm };
 	u32 crc, klen, len;
 	u8 *pos, *icv;
+	struct scatterlist sg;
 	u8 key[WEP_KEY_LEN + 3];
 
 	/* other checks are in lib80211_wep_build_iv */
@@ -135,10 +165,9 @@ static int lib80211_wep_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	icv[2] = crc >> 16;
 	icv[3] = crc >> 24;
 
-	arc4_setkey(&wep->tx_ctx, key, klen);
-	arc4_crypt(&wep->tx_ctx, pos, pos, len + 4);
-
-	return 0;
+	crypto_blkcipher_setkey(wep->tx_tfm, key, klen);
+	sg_init_one(&sg, pos, len + 4);
+	return crypto_blkcipher_encrypt(&desc, &sg, &sg, len + 4);
 }
 
 /* Perform WEP decryption on given buffer. Buffer includes whole WEP part of
@@ -151,9 +180,11 @@ static int lib80211_wep_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 static int lib80211_wep_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 {
 	struct lib80211_wep_data *wep = priv;
+	struct blkcipher_desc desc = { .tfm = wep->rx_tfm };
 	u32 crc, klen, plen;
 	u8 key[WEP_KEY_LEN + 3];
 	u8 keyidx, *pos, icv[4];
+	struct scatterlist sg;
 
 	if (skb->len < hdr_len + 8)
 		return -1;
@@ -174,8 +205,10 @@ static int lib80211_wep_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	/* Apply RC4 to data and compute CRC32 over decrypted data */
 	plen = skb->len - hdr_len - 8;
 
-	arc4_setkey(&wep->rx_ctx, key, klen);
-	arc4_crypt(&wep->rx_ctx, pos, pos, plen + 4);
+	crypto_blkcipher_setkey(wep->rx_tfm, key, klen);
+	sg_init_one(&sg, pos, plen + 4);
+	if (crypto_blkcipher_decrypt(&desc, &sg, &sg, plen + 4))
+		return -7;
 
 	crc = ~crc32_le(~0, pos, plen);
 	icv[0] = crc;

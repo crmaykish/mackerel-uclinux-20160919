@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  arch/arm/include/asm/ide.h
  *
@@ -18,6 +17,11 @@
 #define __ide_mm_insl(port,addr,len)	readsl(port,addr,len)
 #define __ide_mm_outsw(port,addr,len)	writesw(port,addr,len)
 #define __ide_mm_outsl(port,addr,len)	writesl(port,addr,len)
+
+#if defined(CONFIG_MACH_SG720)
+#define IDE_ARCH_ACK_INTR
+#define ide_ack_intr(hwif)	((hwif)->ack_intr ? (hwif)->ack_intr(hwif) : 1)
+#endif
 
 #endif /* __KERNEL__ */
 

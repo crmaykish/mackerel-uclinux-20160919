@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *
  * Alchemy Au1x00 ethernet driver
@@ -15,6 +14,24 @@
  *
  * Author: MontaVista Software, Inc.
  *		ppopov@mvista.com or source@mvista.com
+ *
+ * ########################################################################
+ *
+ *  This program is free software; you can distribute it and/or modify it
+ *  under the terms of the GNU General Public License (Version 2) as
+ *  published by the Free Software Foundation.
+ *
+ *  This program is distributed in the hope it will be useful, but WITHOUT
+ *  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ *  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ *  for more details.
+ *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, see <http://www.gnu.org/licenses/>.
+ *
+ * ########################################################################
+ *
+ *
  */
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
@@ -327,6 +344,9 @@ static void au1000_mdio_write(struct net_device *dev, int phy_addr,
 
 static int au1000_mdiobus_read(struct mii_bus *bus, int phy_addr, int regnum)
 {
+	/* WARNING: bus->phy_map[phy_addr].attached_dev == dev does
+	 * _NOT_ hold (e.g. when PHY is accessed through other MAC's MII bus)
+	 */
 	struct net_device *const dev = bus->priv;
 
 	/* make sure the MAC associated with this
@@ -395,13 +415,13 @@ static void
 au1000_adjust_link(struct net_device *dev)
 {
 	struct au1000_private *aup = netdev_priv(dev);
-	struct phy_device *phydev = dev->phydev;
+	struct phy_device *phydev = aup->phy_dev;
 	unsigned long flags;
 	u32 reg;
 
 	int status_change = 0;
 
-	BUG_ON(!phydev);
+	BUG_ON(!aup->phy_dev);
 
 	spin_lock_irqsave(&aup->lock, flags);
 
@@ -482,7 +502,7 @@ static int au1000_mii_probe(struct net_device *dev)
 		BUG_ON(aup->mac_id < 0 || aup->mac_id > 1);
 
 		if (aup->phy_addr)
-			phydev = mdiobus_get_phy(aup->mii_bus, aup->phy_addr);
+			phydev = aup->mii_bus->phy_map[aup->phy_addr];
 		else
 			netdev_info(dev, "using PHY-less setup\n");
 		return 0;
@@ -492,8 +512,8 @@ static int au1000_mii_probe(struct net_device *dev)
 	 * on the current MAC's MII bus
 	 */
 	for (phy_addr = 0; phy_addr < PHY_MAX_ADDR; phy_addr++)
-		if (mdiobus_get_phy(aup->mii_bus, phy_addr)) {
-			phydev = mdiobus_get_phy(aup->mii_bus, phy_addr);
+		if (aup->mii_bus->phy_map[phy_addr]) {
+			phydev = aup->mii_bus->phy_map[phy_addr];
 			if (!aup->phy_search_highest_addr)
 				/* break out with first one found */
 				break;
@@ -511,8 +531,7 @@ static int au1000_mii_probe(struct net_device *dev)
 			 */
 			for (phy_addr = 0; phy_addr < PHY_MAX_ADDR; phy_addr++) {
 				struct phy_device *const tmp_phydev =
-					mdiobus_get_phy(aup->mii_bus,
-							phy_addr);
+					aup->mii_bus->phy_map[phy_addr];
 
 				if (aup->mac_id == 1)
 					break;
@@ -539,7 +558,7 @@ static int au1000_mii_probe(struct net_device *dev)
 	/* now we are supposed to have a proper phydev, to attach to... */
 	BUG_ON(phydev->attached_dev);
 
-	phydev = phy_connect(dev, phydev_name(phydev),
+	phydev = phy_connect(dev, dev_name(&phydev->dev),
 			     &au1000_adjust_link, PHY_INTERFACE_MODE_MII);
 
 	if (IS_ERR(phydev)) {
@@ -547,13 +566,26 @@ static int au1000_mii_probe(struct net_device *dev)
 		return PTR_ERR(phydev);
 	}
 
-	phy_set_max_speed(phydev, SPEED_100);
+	/* mask with MAC supported features */
+	phydev->supported &= (SUPPORTED_10baseT_Half
+			      | SUPPORTED_10baseT_Full
+			      | SUPPORTED_100baseT_Half
+			      | SUPPORTED_100baseT_Full
+			      | SUPPORTED_Autoneg
+			      /* | SUPPORTED_Pause | SUPPORTED_Asym_Pause */
+			      | SUPPORTED_MII
+			      | SUPPORTED_TP);
+
+	phydev->advertising = phydev->supported;
 
 	aup->old_link = 0;
 	aup->old_speed = 0;
 	aup->old_duplex = -1;
+	aup->phy_dev = phydev;
 
-	phy_attached_info(phydev);
+	netdev_info(dev, "attached PHY driver [%s] "
+	       "(mii_bus:phy_addr=%s, irq=%d)\n",
+	       phydev->drv->name, dev_name(&phydev->dev), phydev->irq);
 
 	return 0;
 }
@@ -650,6 +682,29 @@ au1000_setup_hw_rings(struct au1000_private *aup, void __iomem *tx_base)
  * ethtool operations
  */
 
+static int au1000_get_settings(struct net_device *dev, struct ethtool_cmd *cmd)
+{
+	struct au1000_private *aup = netdev_priv(dev);
+
+	if (aup->phy_dev)
+		return phy_ethtool_gset(aup->phy_dev, cmd);
+
+	return -EINVAL;
+}
+
+static int au1000_set_settings(struct net_device *dev, struct ethtool_cmd *cmd)
+{
+	struct au1000_private *aup = netdev_priv(dev);
+
+	if (!capable(CAP_NET_ADMIN))
+		return -EPERM;
+
+	if (aup->phy_dev)
+		return phy_ethtool_sset(aup->phy_dev, cmd);
+
+	return -EINVAL;
+}
+
 static void
 au1000_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 {
@@ -674,12 +729,12 @@ static u32 au1000_get_msglevel(struct net_device *dev)
 }
 
 static const struct ethtool_ops au1000_ethtool_ops = {
+	.get_settings = au1000_get_settings,
+	.set_settings = au1000_set_settings,
 	.get_drvinfo = au1000_get_drvinfo,
 	.get_link = ethtool_op_get_link,
 	.get_msglevel = au1000_get_msglevel,
 	.set_msglevel = au1000_set_msglevel,
-	.get_link_ksettings = phy_ethtool_get_link_ksettings,
-	.set_link_ksettings = phy_ethtool_set_link_ksettings,
 };
 
 
@@ -727,8 +782,8 @@ static int au1000_init(struct net_device *dev)
 #ifndef CONFIG_CPU_LITTLE_ENDIAN
 	control |= MAC_BIG_ENDIAN;
 #endif
-	if (dev->phydev) {
-		if (dev->phydev->link && (DUPLEX_FULL == dev->phydev->duplex))
+	if (aup->phy_dev) {
+		if (aup->phy_dev->link && (DUPLEX_FULL == aup->phy_dev->duplex))
 			control |= MAC_FULL_DUPLEX;
 		else
 			control |= MAC_DISABLE_RX_OWN;
@@ -840,10 +895,11 @@ static int au1000_rx(struct net_device *dev)
 
 static void au1000_update_tx_stats(struct net_device *dev, u32 status)
 {
+	struct au1000_private *aup = netdev_priv(dev);
 	struct net_device_stats *ps = &dev->stats;
 
 	if (status & TX_FRAME_ABORTED) {
-		if (!dev->phydev || (DUPLEX_FULL == dev->phydev->duplex)) {
+		if (!aup->phy_dev || (DUPLEX_FULL == aup->phy_dev->duplex)) {
 			if (status & (TX_JAB_TIMEOUT | TX_UNDERRUN)) {
 				/* any other tx errors are only valid
 				 * in half duplex mode
@@ -923,8 +979,11 @@ static int au1000_open(struct net_device *dev)
 		return retval;
 	}
 
-	if (dev->phydev)
-		phy_start(dev->phydev);
+	if (aup->phy_dev) {
+		/* cause the PHY state machine to schedule a link state check */
+		aup->phy_dev->state = PHY_CHANGELINK;
+		phy_start(aup->phy_dev);
+	}
 
 	netif_start_queue(dev);
 
@@ -940,8 +999,8 @@ static int au1000_close(struct net_device *dev)
 
 	netif_dbg(aup, drv, dev, "close: dev=%p\n", dev);
 
-	if (dev->phydev)
-		phy_stop(dev->phydev);
+	if (aup->phy_dev)
+		phy_stop(aup->phy_dev);
 
 	spin_lock_irqsave(&aup->lock, flags);
 
@@ -1019,7 +1078,7 @@ static void au1000_tx_timeout(struct net_device *dev)
 	netdev_err(dev, "au1000_tx_timeout: dev=%p\n", dev);
 	au1000_reset_mac(dev);
 	au1000_init(dev);
-	netif_trans_update(dev); /* prevent tx timeout */
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 }
 
@@ -1055,13 +1114,15 @@ static void au1000_multicast_list(struct net_device *dev)
 
 static int au1000_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
+	struct au1000_private *aup = netdev_priv(dev);
+
 	if (!netif_running(dev))
 		return -EINVAL;
 
-	if (!dev->phydev)
+	if (!aup->phy_dev)
 		return -EINVAL; /* PHY not controllable */
 
-	return phy_mii_ioctl(dev->phydev, rq, cmd);
+	return phy_mii_ioctl(aup->phy_dev, rq, cmd);
 }
 
 static const struct net_device_ops au1000_netdev_ops = {
@@ -1073,6 +1134,7 @@ static const struct net_device_ops au1000_netdev_ops = {
 	.ndo_tx_timeout		= au1000_tx_timeout,
 	.ndo_set_mac_address	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
+	.ndo_change_mtu		= eth_change_mtu,
 };
 
 static int au1000_probe(struct platform_device *pdev)
@@ -1100,6 +1162,7 @@ static int au1000_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
+		dev_err(&pdev->dev, "failed to retrieve IRQ\n");
 		err = -ENODEV;
 		goto out;
 	}
@@ -1149,10 +1212,9 @@ static int au1000_probe(struct platform_device *pdev)
 	/* Allocate the data buffers
 	 * Snooping works fine with eth on all au1xxx
 	 */
-	aup->vaddr = (u32)dma_alloc_attrs(&pdev->dev, MAX_BUF_SIZE *
-					  (NUM_TX_BUFFS + NUM_RX_BUFFS),
-					  &aup->dma_addr, 0,
-					  DMA_ATTR_NON_CONSISTENT);
+	aup->vaddr = (u32)dma_alloc_noncoherent(NULL, MAX_BUF_SIZE *
+						(NUM_TX_BUFFS + NUM_RX_BUFFS),
+						&aup->dma_addr,	0);
 	if (!aup->vaddr) {
 		dev_err(&pdev->dev, "failed to allocate data buffers\n");
 		err = -ENOMEM;
@@ -1211,7 +1273,7 @@ static int au1000_probe(struct platform_device *pdev)
 		aup->phy_irq = pd->phy_irq;
 	}
 
-	if (aup->phy_busid > 0) {
+	if (aup->phy_busid && aup->phy_busid > 0) {
 		dev_err(&pdev->dev, "MAC0-associated PHY attached 2nd MACs MII bus not supported yet\n");
 		err = -ENODEV;
 		goto err_mdiobus_alloc;
@@ -1231,7 +1293,14 @@ static int au1000_probe(struct platform_device *pdev)
 	aup->mii_bus->name = "au1000_eth_mii";
 	snprintf(aup->mii_bus->id, MII_BUS_ID_SIZE, "%s-%x",
 		pdev->name, aup->mac_id);
+	aup->mii_bus->irq = kmalloc(sizeof(int)*PHY_MAX_ADDR, GFP_KERNEL);
+	if (aup->mii_bus->irq == NULL) {
+		err = -ENOMEM;
+		goto err_out;
+	}
 
+	for (i = 0; i < PHY_MAX_ADDR; ++i)
+		aup->mii_bus->irq[i] = PHY_POLL;
 	/* if known, set corresponding PHY IRQs */
 	if (aup->phy_static_config)
 		if (aup->phy_irq && aup->phy_busid == aup->mac_id)
@@ -1331,9 +1400,8 @@ err_remap3:
 err_remap2:
 	iounmap(aup->mac);
 err_remap1:
-	dma_free_attrs(&pdev->dev, MAX_BUF_SIZE * (NUM_TX_BUFFS + NUM_RX_BUFFS),
-			(void *)aup->vaddr, aup->dma_addr,
-			DMA_ATTR_NON_CONSISTENT);
+	dma_free_noncoherent(NULL, MAX_BUF_SIZE * (NUM_TX_BUFFS + NUM_RX_BUFFS),
+			     (void *)aup->vaddr, aup->dma_addr);
 err_vaddr:
 	free_netdev(dev);
 err_alloc:
@@ -1365,9 +1433,9 @@ static int au1000_remove(struct platform_device *pdev)
 		if (aup->tx_db_inuse[i])
 			au1000_ReleaseDB(aup, aup->tx_db_inuse[i]);
 
-	dma_free_attrs(&pdev->dev, MAX_BUF_SIZE * (NUM_TX_BUFFS + NUM_RX_BUFFS),
-			(void *)aup->vaddr, aup->dma_addr,
-			DMA_ATTR_NON_CONSISTENT);
+	dma_free_noncoherent(NULL, MAX_BUF_SIZE *
+			(NUM_TX_BUFFS + NUM_RX_BUFFS),
+			(void *)aup->vaddr, aup->dma_addr);
 
 	iounmap(aup->macdma);
 	iounmap(aup->mac);

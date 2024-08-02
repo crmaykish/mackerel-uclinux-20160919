@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  *	uvc_queue.c  --  USB Video Class driver - Buffers management
  *
  *	Copyright (C) 2005-2010
  *	    Laurent Pinchart (laurent.pinchart@ideasonboard.com)
+ *
+ *	This program is free software; you can redistribute it and/or modify
+ *	it under the terms of the GNU General Public License as published by
+ *	the Free Software Foundation; either version 2 of the License, or
+ *	(at your option) any later version.
  */
 
 #include <linux/atomic.h>
@@ -37,9 +41,9 @@
  * videobuf2 queue operations
  */
 
-static int uvc_queue_setup(struct vb2_queue *vq,
+static int uvc_queue_setup(struct vb2_queue *vq, const void *parg,
 			   unsigned int *nbuffers, unsigned int *nplanes,
-			   unsigned int sizes[], struct device *alloc_devs[])
+			   unsigned int sizes[], void *alloc_ctxs[])
 {
 	struct uvc_video_queue *queue = vb2_get_drv_priv(vq);
 	struct uvc_video *video = container_of(queue, struct uvc_video, queue);
@@ -102,7 +106,7 @@ static void uvc_buffer_queue(struct vb2_buffer *vb)
 	spin_unlock_irqrestore(&queue->irqlock, flags);
 }
 
-static const struct vb2_ops uvc_queue_qops = {
+static struct vb2_ops uvc_queue_qops = {
 	.queue_setup = uvc_queue_setup,
 	.buf_prepare = uvc_buffer_prepare,
 	.buf_queue = uvc_buffer_queue,
@@ -166,7 +170,7 @@ int uvcg_queue_buffer(struct uvc_video_queue *queue, struct v4l2_buffer *buf)
 	unsigned long flags;
 	int ret;
 
-	ret = vb2_qbuf(&queue->queue, NULL, buf);
+	ret = vb2_qbuf(&queue->queue, buf);
 	if (ret < 0)
 		return ret;
 
@@ -193,7 +197,7 @@ int uvcg_dequeue_buffer(struct uvc_video_queue *queue, struct v4l2_buffer *buf,
  * This function implements video queue polling and is intended to be used by
  * the device poll handler.
  */
-__poll_t uvcg_queue_poll(struct uvc_video_queue *queue, struct file *file,
+unsigned int uvcg_queue_poll(struct uvc_video_queue *queue, struct file *file,
 			     poll_table *wait)
 {
 	return vb2_poll(&queue->queue, file, wait);
@@ -242,8 +246,6 @@ void uvcg_queue_cancel(struct uvc_video_queue *queue, int disconnect)
 		buf->state = UVC_BUF_STATE_ERROR;
 		vb2_buffer_done(&buf->buf.vb2_buf, VB2_BUF_STATE_ERROR);
 	}
-	queue->buf_used = 0;
-
 	/* This must be protected by the irqlock spinlock to avoid race
 	 * conditions between uvc_queue_buffer and the disconnection event that
 	 * could result in an interruptible wait in uvc_dequeue_buffer. Do not
@@ -327,7 +329,7 @@ struct uvc_buffer *uvcg_queue_next_buffer(struct uvc_video_queue *queue,
 
 	buf->buf.field = V4L2_FIELD_NONE;
 	buf->buf.sequence = queue->sequence++;
-	buf->buf.vb2_buf.timestamp = ktime_get_ns();
+	v4l2_get_timestamp(&buf->buf.timestamp);
 
 	vb2_set_plane_payload(&buf->buf.vb2_buf, 0, buf->bytesused);
 	vb2_buffer_done(&buf->buf.vb2_buf, VB2_BUF_STATE_DONE);

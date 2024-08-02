@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * trace binary printk
  *
@@ -6,7 +5,6 @@
  *
  */
 #include <linux/seq_file.h>
-#include <linux/security.h>
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/ftrace.h>
@@ -38,10 +36,6 @@ struct trace_bprintk_fmt {
 static inline struct trace_bprintk_fmt *lookup_format(const char *fmt)
 {
 	struct trace_bprintk_fmt *pos;
-
-	if (!fmt)
-		return ERR_PTR(-EINVAL);
-
 	list_for_each_entry(pos, &trace_bprintk_fmt_list, list) {
 		if (!strcmp(pos->fmt, fmt))
 			return pos;
@@ -63,8 +57,7 @@ void hold_module_trace_bprintk_format(const char **start, const char **end)
 	for (iter = start; iter < end; iter++) {
 		struct trace_bprintk_fmt *tb_fmt = lookup_format(*iter);
 		if (tb_fmt) {
-			if (!IS_ERR(tb_fmt))
-				*iter = tb_fmt->fmt;
+			*iter = tb_fmt->fmt;
 			continue;
 		}
 
@@ -116,7 +109,7 @@ static int module_trace_bprintk_format_notify(struct notifier_block *self,
  * section, then we need to read the link list pointers. The trick is
  * we pass the address of the string to the seq function just like
  * we do for the kernel core formats. To get back the structure that
- * holds the format, we simply use container_of() and then go to the
+ * holds the format, we simply use containerof() and then go to the
  * next format in the list.
  */
 static const char **
@@ -198,7 +191,7 @@ struct notifier_block module_trace_bprintk_format_nb = {
 };
 
 int __trace_bprintk(unsigned long ip, const char *fmt, ...)
-{
+ {
 	int ret;
 	va_list ap;
 
@@ -216,7 +209,7 @@ int __trace_bprintk(unsigned long ip, const char *fmt, ...)
 EXPORT_SYMBOL_GPL(__trace_bprintk);
 
 int __ftrace_vbprintk(unsigned long ip, const char *fmt, va_list ap)
-{
+ {
 	if (unlikely(!fmt))
 		return 0;
 
@@ -303,9 +296,6 @@ static int t_show(struct seq_file *m, void *v)
 	const char *str = *fmt;
 	int i;
 
-	if (!*fmt)
-		return 0;
-
 	seq_printf(m, "0x%lx : \"", *(unsigned long *)fmt);
 
 	/*
@@ -349,12 +339,6 @@ static const struct seq_operations show_format_seq_ops = {
 static int
 ftrace_formats_open(struct inode *inode, struct file *file)
 {
-	int ret;
-
-	ret = security_locked_down(LOCKDOWN_TRACEFS);
-	if (ret)
-		return ret;
-
 	return seq_open(file, &show_format_seq_ops);
 }
 

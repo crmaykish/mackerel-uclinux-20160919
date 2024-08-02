@@ -1,8 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
- * Export the firmware instance and label associated with a PCI device to
- * sysfs
- *
+ * Purpose: Export the firmware instance and label associated with
+ * a pci device to sysfs
  * Copyright (C) 2010 Dell Inc.
  * by Narendra K <Narendra_K@dell.com>,
  * Jordan Hargrave <Jordan_Hargrave@dell.com>
@@ -18,7 +16,7 @@
  * the instance number and string from the type 41 record and exports
  * it to sysfs.
  *
- * Please see http://linux.dell.com/files/biosdevname/ for more
+ * Please see http://linux.dell.com/wiki/index.php/Oss/libnetdevname for more
  * information.
  */
 
@@ -45,11 +43,9 @@ static size_t find_smbios_instance_string(struct pci_dev *pdev, char *buf,
 {
 	const struct dmi_device *dmi;
 	struct dmi_dev_onboard *donboard;
-	int domain_nr;
 	int bus;
 	int devfn;
 
-	domain_nr = pci_domain_nr(pdev->bus);
 	bus = pdev->bus->number;
 	devfn = pdev->devfn;
 
@@ -57,9 +53,8 @@ static size_t find_smbios_instance_string(struct pci_dev *pdev, char *buf,
 	while ((dmi = dmi_find_device(DMI_DEV_TYPE_DEV_ONBOARD,
 				      NULL, dmi)) != NULL) {
 		donboard = dmi->device_data;
-		if (donboard && donboard->segment == domain_nr &&
-				donboard->bus == bus &&
-				donboard->devfn == devfn) {
+		if (donboard && donboard->bus == bus &&
+					donboard->devfn == devfn) {
 			if (buf) {
 				if (attribute == SMBIOS_ATTR_INSTANCE_SHOW)
 					return scnprintf(buf, PAGE_SIZE,
@@ -82,7 +77,7 @@ static umode_t smbios_instance_string_exist(struct kobject *kobj,
 	struct device *dev;
 	struct pci_dev *pdev;
 
-	dev = kobj_to_dev(kobj);
+	dev = container_of(kobj, struct device, kobj);
 	pdev = to_pci_dev(dev);
 
 	return find_smbios_instance_string(pdev, NULL, SMBIOS_ATTR_NONE) ?
@@ -125,7 +120,7 @@ static struct attribute *smbios_attributes[] = {
 	NULL,
 };
 
-static const struct attribute_group smbios_attr_group = {
+static struct attribute_group smbios_attr_group = {
 	.attrs = smbios_attributes,
 	.is_visible = smbios_instance_string_exist,
 };
@@ -162,7 +157,7 @@ static void dsm_label_utf16s_to_utf8s(union acpi_object *obj, char *buf)
 	len = utf16s_to_utf8s((const wchar_t *)obj->buffer.pointer,
 			      obj->buffer.length,
 			      UTF16_LITTLE_ENDIAN,
-			      buf, PAGE_SIZE - 1);
+			      buf, PAGE_SIZE);
 	buf[len] = '\n';
 }
 
@@ -177,7 +172,7 @@ static int dsm_get_label(struct device *dev, char *buf,
 	if (!handle)
 		return -1;
 
-	obj = acpi_evaluate_dsm(handle, &pci_acpi_dsm_guid, 0x2,
+	obj = acpi_evaluate_dsm(handle, pci_acpi_dsm_uuid, 0x2,
 				DEVICE_LABEL_DSM, NULL);
 	if (!obj)
 		return -1;
@@ -217,7 +212,7 @@ static bool device_has_dsm(struct device *dev)
 	if (!handle)
 		return false;
 
-	return !!acpi_check_dsm(handle, &pci_acpi_dsm_guid, 0x2,
+	return !!acpi_check_dsm(handle, pci_acpi_dsm_uuid, 0x2,
 				1 << DEVICE_LABEL_DSM);
 }
 
@@ -226,7 +221,7 @@ static umode_t acpi_index_string_exist(struct kobject *kobj,
 {
 	struct device *dev;
 
-	dev = kobj_to_dev(kobj);
+	dev = container_of(kobj, struct device, kobj);
 
 	if (device_has_dsm(dev))
 		return S_IRUGO;
@@ -262,7 +257,7 @@ static struct attribute *acpi_attributes[] = {
 	NULL,
 };
 
-static const struct attribute_group acpi_attr_group = {
+static struct attribute_group acpi_attr_group = {
 	.attrs = acpi_attributes,
 	.is_visible = acpi_index_string_exist,
 };

@@ -1,7 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0
 # description: event tracing - enable/disable with subsystem level files
-# flags: instance
 
 do_reset() {
     echo > set_event
@@ -9,8 +7,13 @@ do_reset() {
 }
 
 fail() { #msg
+    do_reset
     echo $1
-    exit_fail
+    exit $FAIL
+}
+
+yield() {
+    ping localhost -c 1 || sleep .001 || usleep 1 || sleep 1
 }
 
 if [ ! -f set_event -o ! -d events/sched ]; then
@@ -18,11 +21,14 @@ if [ ! -f set_event -o ! -d events/sched ]; then
     exit_unsupported
 fi
 
+reset_tracer
+do_reset
+
 echo 'sched:*' > set_event
 
 yield
 
-count=`head -n 100 trace | grep -v ^# | awk '{ print $5 }' | sort -u | wc -l`
+count=`cat trace | grep -v ^# | awk '{ print $5 }' | sort -u | wc -l`
 if [ $count -lt 3 ]; then
     fail "at least fork, exec and exit events should be recorded"
 fi
@@ -33,7 +39,7 @@ echo 1 > events/sched/enable
 
 yield
 
-count=`head -n 100 trace | grep -v ^# | awk '{ print $5 }' | sort -u | wc -l`
+count=`cat trace | grep -v ^# | awk '{ print $5 }' | sort -u | wc -l`
 if [ $count -lt 3 ]; then
     fail "at least fork, exec and exit events should be recorded"
 fi
@@ -44,9 +50,11 @@ echo 0 > events/sched/enable
 
 yield
 
-count=`head -n 100 trace | grep -v ^# | awk '{ print $5 }' | sort -u | wc -l`
+count=`cat trace | grep -v ^# | awk '{ print $5 }' | sort -u | wc -l`
 if [ $count -ne 0 ]; then
     fail "any of scheduler events should not be recorded"
 fi
+
+do_reset
 
 exit 0

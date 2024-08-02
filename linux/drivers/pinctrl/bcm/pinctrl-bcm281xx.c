@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2013-2017 Broadcom
+ * Copyright (C) 2013 Broadcom Corporation
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -10,10 +10,9 @@
  * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-
 #include <linux/err.h>
 #include <linux/io.h>
-#include <linux/init.h>
+#include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pinctrl/pinctrl.h>
@@ -1019,13 +1018,13 @@ static void bcm281xx_pinctrl_pin_dbg_show(struct pinctrl_dev *pctldev,
 	seq_printf(s, " %s", dev_name(pctldev->dev));
 }
 
-static const struct pinctrl_ops bcm281xx_pinctrl_ops = {
+static struct pinctrl_ops bcm281xx_pinctrl_ops = {
 	.get_groups_count = bcm281xx_pinctrl_get_groups_count,
 	.get_group_name = bcm281xx_pinctrl_get_group_name,
 	.get_group_pins = bcm281xx_pinctrl_get_group_pins,
 	.pin_dbg_show = bcm281xx_pinctrl_pin_dbg_show,
 	.dt_node_to_map = pinconf_generic_dt_node_to_map_pin,
-	.dt_free_map = pinctrl_utils_free_map,
+	.dt_free_map = pinctrl_utils_dt_free_map,
 };
 
 static int bcm281xx_pinctrl_get_fcns_count(struct pinctrl_dev *pctldev)
@@ -1081,7 +1080,7 @@ static int bcm281xx_pinmux_set(struct pinctrl_dev *pctldev,
 	return rc;
 }
 
-static const struct pinmux_ops bcm281xx_pinctrl_pinmux_ops = {
+static struct pinmux_ops bcm281xx_pinctrl_pinmux_ops = {
 	.get_functions_count = bcm281xx_pinctrl_get_fcns_count,
 	.get_function_name = bcm281xx_pinctrl_get_fcn_name,
 	.get_function_groups = bcm281xx_pinctrl_get_fcn_groups,
@@ -1107,7 +1106,7 @@ static int bcm281xx_std_pin_update(struct pinctrl_dev *pctldev,
 	struct bcm281xx_pinctrl_data *pdata = pinctrl_dev_get_drvdata(pctldev);
 	int i;
 	enum pin_config_param param;
-	u32 arg;
+	u16 arg;
 
 	for (i = 0; i < num_configs; i++) {
 		param = pinconf_to_config_param(configs[i]);
@@ -1223,7 +1222,7 @@ static int bcm281xx_i2c_pin_update(struct pinctrl_dev *pctldev,
 	struct bcm281xx_pinctrl_data *pdata = pinctrl_dev_get_drvdata(pctldev);
 	int i, j;
 	enum pin_config_param param;
-	u32 arg;
+	u16 arg;
 
 	for (i = 0; i < num_configs; i++) {
 		param = pinconf_to_config_param(configs[i]);
@@ -1293,7 +1292,7 @@ static int bcm281xx_hdmi_pin_update(struct pinctrl_dev *pctldev,
 	struct bcm281xx_pinctrl_data *pdata = pinctrl_dev_get_drvdata(pctldev);
 	int i;
 	enum pin_config_param param;
-	u32 arg;
+	u16 arg;
 
 	for (i = 0; i < num_configs; i++) {
 		param = pinconf_to_config_param(configs[i]);
@@ -1384,7 +1383,7 @@ static int bcm281xx_pinctrl_pin_config_set(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
-static const struct pinconf_ops bcm281xx_pinctrl_pinconf_ops = {
+static struct pinconf_ops bcm281xx_pinctrl_pinconf_ops = {
 	.pin_config_get = bcm281xx_pinctrl_pin_config_get,
 	.pin_config_set = bcm281xx_pinctrl_pin_config_set,
 };
@@ -1423,7 +1422,9 @@ static int __init bcm281xx_pinctrl_probe(struct platform_device *pdev)
 	bcm281xx_pinctrl_desc.pins = bcm281xx_pinctrl.pins;
 	bcm281xx_pinctrl_desc.npins = bcm281xx_pinctrl.npins;
 
-	pctl = devm_pinctrl_register(&pdev->dev, &bcm281xx_pinctrl_desc, pdata);
+	pctl = pinctrl_register(&bcm281xx_pinctrl_desc,
+				&pdev->dev,
+				pdata);
 	if (IS_ERR(pctl)) {
 		dev_err(&pdev->dev, "Failed to register pinctrl\n");
 		return PTR_ERR(pctl);
@@ -1445,4 +1446,10 @@ static struct platform_driver bcm281xx_pinctrl_driver = {
 		.of_match_table = bcm281xx_pinctrl_of_match,
 	},
 };
-builtin_platform_driver_probe(bcm281xx_pinctrl_driver, bcm281xx_pinctrl_probe);
+
+module_platform_driver_probe(bcm281xx_pinctrl_driver, bcm281xx_pinctrl_probe);
+
+MODULE_AUTHOR("Broadcom Corporation <bcm-kernel-feedback-list@broadcom.com>");
+MODULE_AUTHOR("Sherman Yin <syin@broadcom.com>");
+MODULE_DESCRIPTION("Broadcom BCM281xx pinctrl driver");
+MODULE_LICENSE("GPL v2");

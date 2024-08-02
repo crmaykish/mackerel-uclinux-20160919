@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/init.h>
 #include <linux/pci.h>
 #include <linux/percpu.h>
@@ -13,9 +12,6 @@
 #define SMBUS_PCI_REG40		0x40
 #define SMBUS_PCI_REG64		0x64
 #define SMBUS_PCI_REGB4		0xb4
-
-#define HPET_MIN_CYCLES		16
-#define HPET_MIN_PROG_DELTA	(HPET_MIN_CYCLES * 12)
 
 static DEFINE_SPINLOCK(hpet_lock);
 DEFINE_PER_CPU(struct clock_event_device, hpet_clockevent_device);
@@ -158,16 +154,15 @@ static int hpet_tick_resume(struct clock_event_device *evt)
 static int hpet_next_event(unsigned long delta,
 		struct clock_event_device *evt)
 {
-	u32 cnt;
-	s32 res;
+	unsigned int cnt;
+	int res;
 
 	cnt = hpet_read(HPET_COUNTER);
-	cnt += (u32) delta;
+	cnt += delta;
 	hpet_write(HPET_T0_CMP, cnt);
 
-	res = (s32)(cnt - hpet_read(HPET_COUNTER));
-
-	return res < HPET_MIN_CYCLES ? -ETIME : 0;
+	res = ((int)(hpet_read(HPET_COUNTER) - cnt) > 0) ? -ETIME : 0;
+	return res;
 }
 
 static irqreturn_t hpet_irq_handler(int irq, void *data)
@@ -213,7 +208,7 @@ static void hpet_setup(void)
 	/* set hpet base address */
 	smbus_write(SMBUS_PCI_REGB4, HPET_ADDR);
 
-	/* enable decoding of access to HPET MMIO*/
+	/* enable decodeing of access to HPET MMIO*/
 	smbus_enable(SMBUS_PCI_REG40, (1 << 28));
 
 	/* HPET irq enable */
@@ -231,7 +226,7 @@ void __init setup_hpet_timer(void)
 
 	cd = &per_cpu(hpet_clockevent_device, cpu);
 	cd->name = "hpet";
-	cd->rating = 100;
+	cd->rating = 320;
 	cd->features = CLOCK_EVT_FEAT_PERIODIC | CLOCK_EVT_FEAT_ONESHOT;
 	cd->set_state_shutdown = hpet_set_state_shutdown;
 	cd->set_state_periodic = hpet_set_state_periodic;
@@ -242,18 +237,16 @@ void __init setup_hpet_timer(void)
 	cd->cpumask = cpumask_of(cpu);
 	clockevent_set_clock(cd, HPET_FREQ);
 	cd->max_delta_ns = clockevent_delta2ns(0x7fffffff, cd);
-	cd->max_delta_ticks = 0x7fffffff;
-	cd->min_delta_ns = clockevent_delta2ns(HPET_MIN_PROG_DELTA, cd);
-	cd->min_delta_ticks = HPET_MIN_PROG_DELTA;
+	cd->min_delta_ns = 5000;
 
 	clockevents_register_device(cd);
 	setup_irq(HPET_T0_IRQ, &hpet_irq);
 	pr_info("hpet clock event device register\n");
 }
 
-static u64 hpet_read_counter(struct clocksource *cs)
+static cycle_t hpet_read_counter(struct clocksource *cs)
 {
-	return (u64)hpet_read(HPET_COUNTER);
+	return (cycle_t)hpet_read(HPET_COUNTER);
 }
 
 static void hpet_suspend(struct clocksource *cs)

@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Samsung S5P/EXYNOS4 SoC series FIMC (CAMIF) driver
  *
  * Copyright (C) 2010-2012 Samsung Electronics Co., Ltd.
  * Sylwester Nawrocki <s.nawrocki@samsung.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published
+ * by the Free Software Foundation, either version 2 of the License,
+ * or (at your option) any later version.
  */
 
 #include <linux/module.h>
@@ -36,6 +40,7 @@ static char *fimc_clocks[MAX_FIMC_CLOCKS] = {
 
 static struct fimc_fmt fimc_formats[] = {
 	{
+		.name		= "RGB565",
 		.fourcc		= V4L2_PIX_FMT_RGB565,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_RGB565,
@@ -43,6 +48,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 1,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "BGR666",
 		.fourcc		= V4L2_PIX_FMT_BGR666,
 		.depth		= { 32 },
 		.color		= FIMC_FMT_RGB666,
@@ -50,6 +56,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 1,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "BGRA8888, 32 bpp",
 		.fourcc		= V4L2_PIX_FMT_BGR32,
 		.depth		= { 32 },
 		.color		= FIMC_FMT_RGB888,
@@ -57,6 +64,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 1,
 		.flags		= FMT_FLAGS_M2M | FMT_HAS_ALPHA,
 	}, {
+		.name		= "ARGB1555",
 		.fourcc		= V4L2_PIX_FMT_RGB555,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_RGB555,
@@ -64,6 +72,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 1,
 		.flags		= FMT_FLAGS_M2M_OUT | FMT_HAS_ALPHA,
 	}, {
+		.name		= "ARGB4444",
 		.fourcc		= V4L2_PIX_FMT_RGB444,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_RGB444,
@@ -71,9 +80,11 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 1,
 		.flags		= FMT_FLAGS_M2M_OUT | FMT_HAS_ALPHA,
 	}, {
+		.name		= "YUV 4:4:4",
 		.mbus_code	= MEDIA_BUS_FMT_YUV10_1X30,
 		.flags		= FMT_FLAGS_WRITEBACK,
 	}, {
+		.name		= "YUV 4:2:2 packed, YCbYCr",
 		.fourcc		= V4L2_PIX_FMT_YUYV,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_YCBYCR422,
@@ -82,6 +93,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.mbus_code	= MEDIA_BUS_FMT_YUYV8_2X8,
 		.flags		= FMT_FLAGS_M2M | FMT_FLAGS_CAM,
 	}, {
+		.name		= "YUV 4:2:2 packed, CbYCrY",
 		.fourcc		= V4L2_PIX_FMT_UYVY,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_CBYCRY422,
@@ -90,6 +102,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.mbus_code	= MEDIA_BUS_FMT_UYVY8_2X8,
 		.flags		= FMT_FLAGS_M2M | FMT_FLAGS_CAM,
 	}, {
+		.name		= "YUV 4:2:2 packed, CrYCbY",
 		.fourcc		= V4L2_PIX_FMT_VYUY,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_CRYCBY422,
@@ -98,6 +111,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.mbus_code	= MEDIA_BUS_FMT_VYUY8_2X8,
 		.flags		= FMT_FLAGS_M2M | FMT_FLAGS_CAM,
 	}, {
+		.name		= "YUV 4:2:2 packed, YCrYCb",
 		.fourcc		= V4L2_PIX_FMT_YVYU,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_YCRYCB422,
@@ -106,6 +120,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.mbus_code	= MEDIA_BUS_FMT_YVYU8_2X8,
 		.flags		= FMT_FLAGS_M2M | FMT_FLAGS_CAM,
 	}, {
+		.name		= "YUV 4:2:2 planar, Y/Cb/Cr",
 		.fourcc		= V4L2_PIX_FMT_YUV422P,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_YCBYCR422,
@@ -113,6 +128,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 3,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "YUV 4:2:2 planar, Y/CbCr",
 		.fourcc		= V4L2_PIX_FMT_NV16,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_YCBYCR422,
@@ -120,6 +136,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 2,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "YUV 4:2:2 planar, Y/CrCb",
 		.fourcc		= V4L2_PIX_FMT_NV61,
 		.depth		= { 16 },
 		.color		= FIMC_FMT_YCRYCB422,
@@ -127,6 +144,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 2,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "YUV 4:2:0 planar, YCbCr",
 		.fourcc		= V4L2_PIX_FMT_YUV420,
 		.depth		= { 12 },
 		.color		= FIMC_FMT_YCBCR420,
@@ -134,6 +152,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 3,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "YUV 4:2:0 planar, Y/CbCr",
 		.fourcc		= V4L2_PIX_FMT_NV12,
 		.depth		= { 12 },
 		.color		= FIMC_FMT_YCBCR420,
@@ -141,6 +160,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 2,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "YUV 4:2:0 non-contig. 2p, Y/CbCr",
 		.fourcc		= V4L2_PIX_FMT_NV12M,
 		.color		= FIMC_FMT_YCBCR420,
 		.depth		= { 8, 4 },
@@ -148,6 +168,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 2,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "YUV 4:2:0 non-contig. 3p, Y/Cb/Cr",
 		.fourcc		= V4L2_PIX_FMT_YUV420M,
 		.color		= FIMC_FMT_YCBCR420,
 		.depth		= { 8, 2, 2 },
@@ -155,6 +176,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 3,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "YUV 4:2:0 non-contig. 2p, tiled",
 		.fourcc		= V4L2_PIX_FMT_NV12MT,
 		.color		= FIMC_FMT_YCBCR420,
 		.depth		= { 8, 4 },
@@ -162,6 +184,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.colplanes	= 2,
 		.flags		= FMT_FLAGS_M2M,
 	}, {
+		.name		= "JPEG encoded data",
 		.fourcc		= V4L2_PIX_FMT_JPEG,
 		.color		= FIMC_FMT_JPEG,
 		.depth		= { 8 },
@@ -170,6 +193,7 @@ static struct fimc_fmt fimc_formats[] = {
 		.mbus_code	= MEDIA_BUS_FMT_JPEG_1X8,
 		.flags		= FMT_FLAGS_CAM | FMT_FLAGS_COMPRESSED,
 	}, {
+		.name		= "S5C73MX interleaved UYVY/JPEG",
 		.fourcc		= V4L2_PIX_FMT_S5C_UYVY_JPG,
 		.color		= FIMC_FMT_YUYV_JPEG,
 		.depth		= { 8 },
@@ -712,7 +736,6 @@ void fimc_adjust_mplane_format(struct fimc_fmt *fmt, u32 width, u32 height,
 	for (i = 0; i < pix->num_planes; ++i) {
 		struct v4l2_plane_pix_format *plane_fmt = &pix->plane_fmt[i];
 		u32 bpl = plane_fmt->bytesperline;
-		u32 sizeimage;
 
 		if (fmt->colplanes > 1 && (bpl == 0 || bpl < pix->width))
 			bpl = pix->width; /* Planar */
@@ -732,17 +755,8 @@ void fimc_adjust_mplane_format(struct fimc_fmt *fmt, u32 width, u32 height,
 			bytesperline /= 2;
 
 		plane_fmt->bytesperline = bytesperline;
-		sizeimage = pix->width * pix->height * fmt->depth[i] / 8;
-
-		/* Ensure full last row for tiled formats */
-		if (tiled_fmt(fmt)) {
-			/* 64 * 32 * plane_fmt->bytesperline / 64 */
-			u32 row_size = plane_fmt->bytesperline * 32;
-
-			sizeimage = roundup(sizeimage, row_size);
-		}
-
-		plane_fmt->sizeimage = max(sizeimage, plane_fmt->sizeimage);
+		plane_fmt->sizeimage = max((pix->width * pix->height *
+				   fmt->depth[i]) / 8, plane_fmt->sizeimage);
 	}
 }
 
@@ -1004,11 +1018,19 @@ static int fimc_probe(struct platform_device *pdev)
 			goto err_sd;
 	}
 
-	vb2_dma_contig_set_max_seg_size(dev, DMA_BIT_MASK(32));
+	/* Initialize contiguous memory allocator */
+	fimc->alloc_ctx = vb2_dma_contig_init_ctx(dev);
+	if (IS_ERR(fimc->alloc_ctx)) {
+		ret = PTR_ERR(fimc->alloc_ctx);
+		goto err_gclk;
+	}
 
 	dev_dbg(dev, "FIMC.%d registered successfully\n", fimc->id);
 	return 0;
 
+err_gclk:
+	if (!pm_runtime_enabled(dev))
+		clk_disable(fimc->clock[CLK_GATE]);
 err_sd:
 	fimc_unregister_capture_subdev(fimc);
 err_sclk:
@@ -1101,7 +1123,7 @@ static int fimc_remove(struct platform_device *pdev)
 	pm_runtime_set_suspended(&pdev->dev);
 
 	fimc_unregister_capture_subdev(fimc);
-	vb2_dma_contig_clear_max_seg_size(&pdev->dev);
+	vb2_dma_contig_cleanup_ctx(fimc->alloc_ctx);
 
 	clk_disable(fimc->clock[CLK_BUS]);
 	fimc_clk_put(fimc);
@@ -1130,6 +1152,26 @@ static const struct fimc_pix_limit s5p_pix_limit[4] = {
 		.out_rot_en_w	= 1280,
 		.out_rot_dis_w	= 1920,
 	},
+};
+
+static const struct fimc_variant fimc0_variant_s5p = {
+	.has_inp_rot	 = 1,
+	.has_out_rot	 = 1,
+	.has_cam_if	 = 1,
+	.min_inp_pixsize = 16,
+	.min_out_pixsize = 16,
+	.hor_offs_align	 = 8,
+	.min_vsize_align = 16,
+	.pix_limit	 = &s5p_pix_limit[0],
+};
+
+static const struct fimc_variant fimc2_variant_s5p = {
+	.has_cam_if	 = 1,
+	.min_inp_pixsize = 16,
+	.min_out_pixsize = 16,
+	.hor_offs_align	 = 8,
+	.min_vsize_align = 16,
+	.pix_limit	 = &s5p_pix_limit[1],
 };
 
 static const struct fimc_variant fimc0_variant_s5pv210 = {
@@ -1164,6 +1206,18 @@ static const struct fimc_variant fimc2_variant_s5pv210 = {
 	.pix_limit	 = &s5p_pix_limit[2],
 };
 
+/* S5PC100 */
+static const struct fimc_drvdata fimc_drvdata_s5p = {
+	.variant = {
+		[0] = &fimc0_variant_s5p,
+		[1] = &fimc0_variant_s5p,
+		[2] = &fimc2_variant_s5p,
+	},
+	.num_entities	= 3,
+	.lclk_frequency = 133000000UL,
+	.out_buf_count	= 4,
+};
+
 /* S5PV210, S5PC110 */
 static const struct fimc_drvdata fimc_drvdata_s5pv210 = {
 	.variant = {
@@ -1187,7 +1241,7 @@ static const struct fimc_drvdata fimc_drvdata_exynos4210 = {
 	.out_buf_count	= 32,
 };
 
-/* EXYNOS4412 */
+/* EXYNOS4212, EXYNOS4412 */
 static const struct fimc_drvdata fimc_drvdata_exynos4x12 = {
 	.num_entities	= 4,
 	.lclk_frequency	= 166000000UL,
@@ -1195,6 +1249,23 @@ static const struct fimc_drvdata fimc_drvdata_exynos4x12 = {
 	.cistatus2	= 1,
 	.alpha_color	= 1,
 	.out_buf_count	= 32,
+};
+
+static const struct platform_device_id fimc_driver_ids[] = {
+	{
+		.name		= "s5p-fimc",
+		.driver_data	= (unsigned long)&fimc_drvdata_s5p,
+	}, {
+		.name		= "s5pv210-fimc",
+		.driver_data	= (unsigned long)&fimc_drvdata_s5pv210,
+	}, {
+		.name		= "exynos4-fimc",
+		.driver_data	= (unsigned long)&fimc_drvdata_exynos4210,
+	}, {
+		.name		= "exynos4x12-fimc",
+		.driver_data	= (unsigned long)&fimc_drvdata_exynos4x12,
+	},
+	{ },
 };
 
 static const struct of_device_id fimc_of_match[] = {
@@ -1219,10 +1290,11 @@ static const struct dev_pm_ops fimc_pm_ops = {
 static struct platform_driver fimc_driver = {
 	.probe		= fimc_probe,
 	.remove		= fimc_remove,
+	.id_table	= fimc_driver_ids,
 	.driver = {
 		.of_match_table = fimc_of_match,
 		.name		= FIMC_DRIVER_NAME,
-		.pm		= &fimc_pm_ops,
+		.pm     	= &fimc_pm_ops,
 	}
 };
 
@@ -1231,7 +1303,7 @@ int __init fimc_register_driver(void)
 	return platform_driver_register(&fimc_driver);
 }
 
-void fimc_unregister_driver(void)
+void __exit fimc_unregister_driver(void)
 {
 	platform_driver_unregister(&fimc_driver);
 }

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Flash memory interface rev.5 driver for the Intel
  * Flash chips used on the NetWinder.
@@ -32,7 +31,7 @@
 #include <asm/hardware/dec21285.h>
 #include <asm/io.h>
 #include <asm/mach-types.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 /*****************************************************************************/
 #include <asm/nwflash.h>
@@ -168,7 +167,7 @@ static ssize_t flash_write(struct file *file, const char __user *buf,
 	if (count > gbFlashSize - p)
 		count = gbFlashSize - p;
 			
-	if (!access_ok(buf, count))
+	if (!access_ok(VERIFY_READ, buf, count))
 		return -EFAULT;
 
 	/*
@@ -278,7 +277,36 @@ static loff_t flash_llseek(struct file *file, loff_t offset, int orig)
 		printk(KERN_DEBUG "flash_llseek: offset=0x%X, orig=0x%X.\n",
 		       (unsigned int) offset, orig);
 
-	ret = no_seek_end_llseek_size(file, offset, orig, gbFlashSize);
+	switch (orig) {
+	case 0:
+		if (offset < 0) {
+			ret = -EINVAL;
+			break;
+		}
+
+		if ((unsigned int) offset > gbFlashSize) {
+			ret = -EINVAL;
+			break;
+		}
+
+		file->f_pos = (unsigned int) offset;
+		ret = file->f_pos;
+		break;
+	case 1:
+		if ((file->f_pos + offset) > gbFlashSize) {
+			ret = -EINVAL;
+			break;
+		}
+		if ((file->f_pos + offset) < 0) {
+			ret = -EINVAL;
+			break;
+		}
+		file->f_pos += offset;
+		ret = file->f_pos;
+		break;
+	default:
+		ret = -EINVAL;
+	}
 	mutex_unlock(&flash_mutex);
 	return ret;
 }

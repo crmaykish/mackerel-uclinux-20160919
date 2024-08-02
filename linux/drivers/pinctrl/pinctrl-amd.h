@@ -1,23 +1,27 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * GPIO driver for AMD
  *
  * Copyright (c) 2014,2015 Ken Xue <Ken.Xue@amd.com>
  *		Jeff Wu <Jeff.Wu@amd.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
  */
 
 #ifndef _PINCTRL_AMD_H
 #define _PINCTRL_AMD_H
 
+#define TOTAL_NUMBER_OF_PINS	192
 #define AMD_GPIO_PINS_PER_BANK  64
+#define AMD_GPIO_TOTAL_BANKS    3
 
 #define AMD_GPIO_PINS_BANK0     63
 #define AMD_GPIO_PINS_BANK1     64
 #define AMD_GPIO_PINS_BANK2     56
-#define AMD_GPIO_PINS_BANK3     32
 
 #define WAKE_INT_MASTER_REG 0xfc
-#define INTERNAL_GPIO0_DEBOUNCE (1 << 15)
 #define EOI_MASK (1 << 29)
 
 #define WAKE_INT_STATUS_REG0 0x2f8
@@ -31,9 +35,7 @@
 #define ACTIVE_LEVEL_OFF		9
 #define INTERRUPT_ENABLE_OFF		11
 #define INTERRUPT_MASK_OFF		12
-#define WAKE_CNTRL_OFF_S0I3             13
-#define WAKE_CNTRL_OFF_S3               14
-#define WAKE_CNTRL_OFF_S4               15
+#define WAKE_CNTRL_OFF			13
 #define PIN_STS_OFF			16
 #define DRV_STRENGTH_SEL_OFF		17
 #define PULL_UP_SEL_OFF			19
@@ -50,10 +52,6 @@
 #define DB_CNTRl_MASK	0x3UL
 #define ACTIVE_LEVEL_MASK	0x3UL
 #define DRV_STRENGTH_SEL_MASK	0x3UL
-
-#define ACTIVE_LEVEL_HIGH	0x0UL
-#define ACTIVE_LEVEL_LOW	0x1UL
-#define ACTIVE_LEVEL_BOTH	0x2UL
 
 #define DB_TYPE_NO_DEBOUNCE               0x0UL
 #define DB_TYPE_PRESERVE_LOW_GLITCH       0x1UL
@@ -88,17 +86,15 @@ struct amd_function {
 };
 
 struct amd_gpio {
-	raw_spinlock_t          lock;
+	spinlock_t              lock;
 	void __iomem            *base;
 
 	const struct amd_pingroup *groups;
 	u32 ngroups;
 	struct pinctrl_dev *pctrl;
 	struct gpio_chip        gc;
-	unsigned int            hwbank_num;
 	struct resource         *res;
 	struct platform_device  *pdev;
-	u32			*saved_regs;
 };
 
 /*  KERNCZ configuration*/
@@ -253,7 +249,7 @@ static const struct amd_pingroup kerncz_groups[] = {
 	{
 		.name = "uart0",
 		.pins = uart0_pins,
-		.npins = 5,
+		.npins = 9,
 	},
 	{
 		.name = "uart1",

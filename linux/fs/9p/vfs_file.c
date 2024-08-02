@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/fs/9p/vfs_file.c
  *
@@ -6,6 +5,22 @@
  *
  *  Copyright (C) 2004 by Eric Van Hensbergen <ericvh@gmail.com>
  *  Copyright (C) 2002 by Ron Minnich <rminnich@lanl.gov>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License version 2
+ *  as published by the Free Software Foundation.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to:
+ *  Free Software Foundation
+ *  51 Franklin Street, Fifth Floor
+ *  Boston, MA  02111-1301  USA
+ *
  */
 
 #include <linux/module.h>
@@ -19,7 +34,7 @@
 #include <linux/list.h>
 #include <linux/pagemap.h>
 #include <linux/utsname.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/idr.h>
 #include <linux/uio.h>
 #include <linux/slab.h>
@@ -59,7 +74,7 @@ int v9fs_file_open(struct inode *inode, struct file *file)
 					v9fs_proto_dotu(v9ses));
 	fid = file->private_data;
 	if (!fid) {
-		fid = v9fs_fid_clone(file_dentry(file));
+		fid = v9fs_fid_clone(file->f_path.dentry);
 		if (IS_ERR(fid))
 			return PTR_ERR(fid);
 
@@ -85,7 +100,7 @@ int v9fs_file_open(struct inode *inode, struct file *file)
 		 * because we want write after unlink usecase
 		 * to work.
 		 */
-		fid = v9fs_writeback_fid(file_dentry(file));
+		fid = v9fs_writeback_fid(file->f_path.dentry);
 		if (IS_ERR(fid)) {
 			err = PTR_ERR(fid);
 			mutex_unlock(&v9inode->v_mutex);
@@ -139,7 +154,6 @@ static int v9fs_file_do_lock(struct file *filp, int cmd, struct file_lock *fl)
 	uint8_t status = P9_LOCK_ERROR;
 	int res = 0;
 	unsigned char fl_type;
-	struct v9fs_session_info *v9ses;
 
 	fid = filp->private_data;
 	BUG_ON(fid == NULL);
@@ -175,8 +189,6 @@ static int v9fs_file_do_lock(struct file *filp, int cmd, struct file_lock *fl)
 	if (IS_SETLKW(cmd))
 		flock.flags = P9_LOCK_FLAGS_BLOCK;
 
-	v9ses = v9fs_inode2v9ses(file_inode(filp));
-
 	/*
 	 * if its a blocked request and we get P9_LOCK_BLOCKED as the status
 	 * for lock request, keep on trying
@@ -190,17 +202,8 @@ static int v9fs_file_do_lock(struct file *filp, int cmd, struct file_lock *fl)
 			break;
 		if (status == P9_LOCK_BLOCKED && !IS_SETLKW(cmd))
 			break;
-		if (schedule_timeout_interruptible(v9ses->session_lock_timeout)
-				!= 0)
+		if (schedule_timeout_interruptible(P9_LOCK_TIMEOUT) != 0)
 			break;
-		/*
-		 * p9_client_lock_dotl overwrites flock.client_id with the
-		 * server message, free and reuse the client name
-		 */
-		if (flock.client_id != fid->clnt->name) {
-			kfree(flock.client_id);
-			flock.client_id = fid->clnt->name;
-		}
 	}
 
 	/* map 9p status to VFS status */
@@ -213,7 +216,7 @@ static int v9fs_file_do_lock(struct file *filp, int cmd, struct file_lock *fl)
 		break;
 	default:
 		WARN_ONCE(1, "unknown lock status code: %d\n", status);
-		/* fall through */
+		/* fallthough */
 	case P9_LOCK_ERROR:
 	case P9_LOCK_GRACE:
 		res = -ENOLCK;
@@ -232,8 +235,6 @@ out_unlock:
 		locks_lock_file_wait(filp, fl);
 		fl->fl_type = fl_type;
 	}
-	if (flock.client_id != fid->clnt->name)
-		kfree(flock.client_id);
 out:
 	return res;
 }
@@ -268,7 +269,7 @@ static int v9fs_file_getlock(struct file *filp, struct file_lock *fl)
 
 	res = p9_client_getlock_dotl(fid, &glock);
 	if (res < 0)
-		goto out;
+		return res;
 	/* map 9p lock type to os lock type */
 	switch (glock.type) {
 	case P9_LOCK_TYPE_RDLCK:
@@ -287,11 +288,9 @@ static int v9fs_file_getlock(struct file *filp, struct file_lock *fl)
 			fl->fl_end = OFFSET_MAX;
 		else
 			fl->fl_end = glock.start + glock.length - 1;
-		fl->fl_pid = -glock.proc_id;
+		fl->fl_pid = glock.proc_id;
 	}
-out:
-	if (glock.client_id != fid->clnt->name)
-		kfree(glock.client_id);
+	kfree(glock.client_id);
 	return res;
 }
 
@@ -422,8 +421,8 @@ v9fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		struct inode *inode = file_inode(file);
 		loff_t i_size;
 		unsigned long pg_start, pg_end;
-		pg_start = origin >> PAGE_SHIFT;
-		pg_end = (origin + retval - 1) >> PAGE_SHIFT;
+		pg_start = origin >> PAGE_CACHE_SHIFT;
+		pg_end = (origin + retval - 1) >> PAGE_CACHE_SHIFT;
 		if (inode->i_mapping && inode->i_mapping->nrpages)
 			invalidate_inode_pages2_range(inode->i_mapping,
 						      pg_start, pg_end);
@@ -431,11 +430,7 @@ v9fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		i_size = i_size_read(inode);
 		if (iocb->ki_pos > i_size) {
 			inode_add_bytes(inode, iocb->ki_pos - i_size);
-			/*
-			 * Need to serialize against i_size_write() in
-			 * v9fs_stat2inode()
-			 */
-			v9fs_i_size_write(inode, iocb->ki_pos);
+			i_size_write(inode, iocb->ki_pos);
 		}
 		return retval;
 	}
@@ -450,18 +445,18 @@ static int v9fs_file_fsync(struct file *filp, loff_t start, loff_t end,
 	struct p9_wstat wstat;
 	int retval;
 
-	retval = file_write_and_wait_range(filp, start, end);
+	retval = filemap_write_and_wait_range(inode->i_mapping, start, end);
 	if (retval)
 		return retval;
 
-	inode_lock(inode);
+	mutex_lock(&inode->i_mutex);
 	p9_debug(P9_DEBUG_VFS, "filp %p datasync %x\n", filp, datasync);
 
 	fid = filp->private_data;
 	v9fs_blank_wstat(&wstat);
 
 	retval = p9_client_wstat(fid, &wstat);
-	inode_unlock(inode);
+	mutex_unlock(&inode->i_mutex);
 
 	return retval;
 }
@@ -473,17 +468,17 @@ int v9fs_file_fsync_dotl(struct file *filp, loff_t start, loff_t end,
 	struct inode *inode = filp->f_mapping->host;
 	int retval;
 
-	retval = file_write_and_wait_range(filp, start, end);
+	retval = filemap_write_and_wait_range(inode->i_mapping, start, end);
 	if (retval)
 		return retval;
 
-	inode_lock(inode);
+	mutex_lock(&inode->i_mutex);
 	p9_debug(P9_DEBUG_VFS, "filp %p datasync %x\n", filp, datasync);
 
 	fid = filp->private_data;
 
 	retval = p9_client_fsync(fid, datasync);
-	inode_unlock(inode);
+	mutex_unlock(&inode->i_mutex);
 
 	return retval;
 }
@@ -513,7 +508,6 @@ v9fs_mmap_file_mmap(struct file *filp, struct vm_area_struct *vma)
 	v9inode = V9FS_I(inode);
 	mutex_lock(&v9inode->v_mutex);
 	if (!v9inode->writeback_fid &&
-	    (vma->vm_flags & VM_SHARED) &&
 	    (vma->vm_flags & VM_WRITE)) {
 		/*
 		 * clone a fid and add it to writeback_fid
@@ -522,7 +516,7 @@ v9fs_mmap_file_mmap(struct file *filp, struct vm_area_struct *vma)
 		 * because we want write after unlink usecase
 		 * to work.
 		 */
-		fid = v9fs_writeback_fid(file_dentry(filp));
+		fid = v9fs_writeback_fid(filp->f_path.dentry);
 		if (IS_ERR(fid)) {
 			retval = PTR_ERR(fid);
 			mutex_unlock(&v9inode->v_mutex);
@@ -539,12 +533,12 @@ v9fs_mmap_file_mmap(struct file *filp, struct vm_area_struct *vma)
 	return retval;
 }
 
-static vm_fault_t
-v9fs_vm_page_mkwrite(struct vm_fault *vmf)
+static int
+v9fs_vm_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	struct v9fs_inode *v9inode;
 	struct page *page = vmf->page;
-	struct file *filp = vmf->vma->vm_file;
+	struct file *filp = vma->vm_file;
 	struct inode *inode = file_inode(filp);
 
 
@@ -609,14 +603,12 @@ static void v9fs_mmap_vm_close(struct vm_area_struct *vma)
 	struct writeback_control wbc = {
 		.nr_to_write = LONG_MAX,
 		.sync_mode = WB_SYNC_ALL,
-		.range_start = (loff_t)vma->vm_pgoff * PAGE_SIZE,
+		.range_start = vma->vm_pgoff * PAGE_SIZE,
 		 /* absolute end, byte at end included */
-		.range_end = (loff_t)vma->vm_pgoff * PAGE_SIZE +
+		.range_end = vma->vm_pgoff * PAGE_SIZE +
 			(vma->vm_end - vma->vm_start - 1),
 	};
 
-	if (!(vma->vm_flags & VM_SHARED))
-		return;
 
 	p9_debug(P9_DEBUG_VFS, "9p VMA close, %p, flushing", vma);
 
@@ -676,7 +668,6 @@ const struct file_operations v9fs_file_operations = {
 	.lock = v9fs_file_lock,
 	.mmap = generic_file_readonly_mmap,
 	.fsync = v9fs_file_fsync,
-	.setlease = simple_nosetlease,
 };
 
 const struct file_operations v9fs_file_operations_dotl = {
@@ -712,5 +703,4 @@ const struct file_operations v9fs_mmap_file_operations_dotl = {
 	.flock = v9fs_file_flock_dotl,
 	.mmap = v9fs_mmap_file_mmap,
 	.fsync = v9fs_file_fsync_dotl,
-	.setlease = simple_nosetlease,
 };

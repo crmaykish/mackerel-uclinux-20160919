@@ -1,6 +1,6 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 #include <linux/linkage.h>
-#include <asm/export.h>
+#include <asm/cpufeature.h>
+#include <asm/alternative-asm.h>
 
 /*
  * Most CPUs support enhanced REP MOVSB/STOSB instructions. It is
@@ -13,15 +13,19 @@
  * Zero a page.
  * %rdi	- page
  */
-ENTRY(clear_page_rep)
+ENTRY(clear_page)
+
+	ALTERNATIVE_2 "jmp clear_page_orig", "", X86_FEATURE_REP_GOOD, \
+		      "jmp clear_page_c_e", X86_FEATURE_ERMS
+
 	movl $4096/8,%ecx
 	xorl %eax,%eax
 	rep stosq
 	ret
-ENDPROC(clear_page_rep)
-EXPORT_SYMBOL_GPL(clear_page_rep)
+ENDPROC(clear_page)
 
 ENTRY(clear_page_orig)
+
 	xorl   %eax,%eax
 	movl   $4096/64,%ecx
 	.p2align 4
@@ -41,12 +45,10 @@ ENTRY(clear_page_orig)
 	nop
 	ret
 ENDPROC(clear_page_orig)
-EXPORT_SYMBOL_GPL(clear_page_orig)
 
-ENTRY(clear_page_erms)
+ENTRY(clear_page_c_e)
 	movl $4096,%ecx
 	xorl %eax,%eax
 	rep stosb
 	ret
-ENDPROC(clear_page_erms)
-EXPORT_SYMBOL_GPL(clear_page_erms)
+ENDPROC(clear_page_c_e)

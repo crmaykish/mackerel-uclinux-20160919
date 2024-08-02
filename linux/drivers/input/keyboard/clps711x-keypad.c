@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Cirrus Logic CLPS711X Keypad driver
  *
  * Copyright (C) 2014 Alexander Shiyan <shc_work@mail.ru>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/input.h>
@@ -97,7 +101,7 @@ static int clps711x_keypad_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	priv->syscon =
-		syscon_regmap_lookup_by_compatible("cirrus,ep7209-syscon1");
+		syscon_regmap_lookup_by_compatible("cirrus,clps711x-syscon1");
 	if (IS_ERR(priv->syscon))
 		return PTR_ERR(priv->syscon);
 
@@ -105,8 +109,8 @@ static int clps711x_keypad_probe(struct platform_device *pdev)
 	if (priv->row_count < 1)
 		return -EINVAL;
 
-	priv->gpio_data = devm_kcalloc(dev,
-				priv->row_count, sizeof(*priv->gpio_data),
+	priv->gpio_data = devm_kzalloc(dev,
+				sizeof(*priv->gpio_data) * priv->row_count,
 				GFP_KERNEL);
 	if (!priv->gpio_data)
 		return -ENOMEM;
@@ -177,7 +181,7 @@ static int clps711x_keypad_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id clps711x_keypad_of_match[] = {
-	{ .compatible = "cirrus,ep7209-keypad", },
+	{ .compatible = "cirrus,clps711x-keypad", },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, clps711x_keypad_of_match);

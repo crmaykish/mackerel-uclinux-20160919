@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ROOT_DEV_H_
 #define _ROOT_DEV_H_
 
@@ -8,7 +7,6 @@
 
 enum {
 	Root_NFS = MKDEV(UNNAMED_MAJOR, 255),
-	Root_CIFS = MKDEV(UNNAMED_MAJOR, 254),
 	Root_RAM0 = MKDEV(RAMDISK_MAJOR, 0),
 	Root_RAM1 = MKDEV(RAMDISK_MAJOR, 1),
 	Root_FD0 = MKDEV(FLOPPY_MAJOR, 0),

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 #ifndef _UAPI_NFNL_ACCT_H_
 #define _UAPI_NFNL_ACCT_H_
 
@@ -30,7 +29,6 @@ enum nfnl_acct_type {
 	NFACCT_FLAGS,
 	NFACCT_QUOTA,
 	NFACCT_FILTER,
-	NFACCT_PAD,
 	__NFACCT_MAX
 };
 #define NFACCT_MAX (__NFACCT_MAX - 1)

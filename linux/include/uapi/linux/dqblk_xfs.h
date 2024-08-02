@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: LGPL-2.1+ WITH Linux-syscall-note */
 /*
  * Copyright (c) 1995-2001,2004 Silicon Graphics, Inc.  All Rights Reserved.
  *
@@ -40,7 +39,6 @@
 #define Q_XQUOTARM	XQM_CMD(6)	/* free disk space used by dquots */
 #define Q_XQUOTASYNC	XQM_CMD(7)	/* delalloc flush, updates dquots */
 #define Q_XGETQSTATV	XQM_CMD(8)	/* newer version of get quota */
-#define Q_XGETNEXTQUOTA	XQM_CMD(9)	/* get disk limits and usage >= ID */
 
 /*
  * fs_disk_quota structure:

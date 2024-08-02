@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * ST OHCI driver
  *
@@ -7,6 +6,10 @@
  * Author: Peter Griffin <peter.griffin@linaro.org>
  *
  * Derived from ohci-platform.c
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -132,14 +135,17 @@ static int st_ohci_platform_probe(struct platform_device *dev)
 	struct resource *res_mem;
 	struct usb_ohci_pdata *pdata = &ohci_platform_defaults;
 	struct st_ohci_platform_priv *priv;
+	struct ohci_hcd *ohci;
 	int err, irq, clk = 0;
 
 	if (usb_disabled())
 		return -ENODEV;
 
 	irq = platform_get_irq(dev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(&dev->dev, "no irq provided");
 		return irq;
+	}
 
 	res_mem = platform_get_resource(dev, IORESOURCE_MEM, 0);
 	if (!res_mem) {
@@ -155,6 +161,7 @@ static int st_ohci_platform_probe(struct platform_device *dev)
 	platform_set_drvdata(dev, hcd);
 	dev->dev.platform_data = pdata;
 	priv = hcd_to_ohci_priv(hcd);
+	ohci = hcd_to_ohci(hcd);
 
 	priv->phy = devm_phy_get(&dev->dev, "usb");
 	if (IS_ERR(priv->phy)) {
@@ -181,15 +188,13 @@ static int st_ohci_platform_probe(struct platform_device *dev)
 		priv->clk48 = NULL;
 	}
 
-	priv->pwr =
-		devm_reset_control_get_optional_shared(&dev->dev, "power");
+	priv->pwr = devm_reset_control_get_optional(&dev->dev, "power");
 	if (IS_ERR(priv->pwr)) {
 		err = PTR_ERR(priv->pwr);
 		goto err_put_clks;
 	}
 
-	priv->rst =
-		devm_reset_control_get_optional_shared(&dev->dev, "softreset");
+	priv->rst = devm_reset_control_get_optional(&dev->dev, "softreset");
 	if (IS_ERR(priv->rst)) {
 		err = PTR_ERR(priv->rst);
 		goto err_put_clks;
@@ -265,7 +270,8 @@ static int st_ohci_suspend(struct device *dev)
 {
 	struct usb_hcd *hcd = dev_get_drvdata(dev);
 	struct usb_ohci_pdata *pdata = dev->platform_data;
-	struct platform_device *pdev = to_platform_device(dev);
+	struct platform_device *pdev =
+		container_of(dev, struct platform_device, dev);
 	bool do_wakeup = device_may_wakeup(dev);
 	int ret;
 
@@ -283,7 +289,8 @@ static int st_ohci_resume(struct device *dev)
 {
 	struct usb_hcd *hcd = dev_get_drvdata(dev);
 	struct usb_ohci_pdata *pdata = dev_get_platdata(dev);
-	struct platform_device *pdev = to_platform_device(dev);
+	struct platform_device *pdev =
+		container_of(dev, struct platform_device, dev);
 	int err;
 
 	if (pdata->power_on) {

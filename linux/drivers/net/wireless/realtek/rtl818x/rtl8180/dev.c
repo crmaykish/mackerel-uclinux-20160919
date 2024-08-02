@@ -315,7 +315,7 @@ static void rtl8180_handle_rx(struct ieee80211_hw *dev)
 			rx_status.mactime = tsft;
 			rx_status.flag |= RX_FLAG_MACTIME_START;
 			if (flags & RTL818X_RX_DESC_FLAG_SPLCP)
-				rx_status.enc_flags |= RX_ENC_FLAG_SHORTPRE;
+				rx_status.flag |= RX_FLAG_SHORTPRE;
 			if (flags & RTL818X_RX_DESC_FLAG_CRC32_ERR)
 				rx_status.flag |= RX_FLAG_FAILED_FCS_CRC;
 
@@ -460,10 +460,8 @@ static void rtl8180_tx(struct ieee80211_hw *dev,
 	struct rtl8180_priv *priv = dev->priv;
 	struct rtl8180_tx_ring *ring;
 	struct rtl8180_tx_desc *entry;
-	unsigned int prio = 0;
 	unsigned long flags;
-	unsigned int idx, hw_prio;
-
+	unsigned int idx, prio, hw_prio;
 	dma_addr_t mapping;
 	u32 tx_flags;
 	u8 rc_flags;
@@ -472,9 +470,7 @@ static void rtl8180_tx(struct ieee80211_hw *dev,
 	/* do arithmetic and then convert to le16 */
 	u16 frame_duration = 0;
 
-	/* rtl8180/rtl8185 only has one useable tx queue */
-	if (dev->queues > IEEE80211_AC_BK)
-		prio = skb_get_queue_mapping(skb);
+	prio = skb_get_queue_mapping(skb);
 	ring = &priv->tx_ring[prio];
 
 	mapping = pci_map_single(priv->pdev, skb->data,
@@ -530,7 +526,7 @@ static void rtl8180_tx(struct ieee80211_hw *dev,
 		 * ieee80211_generic_frame_duration
 		 */
 		duration = ieee80211_generic_frame_duration(dev, priv->vif,
-					NL80211_BAND_2GHZ, skb->len,
+					IEEE80211_BAND_2GHZ, skb->len,
 					ieee80211_get_tx_rate(dev, info));
 
 		frame_duration =  priv->ack_time + le16_to_cpu(duration);
@@ -807,7 +803,7 @@ static void rtl8180_config_cardbus(struct ieee80211_hw *dev)
 		rtl818x_iowrite16(priv, FEMR_SE, 0xffff);
 	} else {
 		reg16 = rtl818x_ioread16(priv, &priv->map->FEMR);
-		reg16 |= (1 << 15) | (1 << 14) | (1 << 4);
+			reg16 |= (1 << 15) | (1 << 14) | (1 << 4);
 		rtl818x_iowrite16(priv, &priv->map->FEMR, reg16);
 	}
 
@@ -1022,8 +1018,6 @@ static int rtl8180_init_rx_ring(struct ieee80211_hw *dev)
 		dma_addr_t *mapping;
 		entry = priv->rx_ring + priv->rx_ring_sz*i;
 		if (!skb) {
-			pci_free_consistent(priv->pdev, priv->rx_ring_sz * 32,
-					priv->rx_ring, priv->rx_ring_dma);
 			wiphy_err(dev->wiphy, "Cannot allocate RX skb\n");
 			return -ENOMEM;
 		}
@@ -1034,8 +1028,6 @@ static int rtl8180_init_rx_ring(struct ieee80211_hw *dev)
 
 		if (pci_dma_mapping_error(priv->pdev, *mapping)) {
 			kfree_skb(skb);
-			pci_free_consistent(priv->pdev, priv->rx_ring_sz * 32,
-					priv->rx_ring, priv->rx_ring_dma);
 			wiphy_err(dev->wiphy, "Cannot map DMA for RX skb\n");
 			return -ENOMEM;
 		}
@@ -1537,7 +1529,7 @@ static void rtl8180_bss_info_changed(struct ieee80211_hw *dev,
 		priv->ack_time =
 			le16_to_cpu(ieee80211_generic_frame_duration(dev,
 					priv->vif,
-					NL80211_BAND_2GHZ, 10,
+					IEEE80211_BAND_2GHZ, 10,
 					&priv->rates[0])) - 10;
 
 		rtl8180_conf_erp(dev, info);
@@ -1727,8 +1719,8 @@ static int rtl8180_probe(struct pci_dev *pdev,
 {
 	struct ieee80211_hw *dev;
 	struct rtl8180_priv *priv;
-	unsigned long mem_len;
-	unsigned int io_len;
+	unsigned long mem_addr, mem_len;
+	unsigned int io_addr, io_len;
 	int err;
 	const char *chip_name, *rf_name = NULL;
 	u32 reg;
@@ -1744,10 +1736,12 @@ static int rtl8180_probe(struct pci_dev *pdev,
 	if (err) {
 		printk(KERN_ERR "%s (rtl8180): Cannot obtain PCI resources\n",
 		       pci_name(pdev));
-		goto err_disable_dev;
+		return err;
 	}
 
+	io_addr = pci_resource_start(pdev, 0);
 	io_len = pci_resource_len(pdev, 0);
+	mem_addr = pci_resource_start(pdev, 1);
 	mem_len = pci_resource_len(pdev, 1);
 
 	if (mem_len < sizeof(struct rtl818x_csr) ||
@@ -1801,12 +1795,12 @@ static int rtl8180_probe(struct pci_dev *pdev,
 	memcpy(priv->channels, rtl818x_channels, sizeof(rtl818x_channels));
 	memcpy(priv->rates, rtl818x_rates, sizeof(rtl818x_rates));
 
-	priv->band.band = NL80211_BAND_2GHZ;
+	priv->band.band = IEEE80211_BAND_2GHZ;
 	priv->band.channels = priv->channels;
 	priv->band.n_channels = ARRAY_SIZE(rtl818x_channels);
 	priv->band.bitrates = priv->rates;
 	priv->band.n_bitrates = 4;
-	dev->wiphy->bands[NL80211_BAND_2GHZ] = &priv->band;
+	dev->wiphy->bands[IEEE80211_BAND_2GHZ] = &priv->band;
 
 	ieee80211_hw_set(dev, HOST_BROADCAST_PS_BUFFERING);
 	ieee80211_hw_set(dev, RX_INCLUDES_FCS);
@@ -1879,8 +1873,6 @@ static int rtl8180_probe(struct pci_dev *pdev,
 	else
 		ieee80211_hw_set(dev, SIGNAL_UNSPEC);
 
-	wiphy_ext_feature_set(dev->wiphy, NL80211_EXT_FEATURE_CQM_RSSI_LIST);
-
 	rtl8180_eeprom_read(priv);
 
 	switch (priv->rf_type) {
@@ -1946,8 +1938,6 @@ static int rtl8180_probe(struct pci_dev *pdev,
 
  err_free_reg:
 	pci_release_regions(pdev);
-
- err_disable_dev:
 	pci_disable_device(pdev);
 	return err;
 }

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _XEN_PAGE_H
 #define _XEN_PAGE_H
 
@@ -16,9 +15,9 @@
  */
 
 #define xen_pfn_to_page(xen_pfn)	\
-	(pfn_to_page((unsigned long)(xen_pfn) >> (PAGE_SHIFT - XEN_PAGE_SHIFT)))
+	((pfn_to_page(((unsigned long)(xen_pfn) << XEN_PAGE_SHIFT) >> PAGE_SHIFT)))
 #define page_to_xen_pfn(page)		\
-	((page_to_pfn(page)) << (PAGE_SHIFT - XEN_PAGE_SHIFT))
+	(((page_to_pfn(page)) << PAGE_SHIFT) >> XEN_PAGE_SHIFT)
 
 #define XEN_PFN_PER_PAGE	(PAGE_SIZE / XEN_PAGE_SIZE)
 
@@ -39,7 +38,7 @@ struct xen_memory_region {
 	unsigned long n_pfns;
 };
 
-#define XEN_EXTRA_MEM_MAX_REGIONS 128 /* == E820_MAX_ENTRIES_ZEROPAGE */
+#define XEN_EXTRA_MEM_MAX_REGIONS 128 /* == E820MAX */
 
 extern __initdata
 struct xen_memory_region xen_extra_mem[XEN_EXTRA_MEM_MAX_REGIONS];

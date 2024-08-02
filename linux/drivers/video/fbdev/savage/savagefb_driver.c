@@ -869,9 +869,6 @@ static int savagefb_check_var(struct fb_var_screeninfo   *var,
 
 	DBG("savagefb_check_var");
 
-	if (!var->pixclock)
-		return -EINVAL;
-
 	var->transp.offset = 0;
 	var->transp.length = 0;
 	switch (var->bits_per_pixel) {
@@ -1663,7 +1660,7 @@ static struct fb_ops savagefb_ops = {
 
 /* --------------------------------------------------------------------- */
 
-static const struct fb_var_screeninfo savagefb_var800x600x8 = {
+static struct fb_var_screeninfo savagefb_var800x600x8 = {
 	.accel_flags =	FB_ACCELF_TEXT,
 	.xres =		800,
 	.yres =		600,
@@ -1895,11 +1892,11 @@ static int savage_init_hw(struct savagefb_par *par)
 	vga_out8(0x3d4, 0x66, par);
 	cr66 = vga_in8(0x3d5, par);
 	vga_out8(0x3d5, cr66 | 0x02, par);
-	usleep_range(10000, 11000);
+	mdelay(10);
 
 	vga_out8(0x3d4, 0x66, par);
 	vga_out8(0x3d5, cr66 & ~0x02, par);	/* clear reset flag */
-	usleep_range(10000, 11000);
+	mdelay(10);
 
 
 	/*
@@ -1909,11 +1906,11 @@ static int savage_init_hw(struct savagefb_par *par)
 	vga_out8(0x3d4, 0x3f, par);
 	cr3f = vga_in8(0x3d5, par);
 	vga_out8(0x3d5, cr3f | 0x08, par);
-	usleep_range(10000, 11000);
+	mdelay(10);
 
 	vga_out8(0x3d4, 0x3f, par);
 	vga_out8(0x3d5, cr3f & ~0x08, par);	/* clear reset flags */
-	usleep_range(10000, 11000);
+	mdelay(10);
 
 	/* Savage ramdac speeds */
 	par->numClocks = 4;
@@ -2158,11 +2155,9 @@ static int savage_init_fb_info(struct fb_info *info, struct pci_dev *dev,
 
 		err = fb_alloc_cmap(&info->cmap, NR_PALETTE, 0);
 		if (!err)
-			info->flags |= FBINFO_HWACCEL_COPYAREA |
-				       FBINFO_HWACCEL_FILLRECT |
-				       FBINFO_HWACCEL_IMAGEBLIT;
-		else
-			kfree(info->pixmap.addr);
+		info->flags |= FBINFO_HWACCEL_COPYAREA |
+	                       FBINFO_HWACCEL_FILLRECT |
+		               FBINFO_HWACCEL_IMAGEBLIT;
 	}
 #endif
 	return err;
@@ -2273,10 +2268,7 @@ static int savagefb_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	if (info->var.xres_virtual > 0x1000)
 		info->var.xres_virtual = 0x1000;
 #endif
-	err = savagefb_check_var(&info->var, info);
-	if (err)
-		goto failed;
-
+	savagefb_check_var(&info->var, info);
 	savagefb_set_fix(info);
 
 	/*
@@ -2341,7 +2333,14 @@ static void savagefb_remove(struct pci_dev *dev)
 	DBG("savagefb_remove");
 
 	if (info) {
-		unregister_framebuffer(info);
+		/*
+		 * If unregister_framebuffer fails, then
+		 * we will be leaving hooks that could cause
+		 * oopsen laying around.
+		 */
+		if (unregister_framebuffer(info))
+			printk(KERN_WARNING "savagefb: danger danger! "
+			       "Oopsen imminent!\n");
 
 #ifdef CONFIG_FB_SAVAGE_I2C
 		savagefb_delete_i2c_busses(info);
@@ -2430,7 +2429,7 @@ static int savagefb_resume(struct pci_dev* dev)
 }
 
 
-static const struct pci_device_id savagefb_devices[] = {
+static struct pci_device_id savagefb_devices[] = {
 	{PCI_VENDOR_ID_S3, PCI_CHIP_SUPSAV_MX128,
 	 PCI_ANY_ID, PCI_ANY_ID, 0, 0, FB_ACCEL_SUPERSAVAGE},
 

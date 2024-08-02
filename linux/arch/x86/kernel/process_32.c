@@ -12,8 +12,6 @@
 #include <linux/cpu.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
-#include <linux/sched/task.h>
-#include <linux/sched/task_stack.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -27,7 +25,7 @@
 #include <linux/delay.h>
 #include <linux/reboot.h>
 #include <linux/mc146818rtc.h>
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/kallsyms.h>
 #include <linux/ptrace.h>
 #include <linux/personality.h>
@@ -37,54 +35,73 @@
 #include <linux/uaccess.h>
 #include <linux/io.h>
 #include <linux/kdebug.h>
-#include <linux/syscalls.h>
 
 #include <asm/pgtable.h>
 #include <asm/ldt.h>
 #include <asm/processor.h>
 #include <asm/fpu/internal.h>
 #include <asm/desc.h>
+#ifdef CONFIG_MATH_EMULATION
+#include <asm/math_emu.h>
+#endif
 
 #include <linux/err.h>
 
 #include <asm/tlbflush.h>
 #include <asm/cpu.h>
+#include <asm/idle.h>
 #include <asm/syscalls.h>
 #include <asm/debugreg.h>
 #include <asm/switch_to.h>
 #include <asm/vm86.h>
-#include <asm/resctrl_sched.h>
-#include <asm/proto.h>
 
-#include "process.h"
+asmlinkage void ret_from_fork(void) __asm__("ret_from_fork");
+asmlinkage void ret_from_kernel_thread(void) __asm__("ret_from_kernel_thread");
 
-void __show_regs(struct pt_regs *regs, enum show_regs_mode mode)
+/*
+ * Return saved PC of a blocked thread.
+ */
+unsigned long thread_saved_pc(struct task_struct *tsk)
+{
+	return ((unsigned long *)tsk->thread.sp)[3];
+}
+
+void __show_regs(struct pt_regs *regs, int all)
 {
 	unsigned long cr0 = 0L, cr2 = 0L, cr3 = 0L, cr4 = 0L;
 	unsigned long d0, d1, d2, d3, d6, d7;
-	unsigned short gs;
+	unsigned long sp;
+	unsigned short ss, gs;
 
-	if (user_mode(regs))
+	if (user_mode(regs)) {
+		sp = regs->sp;
+		ss = regs->ss & 0xffff;
 		gs = get_user_gs(regs);
-	else
+	} else {
+		sp = kernel_stack_pointer(regs);
+		savesegment(ss, ss);
 		savesegment(gs, gs);
+	}
 
-	show_ip(regs, KERN_DEFAULT);
+	printk(KERN_DEFAULT "EIP: %04x:[<%08lx>] EFLAGS: %08lx CPU: %d\n",
+			(u16)regs->cs, regs->ip, regs->flags,
+			smp_processor_id());
+	print_symbol("EIP is at %s\n", regs->ip);
 
 	printk(KERN_DEFAULT "EAX: %08lx EBX: %08lx ECX: %08lx EDX: %08lx\n",
 		regs->ax, regs->bx, regs->cx, regs->dx);
 	printk(KERN_DEFAULT "ESI: %08lx EDI: %08lx EBP: %08lx ESP: %08lx\n",
-		regs->si, regs->di, regs->bp, regs->sp);
-	printk(KERN_DEFAULT "DS: %04x ES: %04x FS: %04x GS: %04x SS: %04x EFLAGS: %08lx\n",
-	       (u16)regs->ds, (u16)regs->es, (u16)regs->fs, gs, regs->ss, regs->flags);
+		regs->si, regs->di, regs->bp, sp);
+	printk(KERN_DEFAULT " DS: %04x ES: %04x FS: %04x GS: %04x SS: %04x\n",
+	       (u16)regs->ds, (u16)regs->es, (u16)regs->fs, gs, ss);
 
-	if (mode != SHOW_REGS_ALL)
+	if (!all)
 		return;
 
 	cr0 = read_cr0();
 	cr2 = read_cr2();
-	cr3 = __read_cr3();
-	cr4 = __read_cr4();
+	cr3 = read_cr3();
+	cr4 = __read_cr4_safe();
 	printk(KERN_DEFAULT "CR0: %08lx CR2: %08lx CR3: %08lx CR4: %08lx\n",
 			cr0, cr2, cr3, cr4);
 
@@ -116,38 +133,35 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long sp,
 	unsigned long arg, struct task_struct *p, unsigned long tls)
 {
 	struct pt_regs *childregs = task_pt_regs(p);
-	struct fork_frame *fork_frame = container_of(childregs, struct fork_frame, regs);
-	struct inactive_task_frame *frame = &fork_frame->frame;
 	struct task_struct *tsk;
 	int err;
 
-	/*
-	 * For a new task use the RESET flags value since there is no before.
-	 * All the status flags are zero; DF and all the system flags must also
-	 * be 0, specifically IF must be 0 because we context switch to the new
-	 * task with interrupts disabled.
-	 */
-	frame->flags = X86_EFLAGS_FIXED;
-	frame->bp = 0;
-	frame->ret_addr = (unsigned long) ret_from_fork;
-	p->thread.sp = (unsigned long) fork_frame;
+	p->thread.sp = (unsigned long) childregs;
 	p->thread.sp0 = (unsigned long) (childregs+1);
 	memset(p->thread.ptrace_bps, 0, sizeof(p->thread.ptrace_bps));
 
 	if (unlikely(p->flags & PF_KTHREAD)) {
 		/* kernel thread */
 		memset(childregs, 0, sizeof(struct pt_regs));
-		frame->bx = sp;		/* function */
-		frame->di = arg;
+		p->thread.ip = (unsigned long) ret_from_kernel_thread;
+		task_user_gs(p) = __KERNEL_STACK_CANARY;
+		childregs->ds = __USER_DS;
+		childregs->es = __USER_DS;
+		childregs->fs = __KERNEL_PERCPU;
+		childregs->bx = sp;	/* function */
+		childregs->bp = arg;
+		childregs->orig_ax = -1;
+		childregs->cs = __KERNEL_CS | get_kernel_rpl();
+		childregs->flags = X86_EFLAGS_IF | X86_EFLAGS_FIXED;
 		p->thread.io_bitmap_ptr = NULL;
 		return 0;
 	}
-	frame->bx = 0;
 	*childregs = *current_pt_regs();
 	childregs->ax = 0;
 	if (sp)
 		childregs->sp = sp;
 
+	p->thread.ip = (unsigned long) ret_from_fork;
 	task_user_gs(p) = get_user_gs(current_pt_regs());
 
 	p->thread.io_bitmap_ptr = NULL;
@@ -229,12 +243,15 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 {
 	struct thread_struct *prev = &prev_p->thread,
 			     *next = &next_p->thread;
+	struct fpu *prev_fpu = &prev->fpu;
+	struct fpu *next_fpu = &next->fpu;
 	int cpu = smp_processor_id();
+	struct tss_struct *tss = &per_cpu(cpu_tss, cpu);
+	fpu_switch_t fpu_switch;
 
 	/* never put a printk in __switch_to... printk() calls wake_up*() indirectly */
 
-	if (!test_thread_flag(TIF_NEED_FPU_LOAD))
-		switch_fpu_prepare(prev_p, cpu);
+	fpu_switch = switch_fpu_prepare(prev_fpu, next_fpu, cpu);
 
 	/*
 	 * Save away %gs. No need to save %fs, as it was saved on the
@@ -262,22 +279,27 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	if (get_kernel_rpl() && unlikely(prev->iopl != next->iopl))
 		set_iopl_mask(next->iopl);
 
-	switch_to_extra(prev_p, next_p);
+	/*
+	 * Now maybe handle debug registers and/or IO bitmaps
+	 */
+	if (unlikely(task_thread_info(prev_p)->flags & _TIF_WORK_CTXSW_PREV ||
+		     task_thread_info(next_p)->flags & _TIF_WORK_CTXSW_NEXT))
+		__switch_to_xtra(prev_p, next_p, tss);
 
 	/*
 	 * Leave lazy mode, flushing any hypercalls made here.
 	 * This must be done before restoring TLS segments so
-	 * the GDT and LDT are properly updated.
+	 * the GDT and LDT are properly updated, and must be
+	 * done before fpu__restore(), so the TS bit is up
+	 * to date.
 	 */
 	arch_end_context_switch(next_p);
 
 	/*
 	 * Reload esp0 and cpu_current_top_of_stack.  This changes
-	 * current_thread_info().  Refresh the SYSENTER configuration in
-	 * case prev or next is vm86.
+	 * current_thread_info().
 	 */
-	update_task_stack(next_p);
-	refresh_sysenter_cs(next);
+	load_sp0(tss, next);
 	this_cpu_write(cpu_current_top_of_stack,
 		       (unsigned long)task_stack_page(next_p) +
 		       THREAD_SIZE);
@@ -288,17 +310,9 @@ __switch_to(struct task_struct *prev_p, struct task_struct *next_p)
 	if (prev->gs | next->gs)
 		lazy_load_gs(next->gs);
 
+	switch_fpu_finish(next_fpu, fpu_switch);
+
 	this_cpu_write(current_task, next_p);
 
-	switch_fpu_finish(next_p);
-
-	/* Load the Intel cache allocation PQR MSR. */
-	resctrl_sched_in(next_p);
-
 	return prev_p;
-}
-
-SYSCALL_DEFINE2(arch_prctl, int, option, unsigned long, arg2)
-{
-	return do_arch_prctl_common(current, option, arg2);
 }

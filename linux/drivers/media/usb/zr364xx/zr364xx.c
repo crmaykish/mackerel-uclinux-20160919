@@ -1,9 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Zoran 364xx based USB webcam module version 0.73
  *
  * Allows you to use your USB webcam with V4L2 applications
- * This is still in heavy development !
+ * This is still in heavy developpement !
  *
  * Copyright (C) 2004  Antoine Jacquet <royale@zerezo.com>
  * http://royale.zerezo.com/zr364xx/
@@ -12,6 +11,20 @@
  * V4L2 version inspired by meye.c driver
  *
  * Some video buffer code by Lamarque based on s2255drv.c and vivi.c drivers.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 
@@ -84,7 +97,7 @@ MODULE_PARM_DESC(mode, "0 = 320x240, 1 = 160x120, 2 = 640x480");
 
 /* Devices supported by this driver
  * .driver_info contains the init method used by the camera */
-static const struct usb_device_id device_table[] = {
+static struct usb_device_id device_table[] = {
 	{USB_DEVICE(0x08ca, 0x0109), .driver_info = METHOD0 },
 	{USB_DEVICE(0x041e, 0x4024), .driver_info = METHOD0 },
 	{USB_DEVICE(0x0d64, 0x0108), .driver_info = METHOD0 },
@@ -141,6 +154,7 @@ struct zr364xx_pipeinfo {
 };
 
 struct zr364xx_fmt {
+	char *name;
 	u32 fourcc;
 	int depth;
 };
@@ -148,6 +162,7 @@ struct zr364xx_fmt {
 /* image formats.  */
 static const struct zr364xx_fmt formats[] = {
 	{
+		.name = "JPG",
 		.fourcc = V4L2_PIX_FMT_JPEG,
 		.depth = 24
 	}
@@ -197,9 +212,13 @@ static int send_control_msg(struct usb_device *udev, u8 request, u16 value,
 {
 	int status;
 
-	unsigned char *transfer_buffer = kmemdup(cp, size, GFP_KERNEL);
-	if (!transfer_buffer)
+	unsigned char *transfer_buffer = kmalloc(size, GFP_KERNEL);
+	if (!transfer_buffer) {
+		dev_err(&udev->dev, "kmalloc(%d) failed\n", size);
 		return -ENOMEM;
+	}
+
+	memcpy(transfer_buffer, cp, size);
 
 	status = usb_control_msg(udev,
 				 usb_sndctrlpipe(udev, 0),
@@ -372,8 +391,9 @@ static int buffer_prepare(struct videobuf_queue *vq, struct videobuf_buffer *vb,
 						  vb);
 	int rc;
 
-	DBG("%s, field=%d\n", __func__, field);
-	if (!cam->fmt)
+	DBG("%s, field=%d, fmt name = %s\n", __func__, field, cam->fmt != NULL ?
+	    cam->fmt->name : "");
+	if (cam->fmt == NULL)
 		return -EINVAL;
 
 	buf->vb.size = cam->width * cam->height * (cam->fmt->depth >> 3);
@@ -423,7 +443,7 @@ static void buffer_release(struct videobuf_queue *vq,
 	free_buffer(vq, buf);
 }
 
-static const struct videobuf_queue_ops zr364xx_video_qops = {
+static struct videobuf_queue_ops zr364xx_video_qops = {
 	.buf_setup = buffer_setup,
 	.buf_prepare = buffer_prepare,
 	.buf_queue = buffer_queue,
@@ -503,11 +523,12 @@ static void zr364xx_fillbuff(struct zr364xx_camera *cam,
 		printk(KERN_ERR KBUILD_MODNAME ": =======no frame\n");
 		return;
 	}
-	DBG("%s: Buffer %p size= %d\n", __func__, vbuf, pos);
+	DBG("%s: Buffer 0x%08lx size= %d\n", __func__,
+		(unsigned long)vbuf, pos);
 	/* tell v4l buffer was filled */
 
 	buf->vb.field_count = cam->frame_count * 2;
-	buf->vb.ts = ktime_get_ns();
+	v4l2_get_timestamp(&buf->vb.ts);
 	buf->vb.state = VIDEOBUF_DONE;
 }
 
@@ -535,7 +556,7 @@ static int zr364xx_got_frame(struct zr364xx_camera *cam, int jpgsize)
 		goto unlock;
 	}
 	list_del(&buf->vb.queue);
-	buf->vb.ts = ktime_get_ns();
+	v4l2_get_timestamp(&buf->vb.ts);
 	DBG("[%p/%d] wakeup\n", buf, buf->vb.i);
 	zr364xx_fillbuff(cam, buf, jpgsize);
 	wake_up(&buf->vb.done);
@@ -583,14 +604,6 @@ static int zr364xx_read_video_callback(struct zr364xx_camera *cam,
 	ptr = pdest = frm->lpvbits;
 
 	if (frm->ulState == ZR364XX_READ_IDLE) {
-		if (purb->actual_length < 128) {
-			/* header incomplete */
-			dev_info(&cam->udev->dev,
-				 "%s: buffer (%d bytes) too small to hold jpeg header. Discarding.\n",
-				 __func__, purb->actual_length);
-			return -EINVAL;
-		}
-
 		frm->ulState = ZR364XX_READ_FRAME;
 		frm->cur_size = 0;
 
@@ -620,7 +633,8 @@ static int zr364xx_read_video_callback(struct zr364xx_camera *cam,
 	} else {
 		if (frm->cur_size + purb->actual_length > MAX_FRAME_SIZE) {
 			dev_info(&cam->udev->dev,
-				 "%s: buffer (%d bytes) too small to hold frame data. Discarding frame data.\n",
+				 "%s: buffer (%d bytes) too small to hold "
+				 "frame data. Discarding frame data.\n",
 				 __func__, MAX_FRAME_SIZE);
 		} else {
 			pdest += frm->cur_size;
@@ -688,11 +702,15 @@ static int zr364xx_vidioc_querycap(struct file *file, void *priv,
 {
 	struct zr364xx_camera *cam = video_drvdata(file);
 
-	strscpy(cap->driver, DRIVER_DESC, sizeof(cap->driver));
-	if (cam->udev->product)
-		strscpy(cap->card, cam->udev->product, sizeof(cap->card));
-	strscpy(cap->bus_info, dev_name(&cam->udev->dev),
+	strlcpy(cap->driver, DRIVER_DESC, sizeof(cap->driver));
+	strlcpy(cap->card, cam->udev->product, sizeof(cap->card));
+	strlcpy(cap->bus_info, dev_name(&cam->udev->dev),
 		sizeof(cap->bus_info));
+	cap->device_caps = V4L2_CAP_VIDEO_CAPTURE |
+			    V4L2_CAP_READWRITE |
+			    V4L2_CAP_STREAMING;
+	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
+
 	return 0;
 }
 
@@ -701,7 +719,7 @@ static int zr364xx_vidioc_enum_input(struct file *file, void *priv,
 {
 	if (i->index != 0)
 		return -EINVAL;
-	strscpy(i->name, DRIVER_DESC " Camera", sizeof(i->name));
+	strcpy(i->name, DRIVER_DESC " Camera");
 	i->type = V4L2_INPUT_TYPE_CAMERA;
 	return 0;
 }
@@ -746,6 +764,8 @@ static int zr364xx_vidioc_enum_fmt_vid_cap(struct file *file,
 {
 	if (f->index > 0)
 		return -EINVAL;
+	f->flags = V4L2_FMT_FLAG_COMPRESSED;
+	strcpy(f->description, formats[0].name);
 	f->pixelformat = formats[0].fourcc;
 	return 0;
 }
@@ -766,7 +786,7 @@ static int zr364xx_vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 	struct zr364xx_camera *cam = video_drvdata(file);
 	char pixelformat_name[5];
 
-	if (!cam)
+	if (cam == NULL)
 		return -ENODEV;
 
 	if (f->fmt.pix.pixelformat != V4L2_PIX_FMT_JPEG) {
@@ -796,7 +816,7 @@ static int zr364xx_vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 {
 	struct zr364xx_camera *cam;
 
-	if (!file)
+	if (file == NULL)
 		return -ENODEV;
 	cam = video_drvdata(file);
 
@@ -958,13 +978,13 @@ static void read_pipe_completion(struct urb *purb)
 
 	pipe_info = purb->context;
 	_DBG("%s %p, status %d\n", __func__, purb, purb->status);
-	if (!pipe_info) {
+	if (pipe_info == NULL) {
 		printk(KERN_ERR KBUILD_MODNAME ": no context!\n");
 		return;
 	}
 
 	cam = pipe_info->cam;
-	if (!cam) {
+	if (cam == NULL) {
 		printk(KERN_ERR KBUILD_MODNAME ": no context!\n");
 		return;
 	}
@@ -1025,8 +1045,10 @@ static int zr364xx_start_readpipe(struct zr364xx_camera *cam)
 	pipe_info->state = 1;
 	pipe_info->err_count = 0;
 	pipe_info->stream_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!pipe_info->stream_urb)
+	if (!pipe_info->stream_urb) {
+		dev_err(&cam->udev->dev, "ReadStream: Unable to alloc URB\n");
 		return -ENOMEM;
+	}
 	/* transfer buffer allocated in board_init */
 	usb_fill_bulk_urb(pipe_info->stream_urb, cam->udev,
 			  pipe,
@@ -1037,7 +1059,6 @@ static int zr364xx_start_readpipe(struct zr364xx_camera *cam)
 	DBG("submitting URB %p\n", pipe_info->stream_urb);
 	retval = usb_submit_urb(pipe_info->stream_urb, GFP_KERNEL);
 	if (retval) {
-		usb_free_urb(pipe_info->stream_urb);
 		printk(KERN_ERR KBUILD_MODNAME ": start read pipe failed\n");
 		return retval;
 	}
@@ -1049,7 +1070,7 @@ static void zr364xx_stop_readpipe(struct zr364xx_camera *cam)
 {
 	struct zr364xx_pipeinfo *pipe_info;
 
-	if (!cam) {
+	if (cam == NULL) {
 		printk(KERN_ERR KBUILD_MODNAME ": invalid device\n");
 		return;
 	}
@@ -1187,11 +1208,15 @@ out:
 	return err;
 }
 
-static void zr364xx_board_uninit(struct zr364xx_camera *cam)
+static void zr364xx_release(struct v4l2_device *v4l2_dev)
 {
+	struct zr364xx_camera *cam =
+		container_of(v4l2_dev, struct zr364xx_camera, v4l2_dev);
 	unsigned long i;
 
-	zr364xx_stop_readpipe(cam);
+	v4l2_device_unregister(&cam->v4l2_dev);
+
+	videobuf_mmap_free(&cam->vb_vidq);
 
 	/* release sys buffers */
 	for (i = 0; i < FRAMES; i++) {
@@ -1202,19 +1227,9 @@ static void zr364xx_board_uninit(struct zr364xx_camera *cam)
 		cam->buffer.frame[i].lpvbits = NULL;
 	}
 
+	v4l2_ctrl_handler_free(&cam->ctrl_handler);
 	/* release transfer buffer */
 	kfree(cam->pipe->transfer_buffer);
-}
-
-static void zr364xx_release(struct v4l2_device *v4l2_dev)
-{
-	struct zr364xx_camera *cam =
-		container_of(v4l2_dev, struct zr364xx_camera, v4l2_dev);
-
-	videobuf_mmap_free(&cam->vb_vidq);
-	v4l2_ctrl_handler_free(&cam->ctrl_handler);
-	zr364xx_board_uninit(cam);
-	v4l2_device_unregister(&cam->v4l2_dev);
 	kfree(cam);
 }
 
@@ -1259,11 +1274,11 @@ static int zr364xx_mmap(struct file *file, struct vm_area_struct *vma)
 	struct zr364xx_camera *cam = video_drvdata(file);
 	int ret;
 
-	if (!cam) {
+	if (cam == NULL) {
 		DBG("%s: cam == NULL\n", __func__);
 		return -ENODEV;
 	}
-	DBG("mmap called, vma=%p\n", vma);
+	DBG("mmap called, vma=0x%08lx\n", (unsigned long)vma);
 
 	ret = videobuf_mmap_mapper(&cam->vb_vidq, vma);
 
@@ -1273,12 +1288,12 @@ static int zr364xx_mmap(struct file *file, struct vm_area_struct *vma)
 	return ret;
 }
 
-static __poll_t zr364xx_poll(struct file *file,
+static unsigned int zr364xx_poll(struct file *file,
 			       struct poll_table_struct *wait)
 {
 	struct zr364xx_camera *cam = video_drvdata(file);
 	struct videobuf_queue *q = &cam->vb_vidq;
-	__poll_t res = v4l2_ctrl_poll(file, wait);
+	unsigned res = v4l2_ctrl_poll(file, wait);
 
 	_DBG("%s\n", __func__);
 
@@ -1319,13 +1334,11 @@ static const struct v4l2_ioctl_ops zr364xx_ioctl_ops = {
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 };
 
-static const struct video_device zr364xx_template = {
+static struct video_device zr364xx_template = {
 	.name = DRIVER_DESC,
 	.fops = &zr364xx_fops,
 	.ioctl_ops = &zr364xx_ioctl_ops,
 	.release = video_device_release_empty,
-	.device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_READWRITE |
-		       V4L2_CAP_STREAMING,
 };
 
 
@@ -1337,7 +1350,6 @@ static int zr364xx_board_init(struct zr364xx_camera *cam)
 {
 	struct zr364xx_pipeinfo *pipe = cam->pipe;
 	unsigned long i;
-	int err;
 
 	DBG("board init: %p\n", cam);
 	memset(pipe, 0, sizeof(*pipe));
@@ -1346,7 +1358,7 @@ static int zr364xx_board_init(struct zr364xx_camera *cam)
 
 	pipe->transfer_buffer = kzalloc(pipe->transfer_size,
 					GFP_KERNEL);
-	if (!pipe->transfer_buffer) {
+	if (pipe->transfer_buffer == NULL) {
 		DBG("out of memory!\n");
 		return -ENOMEM;
 	}
@@ -1362,16 +1374,18 @@ static int zr364xx_board_init(struct zr364xx_camera *cam)
 		DBG("valloc %p, idx %lu, pdata %p\n",
 			&cam->buffer.frame[i], i,
 			cam->buffer.frame[i].lpvbits);
-		if (!cam->buffer.frame[i].lpvbits) {
-			printk(KERN_INFO KBUILD_MODNAME ": out of memory. Using less frames\n");
+		if (cam->buffer.frame[i].lpvbits == NULL) {
+			printk(KERN_INFO KBUILD_MODNAME ": out of memory. "
+			       "Using less frames\n");
 			break;
 		}
 	}
 
 	if (i == 0) {
 		printk(KERN_INFO KBUILD_MODNAME ": out of memory. Aborting\n");
-		err = -ENOMEM;
-		goto err_free;
+		kfree(cam->pipe->transfer_buffer);
+		cam->pipe->transfer_buffer = NULL;
+		return -ENOMEM;
 	} else
 		cam->buffer.dwFrames = i;
 
@@ -1386,20 +1400,9 @@ static int zr364xx_board_init(struct zr364xx_camera *cam)
 	/*** end create system buffers ***/
 
 	/* start read pipe */
-	err = zr364xx_start_readpipe(cam);
-	if (err)
-		goto err_free_frames;
-
+	zr364xx_start_readpipe(cam);
 	DBG(": board initialized\n");
 	return 0;
-
-err_free_frames:
-	for (i = 0; i < FRAMES; i++)
-		vfree(cam->buffer.frame[i].lpvbits);
-err_free:
-	kfree(cam->pipe->transfer_buffer);
-	cam->pipe->transfer_buffer = NULL;
-	return err;
 }
 
 static int zr364xx_probe(struct usb_interface *intf,
@@ -1420,14 +1423,18 @@ static int zr364xx_probe(struct usb_interface *intf,
 		 le16_to_cpu(udev->descriptor.idVendor),
 		 le16_to_cpu(udev->descriptor.idProduct));
 
-	cam = kzalloc(sizeof(*cam), GFP_KERNEL);
-	if (!cam)
+	cam = kzalloc(sizeof(struct zr364xx_camera), GFP_KERNEL);
+	if (cam == NULL) {
+		dev_err(&udev->dev, "cam: out of memory !\n");
 		return -ENOMEM;
+	}
 
+	cam->v4l2_dev.release = zr364xx_release;
 	err = v4l2_device_register(&intf->dev, &cam->v4l2_dev);
 	if (err < 0) {
 		dev_err(&udev->dev, "couldn't register v4l2_device\n");
-		goto free_cam;
+		kfree(cam);
+		return err;
 	}
 	hdl = &cam->ctrl_handler;
 	v4l2_ctrl_handler_init(hdl, 1);
@@ -1436,7 +1443,7 @@ static int zr364xx_probe(struct usb_interface *intf,
 	if (hdl->error) {
 		err = hdl->error;
 		dev_err(&udev->dev, "couldn't register control\n");
-		goto free_hdlr_and_unreg_dev;
+		goto fail;
 	}
 	/* save the init method used by this camera */
 	cam->method = id->driver_info;
@@ -1509,7 +1516,7 @@ static int zr364xx_probe(struct usb_interface *intf,
 	if (!cam->read_endpoint) {
 		err = -ENOMEM;
 		dev_err(&intf->dev, "Could not find bulk-in endpoint\n");
-		goto free_hdlr_and_unreg_dev;
+		goto fail;
 	}
 
 	/* v4l */
@@ -1520,11 +1527,10 @@ static int zr364xx_probe(struct usb_interface *intf,
 
 	/* load zr364xx board specific */
 	err = zr364xx_board_init(cam);
+	if (!err)
+		err = v4l2_ctrl_handler_setup(hdl);
 	if (err)
-		goto free_hdlr_and_unreg_dev;
-	err = v4l2_ctrl_handler_setup(hdl);
-	if (err)
-		goto board_uninit;
+		goto fail;
 
 	spin_lock_init(&cam->slock);
 
@@ -1539,20 +1545,16 @@ static int zr364xx_probe(struct usb_interface *intf,
 	err = video_register_device(&cam->vdev, VFL_TYPE_GRABBER, -1);
 	if (err) {
 		dev_err(&udev->dev, "video_register_device failed\n");
-		goto board_uninit;
+		goto fail;
 	}
-	cam->v4l2_dev.release = zr364xx_release;
 
 	dev_info(&udev->dev, DRIVER_DESC " controlling device %s\n",
 		 video_device_node_name(&cam->vdev));
 	return 0;
 
-board_uninit:
-	zr364xx_board_uninit(cam);
-free_hdlr_and_unreg_dev:
+fail:
 	v4l2_ctrl_handler_free(hdl);
 	v4l2_device_unregister(&cam->v4l2_dev);
-free_cam:
 	kfree(cam);
 	return err;
 }
@@ -1599,19 +1601,10 @@ static int zr364xx_resume(struct usb_interface *intf)
 	if (!cam->was_streaming)
 		return 0;
 
-	res = zr364xx_start_readpipe(cam);
-	if (res)
-		return res;
-
+	zr364xx_start_readpipe(cam);
 	res = zr364xx_prepare(cam);
-	if (res)
-		goto err_prepare;
-
-	zr364xx_start_acquire(cam);
-	return 0;
-
-err_prepare:
-	zr364xx_stop_readpipe(cam);
+	if (!res)
+		zr364xx_start_acquire(cam);
 	return res;
 }
 #endif

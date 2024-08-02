@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * linux/mm/mmzone.c
  *
@@ -53,7 +52,7 @@ static inline int zref_in_nodemask(struct zoneref *zref, nodemask_t *nodes)
 }
 
 /* Returns the next zone at or below highest_zoneidx in a zonelist */
-struct zoneref *__next_zones_zonelist(struct zoneref *z,
+struct zoneref *next_zones_zonelist(struct zoneref *z,
 					enum zone_type highest_zoneidx,
 					nodemask_t *nodes)
 {
@@ -61,7 +60,7 @@ struct zoneref *__next_zones_zonelist(struct zoneref *z,
 	 * Find the next suitable zone to use for the allocation.
 	 * Only filter based on nodemask if it's set
 	 */
-	if (unlikely(nodes == NULL))
+	if (likely(nodes == NULL))
 		while (zonelist_zone_idx(z) > highest_zoneidx)
 			z++;
 	else
@@ -71,6 +70,20 @@ struct zoneref *__next_zones_zonelist(struct zoneref *z,
 
 	return z;
 }
+
+#ifdef CONFIG_ARCH_HAS_HOLES_MEMORYMODEL
+int memmap_valid_within(unsigned long pfn,
+					struct page *page, struct zone *zone)
+{
+	if (page_to_pfn(page) != pfn)
+		return 0;
+
+	if (page_zone(page) != zone)
+		return 0;
+
+	return 1;
+}
+#endif /* CONFIG_ARCH_HAS_HOLES_MEMORYMODEL */
 
 void lruvec_init(struct lruvec *lruvec)
 {

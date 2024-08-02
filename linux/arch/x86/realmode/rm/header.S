@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Real-mode blob header; this should match realmode.h and be
  * readonly; for mutable data instead add pointers into the .data
@@ -19,6 +18,7 @@ GLOBAL(real_mode_header)
 	.long	pa_ro_end
 	/* SMP trampoline */
 	.long	pa_trampoline_start
+	.long	pa_trampoline_status
 	.long	pa_trampoline_header
 #ifdef CONFIG_X86_64
 	.long	pa_trampoline_pgd;

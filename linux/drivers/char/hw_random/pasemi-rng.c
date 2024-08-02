@@ -1,10 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2006-2007 PA Semi, Inc
  *
  * Maintained by: Olof Johansson <olof@lixom.net>
  *
  * Driver for the PWRficient onchip rng
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #include <linux/module.h>
@@ -14,7 +26,7 @@
 #include <linux/delay.h>
 #include <linux/of_address.h>
 #include <linux/of_platform.h>
-#include <linux/io.h>
+#include <asm/io.h>
 
 #define SDCRNG_CTL_REG			0x00
 #define   SDCRNG_CTL_FVLD_M		0x0000f000
@@ -83,20 +95,42 @@ static struct hwrng pasemi_rng = {
 	.data_read	= pasemi_rng_data_read,
 };
 
-static int rng_probe(struct platform_device *pdev)
+static int rng_probe(struct platform_device *ofdev)
 {
 	void __iomem *rng_regs;
-	struct resource *res;
+	struct device_node *rng_np = ofdev->dev.of_node;
+	struct resource res;
+	int err = 0;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	rng_regs = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(rng_regs))
-		return PTR_ERR(rng_regs);
+	err = of_address_to_resource(rng_np, 0, &res);
+	if (err)
+		return -ENODEV;
+
+	rng_regs = ioremap(res.start, 0x100);
+
+	if (!rng_regs)
+		return -ENOMEM;
 
 	pasemi_rng.priv = (unsigned long)rng_regs;
 
 	pr_info("Registering PA Semi RNG\n");
-	return devm_hwrng_register(&pdev->dev, &pasemi_rng);
+
+	err = hwrng_register(&pasemi_rng);
+
+	if (err)
+		iounmap(rng_regs);
+
+	return err;
+}
+
+static int rng_remove(struct platform_device *dev)
+{
+	void __iomem *rng_regs = (void __iomem *)pasemi_rng.priv;
+
+	hwrng_unregister(&pasemi_rng);
+	iounmap(rng_regs);
+
+	return 0;
 }
 
 static const struct of_device_id rng_match[] = {
@@ -112,6 +146,7 @@ static struct platform_driver rng_driver = {
 		.of_match_table = rng_match,
 	},
 	.probe		= rng_probe,
+	.remove		= rng_remove,
 };
 
 module_platform_driver(rng_driver);

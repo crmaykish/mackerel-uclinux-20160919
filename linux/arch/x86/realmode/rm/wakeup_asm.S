@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * ACPI wakeup real mode startup stub
  */
@@ -73,7 +72,7 @@ ENTRY(wakeup_start)
 	movw	%ax, %fs
 	movw	%ax, %gs
 
-	lidtl	.Lwakeup_idt
+	lidtl	wakeup_idt
 
 	/* Clear the EFLAGS */
 	pushl $0
@@ -171,8 +170,8 @@ END(wakeup_gdt)
 
 	/* This is the standard real-mode IDT */
 	.balign	16
-.Lwakeup_idt:
+GLOBAL(wakeup_idt)
 	.word	0xffff		/* limit */
 	.long	0		/* address */
 	.word	0
-END(.Lwakeup_idt)
+END(wakeup_idt)

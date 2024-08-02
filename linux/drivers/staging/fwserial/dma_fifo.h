@@ -1,8 +1,17 @@
-/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * DMA-able FIFO interface
  *
  * Copyright (C) 2012 Peter Hurley <peter@hurleysoftware.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #ifndef _DMA_FIFO_H_
@@ -36,9 +45,9 @@
 #define DMA_FIFO_GUARD 3   /* # of cache lines to reserve for the guard area */
 
 struct dma_fifo {
-	unsigned int	 in;
-	unsigned int	 out;		/* updated when dma is pended         */
-	unsigned int	 done;		/* updated upon dma completion        */
+	unsigned	 in;
+	unsigned	 out;		/* updated when dma is pended         */
+	unsigned	 done;		/* updated upon dma completion        */
 	struct {
 		unsigned corrupt:1;
 	};
@@ -46,7 +55,7 @@ struct dma_fifo {
 	int		 guard;		/* ofs of guard area		      */
 	int		 capacity;	/* size + reserved                    */
 	int		 avail;		/* # of unused bytes in fifo          */
-	unsigned int	 align;		/* must be power of 2                 */
+	unsigned	 align;		/* must be power of 2                 */
 	int		 tx_limit;	/* max # of bytes per dma transaction */
 	int		 open_limit;	/* max # of outstanding allowed       */
 	int		 open;		/* # of outstanding dma transactions  */
@@ -57,9 +66,9 @@ struct dma_fifo {
 struct dma_pending {
 	struct list_head link;
 	void		 *data;
-	unsigned int	 len;
-	unsigned int	 next;
-	unsigned int	 out;
+	unsigned	 len;
+	unsigned         next;
+	unsigned         out;
 };
 
 static inline void dp_mark_completed(struct dma_pending *dp)
@@ -73,7 +82,7 @@ static inline bool dp_is_completed(struct dma_pending *dp)
 }
 
 void dma_fifo_init(struct dma_fifo *fifo);
-int dma_fifo_alloc(struct dma_fifo *fifo, int size, unsigned int align,
+int dma_fifo_alloc(struct dma_fifo *fifo, int size, unsigned align,
 		   int tx_limit, int open_limit, gfp_t gfp_mask);
 void dma_fifo_free(struct dma_fifo *fifo);
 void dma_fifo_reset(struct dma_fifo *fifo);

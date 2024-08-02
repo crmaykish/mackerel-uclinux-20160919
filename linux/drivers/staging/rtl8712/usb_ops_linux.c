@@ -1,9 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0
 /******************************************************************************
  * usb_ops_linux.c
  *
  * Copyright(c) 2007 - 2010 Realtek Corporation. All rights reserved.
  * Linux device driver for RTL8192SU
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
  *
  * Modifications for inclusion into the Linux staging tree are
  * Copyright(c) 2010 Larry Finger. All rights reserved.
@@ -38,7 +50,7 @@ uint r8712_usb_init_intf_priv(struct intf_priv *pintfpriv)
 	pintfpriv->piorw_urb = usb_alloc_urb(0, GFP_ATOMIC);
 	if (!pintfpriv->piorw_urb)
 		return _FAIL;
-	init_completion(&pintfpriv->io_retevt_comp);
+	sema_init(&(pintfpriv->io_retevt), 0);
 	return _SUCCESS;
 }
 
@@ -133,7 +145,7 @@ static unsigned int ffaddr2pipehdl(struct dvobj_priv *pdvobj, u32 addr)
 			break;
 		}
 	} else {
-		pipe = 0;
+	   pipe = 0;
 	}
 	return pipe;
 }
@@ -147,11 +159,11 @@ static void usb_write_mem_complete(struct urb *purb)
 
 	if (purb->status != 0) {
 		if (purb->status == (-ESHUTDOWN))
-			padapter->driver_stopped = true;
+			padapter->bDriverStopped = true;
 		else
-			padapter->surprise_removed = true;
+			padapter->bSurpriseRemoved = true;
 	}
-	complete(&pintfpriv->io_retevt_comp);
+	up(&pintfpriv->io_retevt);
 }
 
 void r8712_usb_write_mem(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *wmem)
@@ -164,7 +176,7 @@ void r8712_usb_write_mem(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *wmem)
 	struct usb_device *pusbd = pdvobj->pusbdev;
 	struct urb *piorw_urb = pintfpriv->piorw_urb;
 
-	if ((padapter->driver_stopped) || (padapter->surprise_removed) ||
+	if ((padapter->bDriverStopped) || (padapter->bSurpriseRemoved) ||
 	    (padapter->pwrctrlpriv.pnp_bstop_trx))
 		return;
 	/* translate DMA FIFO addr to pipehandle */
@@ -175,39 +187,41 @@ void r8712_usb_write_mem(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *wmem)
 			  wmem, cnt, usb_write_mem_complete,
 			  pio_queue);
 	usb_submit_urb(piorw_urb, GFP_ATOMIC);
-	wait_for_completion_interruptible(&pintfpriv->io_retevt_comp);
+	_down_sema(&pintfpriv->io_retevt);
 }
 
 static void r8712_usb_read_port_complete(struct urb *purb)
 {
-	uint isevt;
-	__le32 *pbuf;
+	uint isevt, *pbuf;
 	struct recv_buf	*precvbuf = (struct recv_buf *)purb->context;
 	struct _adapter *padapter = (struct _adapter *)precvbuf->adapter;
 	struct recv_priv *precvpriv = &padapter->recvpriv;
 
-	if (padapter->surprise_removed || padapter->driver_stopped)
+	if (padapter->bSurpriseRemoved || padapter->bDriverStopped)
 		return;
 	if (purb->status == 0) { /* SUCCESS */
 		if ((purb->actual_length > (MAX_RECVBUF_SZ)) ||
 		    (purb->actual_length < RXDESC_SIZE)) {
+			precvbuf->reuse = true;
 			r8712_read_port(padapter, precvpriv->ff_hwaddr, 0,
 				  (unsigned char *)precvbuf);
 		} else {
-			_pkt *pskb = precvbuf->pskb;
-
 			precvbuf->transfer_len = purb->actual_length;
-			pbuf = (__le32 *)precvbuf->pbuf;
+			pbuf = (uint *)precvbuf->pbuf;
 			isevt = le32_to_cpu(*(pbuf + 1)) & 0x1ff;
 			if ((isevt & 0x1ff) == 0x1ff) {
 				r8712_rxcmd_event_hdl(padapter, pbuf);
-				skb_queue_tail(&precvpriv->rx_skb_queue, pskb);
+				precvbuf->reuse = true;
 				r8712_read_port(padapter, precvpriv->ff_hwaddr,
 						0, (unsigned char *)precvbuf);
 			} else {
+				_pkt *pskb = precvbuf->pskb;
+
 				skb_put(pskb, purb->actual_length);
 				skb_queue_tail(&precvpriv->rx_skb_queue, pskb);
 				tasklet_hi_schedule(&precvpriv->recv_tasklet);
+				precvbuf->pskb = NULL;
+				precvbuf->reuse = false;
 				r8712_read_port(padapter, precvpriv->ff_hwaddr,
 						0, (unsigned char *)precvbuf);
 			}
@@ -218,15 +232,11 @@ static void r8712_usb_read_port_complete(struct urb *purb)
 		case -EPIPE:
 		case -ENODEV:
 		case -ESHUTDOWN:
-			padapter->driver_stopped = true;
-			break;
 		case -ENOENT:
-			if (!padapter->suspended) {
-				padapter->driver_stopped = true;
-				break;
-			}
-			/* Fall through. */
+			padapter->bDriverStopped = true;
+			break;
 		case -EPROTO:
+			precvbuf->reuse = true;
 			r8712_read_port(padapter, precvpriv->ff_hwaddr, 0,
 				  (unsigned char *)precvbuf);
 			break;
@@ -254,44 +264,52 @@ u32 r8712_usb_read_port(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *rmem)
 	struct recv_priv *precvpriv = &adapter->recvpriv;
 	struct usb_device *pusbd = pdvobj->pusbdev;
 
-	if (adapter->driver_stopped || adapter->surprise_removed ||
-	    adapter->pwrctrlpriv.pnp_bstop_trx || !precvbuf)
+	if (adapter->bDriverStopped || adapter->bSurpriseRemoved ||
+	    adapter->pwrctrlpriv.pnp_bstop_trx)
 		return _FAIL;
-	r8712_init_recvbuf(adapter, precvbuf);
-	/* Try to use skb from the free queue */
-	precvbuf->pskb = skb_dequeue(&precvpriv->free_recv_skb_queue);
-
-	if (!precvbuf->pskb) {
-		precvbuf->pskb = netdev_alloc_skb(adapter->pnetdev,
-				 MAX_RECVBUF_SZ + RECVBUFF_ALIGN_SZ);
-		if (!precvbuf->pskb)
-			return _FAIL;
-		tmpaddr = (addr_t)precvbuf->pskb->data;
-		alignment = tmpaddr & (RECVBUFF_ALIGN_SZ - 1);
-		skb_reserve(precvbuf->pskb,
-			    (RECVBUFF_ALIGN_SZ - alignment));
-		precvbuf->phead = precvbuf->pskb->head;
-		precvbuf->pdata = precvbuf->pskb->data;
-		precvbuf->ptail = skb_tail_pointer(precvbuf->pskb);
-		precvbuf->pend = skb_end_pointer(precvbuf->pskb);
-		precvbuf->pbuf = precvbuf->pskb->data;
-	} else { /* skb is reused */
-		precvbuf->phead = precvbuf->pskb->head;
-		precvbuf->pdata = precvbuf->pskb->data;
-		precvbuf->ptail = skb_tail_pointer(precvbuf->pskb);
-		precvbuf->pend = skb_end_pointer(precvbuf->pskb);
-		precvbuf->pbuf = precvbuf->pskb->data;
+	if (precvbuf->reuse || !precvbuf->pskb) {
+		precvbuf->pskb = skb_dequeue(&precvpriv->free_recv_skb_queue);
+		if (precvbuf->pskb != NULL)
+			precvbuf->reuse = true;
 	}
-	purb = precvbuf->purb;
-	/* translate DMA FIFO addr to pipehandle */
-	pipe = ffaddr2pipehdl(pdvobj, addr);
-	usb_fill_bulk_urb(purb, pusbd, pipe,
-			  precvbuf->pbuf, MAX_RECVBUF_SZ,
-			  r8712_usb_read_port_complete,
-			  precvbuf);
-	err = usb_submit_urb(purb, GFP_ATOMIC);
-	if ((err) && (err != (-EPERM)))
+	if (precvbuf != NULL) {
+		r8712_init_recvbuf(adapter, precvbuf);
+		/* re-assign for linux based on skb */
+		if (!precvbuf->reuse || !precvbuf->pskb) {
+			precvbuf->pskb = netdev_alloc_skb(adapter->pnetdev,
+					 MAX_RECVBUF_SZ + RECVBUFF_ALIGN_SZ);
+			if (!precvbuf->pskb)
+				return _FAIL;
+			tmpaddr = (addr_t)precvbuf->pskb->data;
+			alignment = tmpaddr & (RECVBUFF_ALIGN_SZ - 1);
+			skb_reserve(precvbuf->pskb,
+				    (RECVBUFF_ALIGN_SZ - alignment));
+			precvbuf->phead = precvbuf->pskb->head;
+			precvbuf->pdata = precvbuf->pskb->data;
+			precvbuf->ptail = skb_tail_pointer(precvbuf->pskb);
+			precvbuf->pend = skb_end_pointer(precvbuf->pskb);
+			precvbuf->pbuf = precvbuf->pskb->data;
+		} else { /* reuse skb */
+			precvbuf->phead = precvbuf->pskb->head;
+			precvbuf->pdata = precvbuf->pskb->data;
+			precvbuf->ptail = skb_tail_pointer(precvbuf->pskb);
+			precvbuf->pend = skb_end_pointer(precvbuf->pskb);
+			precvbuf->pbuf = precvbuf->pskb->data;
+			precvbuf->reuse = false;
+		}
+		purb = precvbuf->purb;
+		/* translate DMA FIFO addr to pipehandle */
+		pipe = ffaddr2pipehdl(pdvobj, addr);
+		usb_fill_bulk_urb(purb, pusbd, pipe,
+				  precvbuf->pbuf, MAX_RECVBUF_SZ,
+				  r8712_usb_read_port_complete,
+				  precvbuf);
+		err = usb_submit_urb(purb, GFP_ATOMIC);
+		if ((err) && (err != (-EPERM)))
+			ret = _FAIL;
+	} else {
 		ret = _FAIL;
+	}
 	return ret;
 }
 
@@ -311,12 +329,12 @@ void r8712_usb_read_port_cancel(struct _adapter *padapter)
 void r8712_xmit_bh(void *priv)
 {
 	int ret = false;
-	struct _adapter *padapter = priv;
+	struct _adapter *padapter = (struct _adapter *)priv;
 	struct xmit_priv *pxmitpriv = &padapter->xmitpriv;
 
-	if (padapter->driver_stopped ||
-	    padapter->surprise_removed) {
-		netdev_err(padapter->pnetdev, "xmit_bh => driver_stopped or surprise_removed\n");
+	if (padapter->bDriverStopped ||
+	    padapter->bSurpriseRemoved) {
+		netdev_err(padapter->pnetdev, "xmit_bh => bDriverStopped or bSurpriseRemoved\n");
 		return;
 	}
 	ret = r8712_xmitframe_complete(padapter, pxmitpriv, NULL);
@@ -360,7 +378,7 @@ static void usb_write_port_complete(struct urb *purb)
 			break;
 		}
 	}
-	if (padapter->surprise_removed)
+	if (padapter->bSurpriseRemoved)
 		return;
 	switch (purb->status) {
 	case 0:
@@ -390,7 +408,7 @@ u32 r8712_usb_write_port(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *wmem)
 	struct usb_device *pusbd = pdvobj->pusbdev;
 	struct pkt_attrib *pattrib = &pxmitframe->attrib;
 
-	if ((padapter->driver_stopped) || (padapter->surprise_removed) ||
+	if ((padapter->bDriverStopped) || (padapter->bSurpriseRemoved) ||
 	    (padapter->pwrctrlpriv.pnp_bstop_trx))
 		return _FAIL;
 	for (i = 0; i < 8; i++) {
@@ -481,7 +499,7 @@ int r8712_usbctrl_vendorreq(struct intf_priv *pintfpriv, u8 request, u16 value,
 	u8 *palloc_buf, *pIo_buf;
 
 	palloc_buf = kmalloc((u32)len + 16, GFP_ATOMIC);
-	if (!palloc_buf)
+	if (palloc_buf == NULL)
 		return -ENOMEM;
 	pIo_buf = palloc_buf + 16 - ((addr_t)(palloc_buf) & 0x0f);
 	if (requesttype == 0x01) {
@@ -493,7 +511,7 @@ int r8712_usbctrl_vendorreq(struct intf_priv *pintfpriv, u8 request, u16 value,
 		memcpy(pIo_buf, pdata, len);
 	}
 	status = usb_control_msg(udev, pipe, request, reqtype, value, index,
-				 pIo_buf, len, 500);
+				 pIo_buf, len, HZ / 2);
 	if (status > 0) {  /* Success this control transfer. */
 		if (requesttype == 0x01) {
 			/* For Control read transfer, we have to copy the read

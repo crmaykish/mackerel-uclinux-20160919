@@ -1,10 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Freescale QUICC Engine UART device driver
  *
  * Author: Timur Tabi <timur@freescale.com>
  *
- * Copyright 2007 Freescale Semiconductor, Inc.
+ * Copyright 2007 Freescale Semiconductor, Inc.  This file is licensed under
+ * the terms of the GNU General Public License version 2.  This program
+ * is licensed "as is" without any warranty of any kind, whether express
+ * or implied.
  *
  * This driver adds support for UART devices via Freescale's QUICC Engine
  * found on some Freescale SOCs.
@@ -29,7 +31,7 @@
 #include <linux/dma-mapping.h>
 
 #include <linux/fs_uart_pd.h>
-#include <soc/fsl/qe/ucc_slow.h>
+#include <asm/ucc_slow.h>
 
 #include <linux/firmware.h>
 #include <asm/reg.h>
@@ -1081,9 +1083,9 @@ static int qe_uart_verify_port(struct uart_port *port,
 }
 /* UART operations
  *
- * Details on these functions can be found in Documentation/driver-api/serial/driver.rst
+ * Details on these functions can be found in Documentation/serial/driver
  */
-static const struct uart_ops qe_uart_pops = {
+static struct uart_ops qe_uart_pops = {
 	.tx_empty       = qe_uart_tx_empty,
 	.set_mctrl      = qe_uart_set_mctrl,
 	.get_mctrl      = qe_uart_get_mctrl,
@@ -1140,8 +1142,6 @@ static unsigned int soc_info(unsigned int *rev_h, unsigned int *rev_l)
 	if (!soc_string)
 		/* No compatible property, so try the name. */
 		soc_string = np->name;
-
-	of_node_put(np);
 
 	/* Extract the SOC number from the "PowerPC," string */
 	if ((sscanf(soc_string, "PowerPC,%u", &soc) != 1) || !soc)
@@ -1477,9 +1477,6 @@ static const struct of_device_id ucc_uart_match[] = {
 	{
 		.type = "serial",
 		.compatible = "ucc_uart",
-	},
-	{
-		.compatible = "fsl,t1040-ucc-uart",
 	},
 	{},
 };

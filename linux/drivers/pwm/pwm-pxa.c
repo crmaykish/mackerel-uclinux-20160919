@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/pwm/pwm-pxa.c
  *
  * simple driver for PWM (Pulse Width Modulator) controller
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * 2008-02-13	initial version
  *		eric miao <eric.miao@marvell.com>
@@ -115,7 +118,7 @@ static void pxa_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 	clk_disable_unprepare(pc->clk);
 }
 
-static const struct pwm_ops pxa_pwm_ops = {
+static struct pwm_ops pxa_pwm_ops = {
 	.config = pxa_pwm_config,
 	.enable = pxa_pwm_enable,
 	.disable = pxa_pwm_disable,
@@ -157,7 +160,7 @@ pxa_pwm_of_xlate(struct pwm_chip *pc, const struct of_phandle_args *args)
 	if (IS_ERR(pwm))
 		return pwm;
 
-	pwm->args.period = args->args[0];
+	pwm_set_period(pwm, args->args[0]);
 
 	return pwm;
 }

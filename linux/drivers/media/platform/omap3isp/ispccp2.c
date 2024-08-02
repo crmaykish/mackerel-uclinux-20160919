@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ispccp2.c
  *
@@ -9,6 +8,10 @@
  *
  * Contacts: Laurent Pinchart <laurent.pinchart@ideasonboard.com>
  *	     Sakari Ailus <sakari.ailus@iki.fi>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -210,17 +213,14 @@ static int ccp2_phyif_config(struct isp_ccp2_device *ccp2,
 	struct isp_device *isp = to_isp_device(ccp2);
 	u32 val;
 
+	/* CCP2B mode */
 	val = isp_reg_readl(isp, OMAP3_ISP_IOMEM_CCP2, ISPCCP2_CTRL) |
-			    ISPCCP2_CTRL_MODE;
+			    ISPCCP2_CTRL_IO_OUT_SEL | ISPCCP2_CTRL_MODE;
 	/* Data/strobe physical layer */
 	BIT_SET(val, ISPCCP2_CTRL_PHY_SEL_SHIFT, ISPCCP2_CTRL_PHY_SEL_MASK,
 		buscfg->phy_layer);
-	BIT_SET(val, ISPCCP2_CTRL_IO_OUT_SEL_SHIFT,
-		ISPCCP2_CTRL_IO_OUT_SEL_MASK, buscfg->ccp2_mode);
 	BIT_SET(val, ISPCCP2_CTRL_INV_SHIFT, ISPCCP2_CTRL_INV_MASK,
 		buscfg->strobe_clk_pol);
-	BIT_SET(val, ISPCCP2_CTRL_VP_CLK_POL_SHIFT,
-		ISPCCP2_CTRL_VP_CLK_POL_MASK, buscfg->vp_clk_pol);
 	isp_reg_writel(isp, val, OMAP3_ISP_IOMEM_CCP2, ISPCCP2_CTRL);
 
 	val = isp_reg_readl(isp, OMAP3_ISP_IOMEM_CCP2, ISPCCP2_CTRL);
@@ -347,7 +347,6 @@ static void ccp2_lcx_config(struct isp_ccp2_device *ccp2,
  */
 static int ccp2_if_configure(struct isp_ccp2_device *ccp2)
 {
-	struct isp_pipeline *pipe = to_isp_pipeline(&ccp2->subdev.entity);
 	const struct isp_bus_cfg *buscfg;
 	struct v4l2_mbus_framefmt *format;
 	struct media_pad *pad;
@@ -359,7 +358,7 @@ static int ccp2_if_configure(struct isp_ccp2_device *ccp2)
 
 	pad = media_entity_remote_pad(&ccp2->pads[CCP2_PAD_SINK]);
 	sensor = media_entity_to_v4l2_subdev(pad->entity);
-	buscfg = v4l2_subdev_to_bus_cfg(pipe->external);
+	buscfg = sensor->host_priv;
 
 	ret = ccp2_phyif_config(ccp2, &buscfg->bus.ccp2);
 	if (ret < 0)
@@ -839,7 +838,7 @@ static int ccp2_s_stream(struct v4l2_subdev *sd, int enable)
 	switch (enable) {
 	case ISP_PIPELINE_STREAM_CONTINUOUS:
 		if (ccp2->phy) {
-			ret = omap3isp_csiphy_acquire(ccp2->phy, &sd->entity);
+			ret = omap3isp_csiphy_acquire(ccp2->phy);
 			if (ret < 0)
 				return ret;
 		}
@@ -957,14 +956,9 @@ static int ccp2_link_setup(struct media_entity *entity,
 {
 	struct v4l2_subdev *sd = media_entity_to_v4l2_subdev(entity);
 	struct isp_ccp2_device *ccp2 = v4l2_get_subdevdata(sd);
-	unsigned int index = local->index;
 
-	/* FIXME: this is actually a hack! */
-	if (is_media_entity_v4l2_subdev(remote->entity))
-		index |= 2 << 16;
-
-	switch (index) {
-	case CCP2_PAD_SINK:
+	switch (local->index | media_entity_type(remote->entity)) {
+	case CCP2_PAD_SINK | MEDIA_ENT_T_DEVNODE:
 		/* read from memory */
 		if (flags & MEDIA_LNK_FL_ENABLED) {
 			if (ccp2->input == CCP2_INPUT_SENSOR)
@@ -976,7 +970,7 @@ static int ccp2_link_setup(struct media_entity *entity,
 		}
 		break;
 
-	case CCP2_PAD_SINK | 2 << 16:
+	case CCP2_PAD_SINK | MEDIA_ENT_T_V4L2_SUBDEV:
 		/* read from sensor/phy */
 		if (flags & MEDIA_LNK_FL_ENABLED) {
 			if (ccp2->input == CCP2_INPUT_MEMORY)
@@ -987,7 +981,7 @@ static int ccp2_link_setup(struct media_entity *entity,
 				ccp2->input = CCP2_INPUT_NONE;
 		} break;
 
-	case CCP2_PAD_SOURCE | 2 << 16:
+	case CCP2_PAD_SOURCE | MEDIA_ENT_T_V4L2_SUBDEV:
 		/* write to video port/ccdc */
 		if (flags & MEDIA_LNK_FL_ENABLED)
 			ccp2->output = CCP2_OUTPUT_CCDC;
@@ -1031,7 +1025,6 @@ int omap3isp_ccp2_register_entities(struct isp_ccp2_device *ccp2,
 	int ret;
 
 	/* Register the subdev and video nodes. */
-	ccp2->subdev.dev = vdev->mdev->dev;
 	ret = v4l2_device_register_subdev(vdev, &ccp2->subdev);
 	if (ret < 0)
 		goto error;
@@ -1068,7 +1061,7 @@ static int ccp2_init_entities(struct isp_ccp2_device *ccp2)
 
 	v4l2_subdev_init(sd, &ccp2_sd_ops);
 	sd->internal_ops = &ccp2_sd_internal_ops;
-	strscpy(sd->name, "OMAP3 ISP CCP2", sizeof(sd->name));
+	strlcpy(sd->name, "OMAP3 ISP CCP2", sizeof(sd->name));
 	sd->grp_id = 1 << 16;   /* group ID for isp subdevs */
 	v4l2_set_subdevdata(sd, ccp2);
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
@@ -1078,7 +1071,7 @@ static int ccp2_init_entities(struct isp_ccp2_device *ccp2)
 	pads[CCP2_PAD_SOURCE].flags = MEDIA_PAD_FL_SOURCE;
 
 	me->ops = &ccp2_media_ops;
-	ret = media_entity_pads_init(me, CCP2_PADS_NUM, pads);
+	ret = media_entity_init(me, CCP2_PADS_NUM, pads, 0);
 	if (ret < 0)
 		return ret;
 
@@ -1104,11 +1097,19 @@ static int ccp2_init_entities(struct isp_ccp2_device *ccp2)
 
 	ret = omap3isp_video_init(&ccp2->video_in, "CCP2");
 	if (ret < 0)
-		goto error;
+		goto error_video;
+
+	/* Connect the video node to the ccp2 subdev. */
+	ret = media_entity_create_link(&ccp2->video_in.video.entity, 0,
+				       &ccp2->subdev.entity, CCP2_PAD_SINK, 0);
+	if (ret < 0)
+		goto error_link;
 
 	return 0;
 
-error:
+error_link:
+	omap3isp_video_cleanup(&ccp2->video_in);
+error_video:
 	media_entity_cleanup(&ccp2->subdev.entity);
 	return ret;
 }
@@ -1139,16 +1140,10 @@ int omap3isp_ccp2_init(struct isp_device *isp)
 	if (isp->revision == ISP_REVISION_2_0) {
 		ccp2->vdds_csib = devm_regulator_get(isp->dev, "vdds_csib");
 		if (IS_ERR(ccp2->vdds_csib)) {
-			if (PTR_ERR(ccp2->vdds_csib) == -EPROBE_DEFER) {
-				dev_dbg(isp->dev,
-					"Can't get regulator vdds_csib, deferring probing\n");
-				return -EPROBE_DEFER;
-			}
 			dev_dbg(isp->dev,
 				"Could not get regulator vdds_csib\n");
 			ccp2->vdds_csib = NULL;
 		}
-		ccp2->phy = &isp->isp_csiphy2;
 	} else if (isp->revision == ISP_REVISION_15_0) {
 		ccp2->phy = &isp->isp_csiphy1;
 	}

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * linux/ipc/namespace.c
  * Copyright (C) 2006 Pavel Emelyanov <xemul@openvz.org> OpenVZ, SWsoft Inc.
@@ -10,70 +9,46 @@
 #include <linux/rcupdate.h>
 #include <linux/nsproxy.h>
 #include <linux/slab.h>
-#include <linux/cred.h>
 #include <linux/fs.h>
 #include <linux/mount.h>
 #include <linux/user_namespace.h>
 #include <linux/proc_ns.h>
-#include <linux/sched/task.h>
 
 #include "util.h"
-
-static struct ucounts *inc_ipc_namespaces(struct user_namespace *ns)
-{
-	return inc_ucount(ns, current_euid(), UCOUNT_IPC_NAMESPACES);
-}
-
-static void dec_ipc_namespaces(struct ucounts *ucounts)
-{
-	dec_ucount(ucounts, UCOUNT_IPC_NAMESPACES);
-}
 
 static struct ipc_namespace *create_ipc_ns(struct user_namespace *user_ns,
 					   struct ipc_namespace *old_ns)
 {
 	struct ipc_namespace *ns;
-	struct ucounts *ucounts;
 	int err;
 
-	err = -ENOSPC;
-	ucounts = inc_ipc_namespaces(user_ns);
-	if (!ucounts)
-		goto fail;
-
-	err = -ENOMEM;
-	ns = kzalloc(sizeof(struct ipc_namespace), GFP_KERNEL);
+	ns = kmalloc(sizeof(struct ipc_namespace), GFP_KERNEL);
 	if (ns == NULL)
-		goto fail_dec;
+		return ERR_PTR(-ENOMEM);
 
 	err = ns_alloc_inum(&ns->ns);
-	if (err)
-		goto fail_free;
+	if (err) {
+		kfree(ns);
+		return ERR_PTR(err);
+	}
 	ns->ns.ops = &ipcns_operations;
 
-	refcount_set(&ns->count, 1);
-	ns->user_ns = get_user_ns(user_ns);
-	ns->ucounts = ucounts;
-
+	atomic_set(&ns->count, 1);
 	err = mq_init_ns(ns);
-	if (err)
-		goto fail_put;
+	if (err) {
+		ns_free_inum(&ns->ns);
+		kfree(ns);
+		return ERR_PTR(err);
+	}
+	atomic_inc(&nr_ipc_ns);
 
 	sem_init_ns(ns);
 	msg_init_ns(ns);
 	shm_init_ns(ns);
 
-	return ns;
+	ns->user_ns = get_user_ns(user_ns);
 
-fail_put:
-	put_user_ns(ns->user_ns);
-	ns_free_inum(&ns->ns);
-fail_free:
-	kfree(ns);
-fail_dec:
-	dec_ipc_namespaces(ucounts);
-fail:
-	return ERR_PTR(err);
+	return ns;
 }
 
 struct ipc_namespace *copy_ipcs(unsigned long flags,
@@ -120,8 +95,8 @@ static void free_ipc_ns(struct ipc_namespace *ns)
 	sem_exit_ns(ns);
 	msg_exit_ns(ns);
 	shm_exit_ns(ns);
+	atomic_dec(&nr_ipc_ns);
 
-	dec_ipc_namespaces(ns->ucounts);
 	put_user_ns(ns->user_ns);
 	ns_free_inum(&ns->ns);
 	kfree(ns);
@@ -145,7 +120,7 @@ static void free_ipc_ns(struct ipc_namespace *ns)
  */
 void put_ipc_ns(struct ipc_namespace *ns)
 {
-	if (refcount_dec_and_lock(&ns->count, &mq_lock)) {
+	if (atomic_dec_and_lock(&ns->count, &mq_lock)) {
 		mq_clear_sbinfo(ns);
 		spin_unlock(&mq_lock);
 		mq_put_mnt(ns);
@@ -191,16 +166,10 @@ static int ipcns_install(struct nsproxy *nsproxy, struct ns_common *new)
 	return 0;
 }
 
-static struct user_namespace *ipcns_owner(struct ns_common *ns)
-{
-	return to_ipc_ns(ns)->user_ns;
-}
-
 const struct proc_ns_operations ipcns_operations = {
 	.name		= "ipc",
 	.type		= CLONE_NEWIPC,
 	.get		= ipcns_get,
 	.put		= ipcns_put,
 	.install	= ipcns_install,
-	.owner		= ipcns_owner,
 };

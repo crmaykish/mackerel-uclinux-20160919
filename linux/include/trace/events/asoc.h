@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM asoc
 
@@ -11,9 +10,8 @@
 #define DAPM_DIRECT "(direct)"
 #define DAPM_ARROW(dir) (((dir) == SND_SOC_DAPM_DIR_OUT) ? "->" : "<-")
 
-TRACE_DEFINE_ENUM(SND_SOC_DAPM_DIR_OUT);
-
 struct snd_soc_jack;
+struct snd_soc_codec;
 struct snd_soc_card;
 struct snd_soc_dapm_widget;
 struct snd_soc_dapm_path;
@@ -233,13 +231,13 @@ TRACE_EVENT(snd_soc_jack_report,
 	TP_ARGS(jack, mask, val),
 
 	TP_STRUCT__entry(
-		__string(	name,		jack->jack->id		)
+		__string(	name,		jack->jack->name	)
 		__field(	int,		mask			)
 		__field(	int,		val			)
 	),
 
 	TP_fast_assign(
-		__assign_str(name, jack->jack->id);
+		__assign_str(name, jack->jack->name);
 		__entry->mask = mask;
 		__entry->val = val;
 	),
@@ -255,12 +253,12 @@ TRACE_EVENT(snd_soc_jack_notify,
 	TP_ARGS(jack, val),
 
 	TP_STRUCT__entry(
-		__string(	name,		jack->jack->id		)
+		__string(	name,		jack->jack->name	)
 		__field(	int,		val			)
 	),
 
 	TP_fast_assign(
-		__assign_str(name, jack->jack->id);
+		__assign_str(name, jack->jack->name);
 		__entry->val = val;
 	),
 

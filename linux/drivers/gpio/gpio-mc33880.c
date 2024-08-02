@@ -1,7 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * MC33880 high-side/low-side switch GPIO driver
  * Copyright (c) 2009 Intel Corporation
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 /* Supports:
@@ -12,7 +24,7 @@
 #include <linux/mutex.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/mc33880.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 
@@ -59,7 +71,7 @@ static int __mc33880_set(struct mc33880 *mc, unsigned offset, int value)
 
 static void mc33880_set(struct gpio_chip *chip, unsigned offset, int value)
 {
-	struct mc33880 *mc = gpiochip_get_data(chip);
+	struct mc33880 *mc = container_of(chip, struct mc33880, chip);
 
 	mutex_lock(&mc->lock);
 
@@ -104,7 +116,7 @@ static int mc33880_probe(struct spi_device *spi)
 	mc->chip.base = pdata->base;
 	mc->chip.ngpio = PIN_NUMBER;
 	mc->chip.can_sleep = true;
-	mc->chip.parent = &spi->dev;
+	mc->chip.dev = &spi->dev;
 	mc->chip.owner = THIS_MODULE;
 
 	mc->port_config = 0x00;
@@ -123,7 +135,7 @@ static int mc33880_probe(struct spi_device *spi)
 		goto exit_destroy;
 	}
 
-	ret = gpiochip_add_data(&mc->chip, mc);
+	ret = gpiochip_add(&mc->chip);
 	if (ret)
 		goto exit_destroy;
 

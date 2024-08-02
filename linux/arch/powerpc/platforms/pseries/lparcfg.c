@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * PowerPC64 LPAR Configuration Information Driver
  *
@@ -9,6 +8,11 @@
  *    seq_file updates, Copyright (c) 2004 Will Schmidt IBM Corporation.
  * Nathan Lynch nathanl@austin.ibm.com
  *    Added lparcfg_write, Copyright (C) 2004 Nathan Lynch IBM Corporation.
+ *
+ *      This program is free software; you can redistribute it and/or
+ *      modify it under the terms of the GNU General Public License
+ *      as published by the Free Software Foundation; either version
+ *      2 of the License, or (at your option) any later version.
  *
  * This driver creates a proc file at /proc/ppc64/lparcfg which contains
  * keyword - value pairs that specify the configuration of the partition.
@@ -21,8 +25,7 @@
 #include <linux/init.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
-#include <linux/uaccess.h>
-#include <linux/hugetlb.h>
+#include <asm/uaccess.h>
 #include <asm/lppaca.h>
 #include <asm/hvcall.h>
 #include <asm/firmware.h>
@@ -33,9 +36,7 @@
 #include <asm/vio.h>
 #include <asm/mmu.h>
 #include <asm/machdep.h>
-#include <asm/drmem.h>
 
-#include "pseries.h"
 
 /*
  * This isn't a module but we expose that to userspace
@@ -50,20 +51,18 @@
  * Track sum of all purrs across all processors. This is used to further
  * calculate usage values by different applications
  */
-static void cpu_get_purr(void *arg)
-{
-	atomic64_t *sum = arg;
-
-	atomic64_add(mfspr(SPRN_PURR), sum);
-}
-
 static unsigned long get_purr(void)
 {
-	atomic64_t purr = ATOMIC64_INIT(0);
+	unsigned long sum_purr = 0;
+	int cpu;
 
-	on_each_cpu(cpu_get_purr, &purr, 1);
+	for_each_possible_cpu(cpu) {
+		struct cpu_usage *cu;
 
-	return atomic64_read(&purr);
+		cu = &per_cpu(cpu_usage_array, cpu);
+		sum_purr += cu->current_tb;
+	}
+	return sum_purr;
 }
 
 /*
@@ -112,8 +111,8 @@ struct hvcall_ppp_data {
  */
 static unsigned int h_get_ppp(struct hvcall_ppp_data *ppp_data)
 {
-	unsigned long retbuf[PLPAR_HCALL9_BUFSIZE] = {0};
-	long rc;
+	unsigned long rc;
+	unsigned long retbuf[PLPAR_HCALL9_BUFSIZE];
 
 	rc = plpar_hcall9(H_GET_PPP, retbuf);
 
@@ -159,7 +158,7 @@ static void parse_ppp_data(struct seq_file *m)
 	struct hvcall_ppp_data ppp_data;
 	struct device_node *root;
 	const __be32 *perf_level;
-	long rc;
+	int rc;
 
 	rc = h_get_ppp(&ppp_data);
 	if (rc)
@@ -289,7 +288,6 @@ static void parse_mpp_x_data(struct seq_file *m)
  */
 static void parse_system_parameter_string(struct seq_file *m)
 {
-	const s32 token = rtas_token("ibm,get-system-parameter");
 	int call_status;
 
 	unsigned char *local_buffer = kmalloc(SPLPAR_MAXLENGTH, GFP_KERNEL);
@@ -299,15 +297,16 @@ static void parse_system_parameter_string(struct seq_file *m)
 		return;
 	}
 
-	do {
-		spin_lock(&rtas_data_buf_lock);
-		memset(rtas_data_buf, 0, SPLPAR_MAXLENGTH);
-		call_status = rtas_call(token, 3, 1, NULL, SPLPAR_CHARACTERISTICS_TOKEN,
-					__pa(rtas_data_buf), RTAS_DATA_BUF_SIZE);
-		memcpy(local_buffer, rtas_data_buf, SPLPAR_MAXLENGTH);
-		local_buffer[SPLPAR_MAXLENGTH - 1] = '\0';
-		spin_unlock(&rtas_data_buf_lock);
-	} while (rtas_busy_delay(call_status));
+	spin_lock(&rtas_data_buf_lock);
+	memset(rtas_data_buf, 0, SPLPAR_MAXLENGTH);
+	call_status = rtas_call(rtas_token("ibm,get-system-parameter"), 3, 1,
+				NULL,
+				SPLPAR_CHARACTERISTICS_TOKEN,
+				__pa(rtas_data_buf),
+				RTAS_DATA_BUF_SIZE);
+	memcpy(local_buffer, rtas_data_buf, SPLPAR_MAXLENGTH);
+	local_buffer[SPLPAR_MAXLENGTH - 1] = '\0';
+	spin_unlock(&rtas_data_buf_lock);
 
 	if (call_status != 0) {
 		printk(KERN_INFO
@@ -370,10 +369,10 @@ static void parse_system_parameter_string(struct seq_file *m)
  */
 static int lparcfg_count_active_processors(void)
 {
-	struct device_node *cpus_dn;
+	struct device_node *cpus_dn = NULL;
 	int count = 0;
 
-	for_each_node_by_type(cpus_dn, "cpu") {
+	while ((cpus_dn = of_find_node_by_type(cpus_dn, "cpu"))) {
 #ifdef LPARCFG_DEBUG
 		printk(KERN_ERR "cpus_dn %p\n", cpus_dn);
 #endif
@@ -431,16 +430,6 @@ static void parse_em_data(struct seq_file *m)
 		seq_printf(m, "power_mode_data=%016lx\n", retbuf[0]);
 }
 
-static void maxmem_data(struct seq_file *m)
-{
-	unsigned long maxmem = 0;
-
-	maxmem += (unsigned long)drmem_info->n_lmbs * drmem_info->lmb_size;
-	maxmem += hugetlb_total_pages() * PAGE_SIZE;
-
-	seq_printf(m, "MaxMem=%lu\n", maxmem);
-}
-
 static int pseries_lparcfg_data(struct seq_file *m, void *v)
 {
 	int partition_potential_processors;
@@ -471,7 +460,6 @@ static int pseries_lparcfg_data(struct seq_file *m, void *v)
 		splpar_dispatch_data(m);
 
 		seq_printf(m, "purr=%ld\n", get_purr());
-		seq_printf(m, "tbr=%ld\n", mftb());
 	} else {		/* non SPLPAR case */
 
 		seq_printf(m, "system_active_processors=%d\n",
@@ -496,11 +484,9 @@ static int pseries_lparcfg_data(struct seq_file *m, void *v)
 	seq_printf(m, "shared_processor_mode=%d\n",
 		   lppaca_shared_proc(get_lppaca()));
 
-#ifdef CONFIG_PPC_BOOK3S_64
 	seq_printf(m, "slb_size=%d\n", mmu_slb_size);
-#endif
+
 	parse_em_data(m);
-	maxmem_data(m);
 
 	return 0;
 }
@@ -595,7 +581,8 @@ static ssize_t update_mpp(u64 *entitlement, u8 *weight)
 static ssize_t lparcfg_write(struct file *file, const char __user * buf,
 			     size_t count, loff_t * off)
 {
-	char kbuf[64];
+	int kbuf_sz = 64;
+	char kbuf[kbuf_sz];
 	char *tmp;
 	u64 new_entitled, *new_entitled_ptr = &new_entitled;
 	u8 new_weight, *new_weight_ptr = &new_weight;
@@ -604,7 +591,7 @@ static ssize_t lparcfg_write(struct file *file, const char __user * buf,
 	if (!firmware_has_feature(FW_FEATURE_SPLPAR))
 		return -EINVAL;
 
-	if (count > sizeof(kbuf))
+	if (count > kbuf_sz)
 		return -EINVAL;
 
 	if (copy_from_user(kbuf, buf, count))
@@ -708,11 +695,11 @@ static const struct file_operations lparcfg_fops = {
 
 static int __init lparcfg_init(void)
 {
-	umode_t mode = 0444;
+	umode_t mode = S_IRUSR | S_IRGRP | S_IROTH;
 
 	/* Allow writing if we have FW_FEATURE_SPLPAR */
 	if (firmware_has_feature(FW_FEATURE_SPLPAR))
-		mode |= 0200;
+		mode |= S_IWUSR;
 
 	if (!proc_create("powerpc/lparcfg", mode, NULL, &lparcfg_fops)) {
 		printk(KERN_ERR "Failed to create powerpc/lparcfg\n");

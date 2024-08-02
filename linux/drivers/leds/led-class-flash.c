@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * LED Flash class interface
  *
  * Copyright (C) 2015 Samsung Electronics Co., Ltd.
  * Author: Jacek Anaszewski <j.anaszewski@samsung.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/device.h>
@@ -105,7 +108,7 @@ static ssize_t flash_strobe_store(struct device *dev,
 	if (ret)
 		goto unlock;
 
-	if (state > 1) {
+	if (state < 0 || state > 1) {
 		ret = -EINVAL;
 		goto unlock;
 	}
@@ -282,9 +285,8 @@ static void led_flash_init_sysfs_groups(struct led_classdev_flash *fled_cdev)
 	led_cdev->groups = flash_groups;
 }
 
-int led_classdev_flash_register_ext(struct device *parent,
-				    struct led_classdev_flash *fled_cdev,
-				    struct led_init_data *init_data)
+int led_classdev_flash_register(struct device *parent,
+				struct led_classdev_flash *fled_cdev)
 {
 	struct led_classdev *led_cdev;
 	const struct led_flash_ops *ops;
@@ -296,7 +298,7 @@ int led_classdev_flash_register_ext(struct device *parent,
 	led_cdev = &fled_cdev->led_cdev;
 
 	if (led_cdev->flags & LED_DEV_CAP_FLASH) {
-		if (!led_cdev->brightness_set_blocking)
+		if (!led_cdev->brightness_set_sync)
 			return -EINVAL;
 
 		ops = fled_cdev->ops;
@@ -310,13 +312,17 @@ int led_classdev_flash_register_ext(struct device *parent,
 	}
 
 	/* Register led class device */
-	ret = led_classdev_register_ext(parent, led_cdev, init_data);
+	ret = led_classdev_register(parent, led_cdev);
 	if (ret < 0)
 		return ret;
 
+	/* Setting a torch brightness needs to have immediate effect */
+	led_cdev->flags &= ~SET_BRIGHTNESS_ASYNC;
+	led_cdev->flags |= SET_BRIGHTNESS_SYNC;
+
 	return 0;
 }
-EXPORT_SYMBOL_GPL(led_classdev_flash_register_ext);
+EXPORT_SYMBOL_GPL(led_classdev_flash_register);
 
 void led_classdev_flash_unregister(struct led_classdev_flash *fled_cdev)
 {

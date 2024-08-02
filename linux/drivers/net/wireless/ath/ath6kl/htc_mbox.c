@@ -2222,9 +2222,8 @@ int ath6kl_htc_rxmsg_pending_handler(struct htc_target *target,
 	}
 
 	if (status) {
-		if (status != -ECANCELED)
-			ath6kl_err("failed to get pending recv messages: %d\n",
-				   status);
+		ath6kl_err("failed to get pending recv messages: %d\n",
+			   status);
 
 		/* cleanup any packets in sync completion queue */
 		list_for_each_entry_safe(packets, tmp_pkt, &comp_pktq, list) {
@@ -2855,8 +2854,8 @@ static void *ath6kl_htc_mbox_create(struct ath6kl *ar)
 	target->dev = kzalloc(sizeof(*target->dev), GFP_KERNEL);
 	if (!target->dev) {
 		ath6kl_err("unable to allocate memory\n");
-		kfree(target);
-		return NULL;
+		status = -ENOMEM;
+		goto err_htc_cleanup;
 	}
 
 	spin_lock_init(&target->htc_lock);

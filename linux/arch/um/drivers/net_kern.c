@@ -1,12 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2001 - 2007 Jeff Dike (jdike@{addtoit,linux.intel}.com)
  * Copyright (C) 2001 Lennert Buytenhek (buytenh@gnu.org) and
  * James Leu (jleu@mindspring.net).
  * Copyright (C) 2001 by various other people who didn't put their name here.
+ * Licensed under the GPL.
  */
 
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <linux/inetdevice.h>
@@ -137,6 +137,8 @@ static irqreturn_t uml_net_interrupt(int irq, void *dev_id)
 		schedule_work(&lp->work);
 		goto out;
 	}
+	reactivate_fd(lp->fd, UM_ETH_IRQ);
+
 out:
 	spin_unlock(&lp->lock);
 	return IRQ_HANDLED;
@@ -166,6 +168,7 @@ static int uml_net_open(struct net_device *dev)
 		goto out_close;
 	}
 
+	lp->tl.data = (unsigned long) &lp->user;
 	netif_start_queue(dev);
 
 	/* clear buffer - it can happen that the host side of the interface
@@ -204,7 +207,7 @@ static int uml_net_close(struct net_device *dev)
 	return 0;
 }
 
-static netdev_tx_t uml_net_start_xmit(struct sk_buff *skb, struct net_device *dev)
+static int uml_net_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct uml_net_private *lp = netdev_priv(dev);
 	unsigned long flags;
@@ -220,7 +223,7 @@ static netdev_tx_t uml_net_start_xmit(struct sk_buff *skb, struct net_device *de
 	if (len == skb->len) {
 		dev->stats.tx_packets++;
 		dev->stats.tx_bytes += skb->len;
-		netif_trans_update(dev);
+		dev->trans_start = jiffies;
 		netif_start_queue(dev);
 
 		/* this is normally done in the interrupt when tx finishes */
@@ -249,8 +252,15 @@ static void uml_net_set_multicast_list(struct net_device *dev)
 
 static void uml_net_tx_timeout(struct net_device *dev)
 {
-	netif_trans_update(dev);
+	dev->trans_start = jiffies;
 	netif_wake_queue(dev);
+}
+
+static int uml_net_change_mtu(struct net_device *dev, int new_mtu)
+{
+	dev->mtu = new_mtu;
+
+	return 0;
 }
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -275,18 +285,17 @@ static const struct ethtool_ops uml_net_ethtool_ops = {
 	.get_ts_info	= ethtool_op_get_ts_info,
 };
 
-static void uml_net_user_timer_expire(struct timer_list *t)
+static void uml_net_user_timer_expire(unsigned long _conn)
 {
 #ifdef undef
-	struct uml_net_private *lp = from_timer(lp, t, tl);
-	struct connection *conn = &lp->user;
+	struct connection *conn = (struct connection *)_conn;
 
 	dprintk(KERN_INFO "uml_net_user_timer_expire [%p]\n", conn);
 	do_connect(conn);
 #endif
 }
 
-void uml_net_setup_etheraddr(struct net_device *dev, char *str)
+static void setup_etheraddr(struct net_device *dev, char *str)
 {
 	unsigned char *addr = dev->dev_addr;
 	char *end;
@@ -365,6 +374,7 @@ static const struct net_device_ops uml_netdev_ops = {
 	.ndo_set_rx_mode	= uml_net_set_multicast_list,
 	.ndo_tx_timeout 	= uml_net_tx_timeout,
 	.ndo_set_mac_address	= eth_mac_addr,
+	.ndo_change_mtu 	= uml_net_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller = uml_net_poll_controller,
@@ -410,7 +420,7 @@ static void eth_configure(int n, void *init, char *mac,
 	 */
 	snprintf(dev->name, sizeof(dev->name), "eth%d", n);
 
-	uml_net_setup_etheraddr(dev, mac);
+	setup_etheraddr(dev, mac);
 
 	printk(KERN_INFO "Netdevice %d (%pM) : ", n, dev->dev_addr);
 
@@ -456,8 +466,9 @@ static void eth_configure(int n, void *init, char *mac,
 		  .add_address 		= transport->user->add_address,
 		  .delete_address  	= transport->user->delete_address });
 
-	timer_setup(&lp->tl, uml_net_user_timer_expire, 0);
+	init_timer(&lp->tl);
 	spin_lock_init(&lp->lock);
+	lp->tl.function = uml_net_user_timer_expire;
 	memcpy(lp->mac, dev->dev_addr, sizeof(lp->mac));
 
 	if ((transport->user->init != NULL) &&
@@ -648,10 +659,7 @@ static int __init eth_setup(char *str)
 		return 1;
 	}
 
-	new = memblock_alloc(sizeof(*new), SMP_CACHE_BYTES);
-	if (!new)
-		panic("%s: Failed to allocate %zu bytes\n", __func__,
-		      sizeof(*new));
+	new = alloc_bootmem(sizeof(*new));
 
 	INIT_LIST_HEAD(&new->list);
 	new->index = n;

@@ -11,11 +11,8 @@
 #ifndef OMAP_VOUTDEF_H
 #define OMAP_VOUTDEF_H
 
-#include <media/videobuf2-dma-contig.h>
-#include <media/v4l2-ctrls.h>
-#include <video/omapfb_dss.h>
+#include <video/omapdss.h>
 #include <video/omapvrfb.h>
-#include <linux/dmaengine.h>
 
 #define YUYV_BPP        2
 #define RGB565_BPP      2
@@ -38,7 +35,7 @@
 #define VID_MAX_WIDTH		1280	/* Largest width */
 #define VID_MAX_HEIGHT		720	/* Largest height */
 
-/* Minimum requirement is 2x2 for DSS */
+/* Mimimum requirement is 2x2 for DSS */
 #define VID_MIN_WIDTH		2
 #define VID_MIN_HEIGHT		2
 
@@ -83,9 +80,8 @@ enum vout_rotaion_type {
  * for VRFB hidden buffer
  */
 struct vid_vrfb_dma {
-	struct dma_chan *chan;
-	struct dma_interleaved_template *xt;
-
+	int dev_id;
+	int dma_ch;
 	int req_status;
 	int tx_status;
 	wait_queue_head_t wait;
@@ -114,34 +110,36 @@ struct omap2video_device {
 	struct omap_overlay_manager *managers[MAX_MANAGERS];
 };
 
-/* buffer for one video frame */
-struct omap_vout_buffer {
-	/* common v4l buffer stuff -- must be first */
-	struct vb2_v4l2_buffer		vbuf;
-	struct list_head		queue;
-};
-
-static inline struct omap_vout_buffer *vb2_to_omap_vout_buffer(struct vb2_buffer *vb)
-{
-	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
-
-	return container_of(vbuf, struct omap_vout_buffer, vbuf);
-}
-
 /* per-device data structure */
 struct omap_vout_device {
 
 	struct omapvideo_info vid_info;
 	struct video_device *vfd;
 	struct omap2video_device *vid_dev;
-	struct v4l2_ctrl_handler ctrl_handler;
 	int vid;
+	int opened;
 
+	/* we don't allow to change image fmt/size once buffer has
+	 * been allocated
+	 */
+	int buffer_allocated;
 	/* allow to reuse previously allocated buffer which is big enough */
 	int buffer_size;
+	/* keep buffer info across opens */
+	unsigned long buf_virt_addr[VIDEO_MAX_FRAME];
+	unsigned long buf_phy_addr[VIDEO_MAX_FRAME];
 	enum omap_color_mode dss_mode;
 
-	u32 sequence;
+	/* we don't allow to request new buffer when old buffers are
+	 * still mmaped
+	 */
+	int mmap_count;
+
+	spinlock_t vbq_lock;		/* spinlock for videobuf queues */
+	unsigned long field_count;	/* field counter for videobuf_buffer */
+
+	/* non-NULL means streaming is in progress. */
+	bool streaming;
 
 	struct v4l2_pix_format pix;
 	struct v4l2_rect crop;
@@ -151,9 +149,12 @@ struct omap_vout_device {
 	/* Lock to protect the shared data structures in ioctl */
 	struct mutex lock;
 
+	/* V4L2 control structure for different control id */
+	struct v4l2_control control[MAX_CID];
 	enum dss_rotation rotation;
 	bool mirror;
 	int flicker_filter;
+	/* V4L2 control structure for different control id */
 
 	int bpp; /* bytes per pixel */
 	int vrfb_bpp; /* bytes per pixel with respect to VRFB */
@@ -167,14 +168,19 @@ struct omap_vout_device {
 	unsigned char pos;
 
 	int ps, vr_ps, line_length, first_int, field_id;
-	struct omap_vout_buffer *cur_frm, *next_frm;
-	spinlock_t vbq_lock;            /* spinlock for dma_queue */
+	enum v4l2_memory memory;
+	struct videobuf_buffer *cur_frm, *next_frm;
 	struct list_head dma_queue;
 	u8 *queued_buf_addr[VIDEO_MAX_FRAME];
 	u32 cropped_offset;
 	s32 tv_field1_offset;
 	void *isr_handle;
-	struct vb2_queue vq;
+
+	/* Buffer queue variables */
+	struct omap_vout_device *vout;
+	enum v4l2_buf_type type;
+	struct videobuf_queue vbq;
+	int io_allowed;
 
 };
 

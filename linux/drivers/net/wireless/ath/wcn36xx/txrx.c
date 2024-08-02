@@ -45,20 +45,9 @@ int wcn36xx_rx_skb(struct wcn36xx *wcn, struct sk_buff *skb)
 	skb_put(skb, bd->pdu.mpdu_header_off + bd->pdu.mpdu_len);
 	skb_pull(skb, bd->pdu.mpdu_header_off);
 
-	hdr = (struct ieee80211_hdr *) skb->data;
-	fc = __le16_to_cpu(hdr->frame_control);
-	sn = IEEE80211_SEQ_TO_SN(__le16_to_cpu(hdr->seq_ctrl));
-
-	/* When scanning associate beacons to this */
-	if (ieee80211_is_beacon(hdr->frame_control) && wcn->scan_freq) {
-		status.freq = wcn->scan_freq;
-		status.band = wcn->scan_band;
-	} else {
-		status.freq = WCN36XX_CENTER_FREQ(wcn);
-		status.band = WCN36XX_BAND(wcn);
-	}
-
 	status.mactime = 10;
+	status.freq = WCN36XX_CENTER_FREQ(wcn);
+	status.band = WCN36XX_BAND(wcn);
 	status.signal = -get_rssi0(bd);
 	status.antenna = 1;
 	status.rate_idx = 1;
@@ -71,6 +60,10 @@ int wcn36xx_rx_skb(struct wcn36xx *wcn, struct sk_buff *skb)
 	wcn36xx_dbg(WCN36XX_DBG_RX, "status.flags=%x\n", status.flag);
 
 	memcpy(IEEE80211_SKB_RXCB(skb), &status, sizeof(status));
+
+	hdr = (struct ieee80211_hdr *) skb->data;
+	fc = __le16_to_cpu(hdr->frame_control);
+	sn = IEEE80211_SEQ_TO_SN(__le16_to_cpu(hdr->seq_ctrl));
 
 	if (ieee80211_is_beacon(hdr->frame_control)) {
 		wcn36xx_dbg(WCN36XX_DBG_BEACON, "beacon skb %p len %d fc %04x sn %d\n",
@@ -109,7 +102,9 @@ static inline struct wcn36xx_vif *get_vif_by_addr(struct wcn36xx *wcn,
 	struct wcn36xx_vif *vif_priv = NULL;
 	struct ieee80211_vif *vif = NULL;
 	list_for_each_entry(vif_priv, &wcn->vif_list, list) {
-			vif = wcn36xx_priv_to_vif(vif_priv);
+			vif = container_of((void *)vif_priv,
+				   struct ieee80211_vif,
+				   drv_priv);
 			if (memcmp(vif->addr, addr, ETH_ALEN) == 0)
 				return vif_priv;
 	}
@@ -172,7 +167,9 @@ static void wcn36xx_set_tx_data(struct wcn36xx_tx_bd *bd,
 	 */
 	if (sta_priv) {
 		__vif_priv = sta_priv->vif;
-		vif = wcn36xx_priv_to_vif(__vif_priv);
+		vif = container_of((void *)__vif_priv,
+				   struct ieee80211_vif,
+				   drv_priv);
 
 		bd->dpu_sign = sta_priv->ucast_dpu_sign;
 		if (vif->type == NL80211_IFTYPE_STATION) {
@@ -228,7 +225,7 @@ static void wcn36xx_set_tx_mgmt(struct wcn36xx_tx_bd *bd,
 
 	/* default rate for unicast */
 	if (ieee80211_is_mgmt(hdr->frame_control))
-		bd->bd_rate = (WCN36XX_BAND(wcn) == NL80211_BAND_5GHZ) ?
+		bd->bd_rate = (WCN36XX_BAND(wcn) == IEEE80211_BAND_5GHZ) ?
 			WCN36XX_BD_RATE_CTRL :
 			WCN36XX_BD_RATE_MGMT;
 	else if (ieee80211_is_ctl(hdr->frame_control))
@@ -272,10 +269,21 @@ int wcn36xx_start_tx(struct wcn36xx *wcn,
 	bool is_low = ieee80211_is_data(hdr->frame_control);
 	bool bcast = is_broadcast_ether_addr(hdr->addr1) ||
 		is_multicast_ether_addr(hdr->addr1);
-	struct wcn36xx_tx_bd bd;
-	int ret;
+	struct wcn36xx_tx_bd *bd = wcn36xx_dxe_get_next_bd(wcn, is_low);
 
-	memset(&bd, 0, sizeof(bd));
+	if (!bd) {
+		/*
+		 * TX DXE are used in pairs. One for the BD and one for the
+		 * actual frame. The BD DXE's has a preallocated buffer while
+		 * the skb ones does not. If this isn't true something is really
+		 * wierd. TODO: Recover from this situation
+		 */
+
+		wcn36xx_err("bd address may not be NULL for BD DXE\n");
+		return -EINVAL;
+	}
+
+	memset(bd, 0, sizeof(*bd));
 
 	wcn36xx_dbg(WCN36XX_DBG_TX,
 		    "tx skb %p len %d fc %04x sn %d %s %s\n",
@@ -285,10 +293,10 @@ int wcn36xx_start_tx(struct wcn36xx *wcn,
 
 	wcn36xx_dbg_dump(WCN36XX_DBG_TX_DUMP, "", skb->data, skb->len);
 
-	bd.dpu_rf = WCN36XX_BMU_WQ_TX;
+	bd->dpu_rf = WCN36XX_BMU_WQ_TX;
 
-	bd.tx_comp = !!(info->flags & IEEE80211_TX_CTL_REQ_TX_STATUS);
-	if (bd.tx_comp) {
+	bd->tx_comp = !!(info->flags & IEEE80211_TX_CTL_REQ_TX_STATUS);
+	if (bd->tx_comp) {
 		wcn36xx_dbg(WCN36XX_DBG_DXE, "TX_ACK status requested\n");
 		spin_lock_irqsave(&wcn->dxe_lock, flags);
 		if (wcn->tx_ack_skb) {
@@ -310,25 +318,13 @@ int wcn36xx_start_tx(struct wcn36xx *wcn,
 
 	/* Data frames served first*/
 	if (is_low)
-		wcn36xx_set_tx_data(&bd, wcn, &vif_priv, sta_priv, skb, bcast);
+		wcn36xx_set_tx_data(bd, wcn, &vif_priv, sta_priv, skb, bcast);
 	else
 		/* MGMT and CTRL frames are handeld here*/
-		wcn36xx_set_tx_mgmt(&bd, wcn, &vif_priv, skb, bcast);
+		wcn36xx_set_tx_mgmt(bd, wcn, &vif_priv, skb, bcast);
 
-	buff_to_be((u32 *)&bd, sizeof(bd)/sizeof(u32));
-	bd.tx_bd_sign = 0xbdbdbdbd;
+	buff_to_be((u32 *)bd, sizeof(*bd)/sizeof(u32));
+	bd->tx_bd_sign = 0xbdbdbdbd;
 
-	ret = wcn36xx_dxe_tx_frame(wcn, vif_priv, &bd, skb, is_low);
-	if (ret && bd.tx_comp) {
-		/* If the skb has not been transmitted,
-		 * don't keep a reference to it.
-		 */
-		spin_lock_irqsave(&wcn->dxe_lock, flags);
-		wcn->tx_ack_skb = NULL;
-		spin_unlock_irqrestore(&wcn->dxe_lock, flags);
-
-		ieee80211_wake_queues(wcn->hw);
-	}
-
-	return ret;
+	return wcn36xx_dxe_tx_frame(wcn, vif_priv, skb, is_low);
 }

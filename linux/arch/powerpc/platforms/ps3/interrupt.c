@@ -1,9 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  PS3 interrupt routines.
  *
  *  Copyright (C) 2006 Sony Computer Entertainment Inc.
  *  Copyright 2006 Sony Corp.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; version 2 of the License.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/kernel.h>
@@ -66,7 +78,7 @@ struct ps3_bmp {
 /**
  * struct ps3_private - a per cpu data structure
  * @bmp: ps3_bmp structure
- * @bmp_lock: Synchronize access to bmp.
+ * @bmp_lock: Syncronize access to bmp.
  * @ipi_debug_brk_mask: Mask for debug break IPIs
  * @ppe_id: HV logical_ppe_id
  * @thread_id: HV thread_id
@@ -180,7 +192,7 @@ static int ps3_virq_setup(enum ps3_cpu_binding cpu, unsigned long outlet,
 
 	*virq = irq_create_mapping(NULL, outlet);
 
-	if (!*virq) {
+	if (*virq == NO_IRQ) {
 		FAIL("%s:%d: irq_create_mapping failed: outlet %lu\n",
 			__func__, __LINE__, outlet);
 		result = -ENOMEM;
@@ -327,7 +339,7 @@ int ps3_event_receive_port_setup(enum ps3_cpu_binding cpu, unsigned int *virq)
 	if (result) {
 		FAIL("%s:%d: lv1_construct_event_receive_port failed: %s\n",
 			__func__, __LINE__, ps3_result(result));
-		*virq = 0;
+		*virq = NO_IRQ;
 		return result;
 	}
 
@@ -406,7 +418,7 @@ int ps3_sb_event_receive_port_setup(struct ps3_system_bus_device *dev,
 			" failed: %s\n", __func__, __LINE__,
 			ps3_result(result));
 		ps3_event_receive_port_destroy(*virq);
-		*virq = 0;
+		*virq = NO_IRQ;
 		return result;
 	}
 
@@ -712,12 +724,12 @@ static unsigned int ps3_get_irq(void)
 	asm volatile("cntlzd %0,%1" : "=r" (plug) : "r" (x));
 	plug &= 0x3f;
 
-	if (unlikely(!plug)) {
+	if (unlikely(plug == NO_IRQ)) {
 		DBG("%s:%d: no plug found: thread_id %llu\n", __func__,
 			__LINE__, pd->thread_id);
 		dump_bmp(&per_cpu(ps3_private, 0));
 		dump_bmp(&per_cpu(ps3_private, 1));
-		return 0;
+		return NO_IRQ;
 	}
 
 #if defined(DEBUG)

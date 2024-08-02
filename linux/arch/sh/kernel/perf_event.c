@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Performance event support framework for SuperH hardware counters.
  *
@@ -16,6 +15,10 @@
  *
  * ppc:
  *  Copyright 2008-2009 Paul Mackerras, IBM Corporation.
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
  */
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -349,12 +352,28 @@ static struct pmu pmu = {
 	.read		= sh_pmu_read,
 };
 
-static int sh_pmu_prepare_cpu(unsigned int cpu)
+static void sh_pmu_setup(int cpu)
 {
 	struct cpu_hw_events *cpuhw = &per_cpu(cpu_hw_events, cpu);
 
 	memset(cpuhw, 0, sizeof(struct cpu_hw_events));
-	return 0;
+}
+
+static int
+sh_pmu_notifier(struct notifier_block *self, unsigned long action, void *hcpu)
+{
+	unsigned int cpu = (long)hcpu;
+
+	switch (action & ~CPU_TASKS_FROZEN) {
+	case CPU_UP_PREPARE:
+		sh_pmu_setup(cpu);
+		break;
+
+	default:
+		break;
+	}
+
+	return NOTIFY_OK;
 }
 
 int register_sh_pmu(struct sh_pmu *_pmu)
@@ -375,7 +394,6 @@ int register_sh_pmu(struct sh_pmu *_pmu)
 	WARN_ON(_pmu->num_events > MAX_HWEVENTS);
 
 	perf_pmu_register(&pmu, "cpu", PERF_TYPE_RAW);
-	cpuhp_setup_state(CPUHP_PERF_SUPERH, "PERF_SUPERH", sh_pmu_prepare_cpu,
-			  NULL);
+	perf_cpu_notifier(sh_pmu_notifier);
 	return 0;
 }

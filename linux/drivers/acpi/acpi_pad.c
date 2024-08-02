@@ -1,8 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * acpi_pad.c ACPI Processor Aggregator Driver
  *
  * Copyright (c) 2009, Intel Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
  */
 
 #include <linux/kernel.h>
@@ -11,14 +20,12 @@
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/kthread.h>
-#include <uapi/linux/sched/types.h>
 #include <linux/freezer.h>
 #include <linux/cpu.h>
 #include <linux/tick.h>
 #include <linux/slab.h>
 #include <linux/acpi.h>
 #include <asm/mwait.h>
-#include <xen/xen.h>
 
 #define ACPI_PROCESSOR_AGGREGATOR_CLASS	"acpi_pad"
 #define ACPI_PROCESSOR_AGGREGATOR_DEVICE_NAME "Processor Aggregator"
@@ -61,10 +68,8 @@ static void power_saving_mwait_init(void)
 
 #if defined(CONFIG_X86)
 	switch (boot_cpu_data.x86_vendor) {
-	case X86_VENDOR_HYGON:
 	case X86_VENDOR_AMD:
 	case X86_VENDOR_INTEL:
-	case X86_VENDOR_ZHAOXIN:
 		/*
 		 * AMD Fam10h TSC will tick in all
 		 * C/P/S0/S1 states when this bit is set.
@@ -88,7 +93,7 @@ static void round_robin_cpu(unsigned int tsk_index)
 	cpumask_var_t tmp;
 	int cpu;
 	unsigned long min_weight = -1;
-	unsigned long preferred_cpu;
+	unsigned long uninitialized_var(preferred_cpu);
 
 	if (!alloc_cpumask_var(&tmp, GFP_KERNEL))
 		return;
@@ -103,7 +108,6 @@ static void round_robin_cpu(unsigned int tsk_index)
 		cpumask_andnot(tmp, cpu_online_mask, pad_busy_cpus);
 	if (cpumask_empty(tmp)) {
 		mutex_unlock(&round_robin_lock);
-		free_cpumask_var(tmp);
 		return;
 	}
 	for_each_cpu(cpu, tmp) {
@@ -121,8 +125,6 @@ static void round_robin_cpu(unsigned int tsk_index)
 	mutex_unlock(&round_robin_lock);
 
 	set_cpus_allowed_ptr(current, cpumask_of(preferred_cpu));
-
-	free_cpumask_var(tmp);
 }
 
 static void exit_round_robin(unsigned int tsk_index)
@@ -262,7 +264,7 @@ static uint32_t acpi_pad_idle_cpus_num(void)
 	return ps_tsk_num;
 }
 
-static ssize_t rrtime_store(struct device *dev,
+static ssize_t acpi_pad_rrtime_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	unsigned long num;
@@ -276,14 +278,16 @@ static ssize_t rrtime_store(struct device *dev,
 	return count;
 }
 
-static ssize_t rrtime_show(struct device *dev,
+static ssize_t acpi_pad_rrtime_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
 	return scnprintf(buf, PAGE_SIZE, "%d\n", round_robin_time);
 }
-static DEVICE_ATTR_RW(rrtime);
+static DEVICE_ATTR(rrtime, S_IRUGO|S_IWUSR,
+	acpi_pad_rrtime_show,
+	acpi_pad_rrtime_store);
 
-static ssize_t idlepct_store(struct device *dev,
+static ssize_t acpi_pad_idlepct_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	unsigned long num;
@@ -297,14 +301,16 @@ static ssize_t idlepct_store(struct device *dev,
 	return count;
 }
 
-static ssize_t idlepct_show(struct device *dev,
+static ssize_t acpi_pad_idlepct_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
 	return scnprintf(buf, PAGE_SIZE, "%d\n", idle_pct);
 }
-static DEVICE_ATTR_RW(idlepct);
+static DEVICE_ATTR(idlepct, S_IRUGO|S_IWUSR,
+	acpi_pad_idlepct_show,
+	acpi_pad_idlepct_store);
 
-static ssize_t idlecpus_store(struct device *dev,
+static ssize_t acpi_pad_idlecpus_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	unsigned long num;
@@ -316,14 +322,16 @@ static ssize_t idlecpus_store(struct device *dev,
 	return count;
 }
 
-static ssize_t idlecpus_show(struct device *dev,
+static ssize_t acpi_pad_idlecpus_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
 	return cpumap_print_to_pagebuf(false, buf,
 				       to_cpumask(pad_busy_cpus_bits));
 }
 
-static DEVICE_ATTR_RW(idlecpus);
+static DEVICE_ATTR(idlecpus, S_IRUGO|S_IWUSR,
+	acpi_pad_idlecpus_show,
+	acpi_pad_idlecpus_store);
 
 static int acpi_pad_add_sysfs(struct acpi_device *device)
 {
@@ -469,10 +477,6 @@ static struct acpi_driver acpi_pad_driver = {
 
 static int __init acpi_pad_init(void)
 {
-	/* Xen ACPI PAD is used when running as Xen Dom0. */
-	if (xen_initial_domain())
-		return -ENODEV;
-
 	power_saving_mwait_init();
 	if (power_saving_mwait_eax == 0)
 		return -EINVAL;

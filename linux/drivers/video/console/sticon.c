@@ -79,6 +79,11 @@ static const char *sticon_startup(void)
     return "STI console";
 }
 
+static int sticon_set_palette(struct vc_data *c, unsigned char *table)
+{
+    return -EINVAL;
+}
+
 static void sticon_putc(struct vc_data *conp, int c, int ypos, int xpos)
 {
     int redraw_cursor = 0;
@@ -153,13 +158,12 @@ static void sticon_cursor(struct vc_data *conp, int mode)
     }
 }
 
-static bool sticon_scroll(struct vc_data *conp, unsigned int t,
-		unsigned int b, enum con_scroll dir, unsigned int count)
+static int sticon_scroll(struct vc_data *conp, int t, int b, int dir, int count)
 {
     struct sti_struct *sti = sticon_sti;
 
     if (vga_is_gfx)
-        return false;
+        return 0;
 
     sticon_cursor(conp, CM_ERASE);
 
@@ -175,7 +179,23 @@ static bool sticon_scroll(struct vc_data *conp, unsigned int t,
 	break;
     }
 
-    return false;
+    return 0;
+}
+
+static void sticon_bmove(struct vc_data *conp, int sy, int sx, 
+	int dy, int dx, int height, int width)
+{
+    if (!width || !height)
+	    return;
+#if 0
+    if (((sy <= p->cursor_y) && (p->cursor_y < sy+height) &&
+	(sx <= p->cursor_x) && (p->cursor_x < sx+width)) ||
+	((dy <= p->cursor_y) && (p->cursor_y < dy+height) &&
+	(dx <= p->cursor_x) && (p->cursor_x < dx+width)))
+		sticon_cursor(p, CM_ERASE /*|CM_SOFTBACK*/);
+#endif
+
+    sti_bmove(sticon_sti, sy, sx, dy, dx, height, width);
 }
 
 static void sticon_init(struct vc_data *c, int init)
@@ -236,6 +256,11 @@ static int sticon_blank(struct vc_data *c, int blank, int mode_switch)
     return 1;
 }
 
+static int sticon_scrolldelta(struct vc_data *conp, int lines)
+{
+    return 0;
+}
+
 static u16 *sticon_screen_pos(struct vc_data *conp, int offset)
 {
     int line;
@@ -291,13 +316,13 @@ static unsigned long sticon_getxy(struct vc_data *conp, unsigned long pos,
 static u8 sticon_build_attr(struct vc_data *conp, u8 color, u8 intens,
 			    u8 blink, u8 underline, u8 reverse, u8 italic)
 {
-	u8 fg = color & 7;
-	u8 bg = (color & 0x70) >> 4;
+    u8 attr = ((color & 0x70) >> 1) | ((color & 7));
 
-	if (reverse)
-		return (fg << 3) | bg;
-	else
-		return (bg << 3) | fg;
+    if (reverse) {
+	color = ((color >> 3) & 0x7) | ((color & 0x7) << 3);
+    }
+
+    return attr;
 }
 
 static void sticon_invert_region(struct vc_data *conp, u16 *p, int count)
@@ -330,8 +355,11 @@ static const struct consw sti_con = {
 	.con_putcs		= sticon_putcs,
 	.con_cursor		= sticon_cursor,
 	.con_scroll		= sticon_scroll,
+	.con_bmove		= sticon_bmove,
 	.con_switch		= sticon_switch,
 	.con_blank		= sticon_blank,
+	.con_set_palette	= sticon_set_palette,
+	.con_scrolldelta	= sticon_scrolldelta,
 	.con_set_origin		= sticon_set_origin,
 	.con_save_screen	= sticon_save_screen, 
 	.con_build_attr		= sticon_build_attr,

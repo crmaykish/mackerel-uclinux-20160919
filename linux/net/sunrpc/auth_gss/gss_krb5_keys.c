@@ -54,9 +54,9 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#include <crypto/skcipher.h>
 #include <linux/err.h>
 #include <linux/types.h>
+#include <linux/crypto.h>
 #include <linux/sunrpc/gss_krb5.h>
 #include <linux/sunrpc/xdr.h>
 #include <linux/lcm.h>
@@ -147,7 +147,7 @@ u32 krb5_derive_key(const struct gss_krb5_enctype *gk5e,
 	size_t blocksize, keybytes, keylength, n;
 	unsigned char *inblockdata, *outblockdata, *rawkey;
 	struct xdr_netobj inblock, outblock;
-	struct crypto_sync_skcipher *cipher;
+	struct crypto_blkcipher *cipher;
 	u32 ret = EINVAL;
 
 	blocksize = gk5e->blocksize;
@@ -157,10 +157,11 @@ u32 krb5_derive_key(const struct gss_krb5_enctype *gk5e,
 	if ((inkey->len != keylength) || (outkey->len != keylength))
 		goto err_return;
 
-	cipher = crypto_alloc_sync_skcipher(gk5e->encrypt_name, 0, 0);
+	cipher = crypto_alloc_blkcipher(gk5e->encrypt_name, 0,
+					CRYPTO_ALG_ASYNC);
 	if (IS_ERR(cipher))
 		goto err_return;
-	if (crypto_sync_skcipher_setkey(cipher, inkey->data, inkey->len))
+	if (crypto_blkcipher_setkey(cipher, inkey->data, inkey->len))
 		goto err_return;
 
 	/* allocate and set up buffers */
@@ -228,13 +229,16 @@ u32 krb5_derive_key(const struct gss_krb5_enctype *gk5e,
 	ret = 0;
 
 err_free_raw:
-	kzfree(rawkey);
+	memset(rawkey, 0, keybytes);
+	kfree(rawkey);
 err_free_out:
-	kzfree(outblockdata);
+	memset(outblockdata, 0, blocksize);
+	kfree(outblockdata);
 err_free_in:
-	kzfree(inblockdata);
+	memset(inblockdata, 0, blocksize);
+	kfree(inblockdata);
 err_free_cipher:
-	crypto_free_sync_skcipher(cipher);
+	crypto_free_blkcipher(cipher);
 err_return:
 	return ret;
 }
@@ -320,3 +324,4 @@ u32 gss_krb5_aes_make_key(const struct gss_krb5_enctype *gk5e,
 err_out:
 	return ret;
 }
+

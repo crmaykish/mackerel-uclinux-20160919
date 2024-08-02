@@ -1,10 +1,20 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+#ifdef CONFIG_RWSEM_SPIN_ON_OWNER
+static inline void rwsem_set_owner(struct rw_semaphore *sem)
+{
+	sem->owner = current;
+}
 
-#ifndef __INTERNAL_RWSEM_H
-#define __INTERNAL_RWSEM_H
-#include <linux/rwsem.h>
+static inline void rwsem_clear_owner(struct rw_semaphore *sem)
+{
+	sem->owner = NULL;
+}
 
-extern void __down_read(struct rw_semaphore *sem);
-extern void __up_read(struct rw_semaphore *sem);
+#else
+static inline void rwsem_set_owner(struct rw_semaphore *sem)
+{
+}
 
-#endif /* __INTERNAL_RWSEM_H */
+static inline void rwsem_clear_owner(struct rw_semaphore *sem)
+{
+}
+#endif

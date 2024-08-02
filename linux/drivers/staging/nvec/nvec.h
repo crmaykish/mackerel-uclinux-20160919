@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * NVEC: NVIDIA compliant embedded controller interface
  *
@@ -8,6 +7,11 @@
  *           Ilya Petrov <ilya.muromec@gmail.com>
  *           Marc Dietrich <marvin24@gmx.de>
  *           Julian Andres Klode <jak@jak-linux.org>
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
+ *
  */
 
 #ifndef __LINUX_MFD_NVEC
@@ -132,9 +136,9 @@ struct nvec_msg {
  */
 struct nvec_chip {
 	struct device *dev;
-	struct gpio_desc *gpiod;
+	int gpio;
 	int irq;
-	u32 i2c_addr;
+	int i2c_addr;
 	void __iomem *base;
 	struct clk *i2c_clk;
 	struct reset_control *rst;
@@ -164,9 +168,8 @@ struct nvec_chip {
 int nvec_write_async(struct nvec_chip *nvec, const unsigned char *data,
 		     short size);
 
-int nvec_write_sync(struct nvec_chip *nvec,
-		    const unsigned char *data, short size,
-		    struct nvec_msg **msg);
+struct nvec_msg *nvec_write_sync(struct nvec_chip *nvec,
+				 const unsigned char *data, short size);
 
 int nvec_register_notifier(struct nvec_chip *nvec,
 			   struct notifier_block *nb,

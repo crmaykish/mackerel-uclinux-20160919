@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * NFS-private data for each "struct net".  Accessed with net_generic().
  */
@@ -9,14 +8,11 @@
 #include <linux/nfs4.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
-#include <linux/sunrpc/stats.h>
 
 struct bl_dev_msg {
 	int32_t status;
 	uint32_t major, minor;
 };
-
-struct nfs_netns_client;
 
 struct nfs_net {
 	struct cache_detail *nfs_dns_resolve;
@@ -32,15 +28,13 @@ struct nfs_net {
 	unsigned short nfs_callback_tcpport6;
 	int cb_users[NFS4_MAX_MINOR_VERSION + 1];
 #endif
-	struct nfs_netns_client *nfs_client;
 	spinlock_t nfs_client_lock;
-	ktime_t boot_time;
-	struct rpc_stat rpcstats;
+	struct timespec boot_time;
 #ifdef CONFIG_PROC_FS
 	struct proc_dir_entry *proc_nfsfs;
 #endif
 };
 
-extern unsigned int nfs_net_id;
+extern int nfs_net_id;
 
 #endif

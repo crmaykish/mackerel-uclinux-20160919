@@ -1,8 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Apple Onboard Audio feature call GPIO control
  *
  * Copyright 2006 Johannes Berg <johannes@sipsolutions.net>
+ *
+ * GPL v2, can be found in COPYING.
  *
  * This file contains the GPIO control routines for
  * direct (through feature calls) access to the GPIO
@@ -81,17 +82,14 @@ static struct device_node *get_gpio(char *name,
 			if (altname && (strcmp(audio_gpio, altname) == 0))
 				break;
 		}
-		of_node_put(gpio);
 		/* still not found, assume not there */
 		if (!np)
 			return NULL;
 	}
 
 	reg = of_get_property(np, "reg", NULL);
-	if (!reg) {
-		of_node_put(np);
+	if (!reg)
 		return NULL;
-	}
 
 	*gpioptr = *reg;
 
@@ -120,7 +118,7 @@ static void get_irq(struct device_node * np, int *irqptr)
 	if (np)
 		*irqptr = irq_of_parse_and_map(np, 0);
 	else
-		*irqptr = 0;
+		*irqptr = NO_IRQ;
 }
 
 /* 0x4 is outenable, 0x1 is out, thus 4 or 5 */
@@ -338,7 +336,7 @@ static int ftr_set_notify(struct gpio_runtime *rt,
 		return -EINVAL;
 	}
 
-	if (!irq)
+	if (irq == NO_IRQ)
 		return -ENODEV;
 
 	mutex_lock(&notif->mutex);

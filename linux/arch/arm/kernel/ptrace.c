@@ -1,14 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/kernel/ptrace.c
  *
  *  By Ross Biro 1/23/92
  * edited by Linus Torvalds
  * ARM modifications Copyright (C) 2000 Russell King
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #include <linux/kernel.h>
-#include <linux/sched/signal.h>
-#include <linux/sched/task_stack.h>
+#include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/elf.h>
 #include <linux/smp.h>
@@ -198,15 +200,21 @@ void ptrace_disable(struct task_struct *child)
 /*
  * Handle hitting a breakpoint.
  */
-void ptrace_break(struct pt_regs *regs)
+void ptrace_break(struct task_struct *tsk, struct pt_regs *regs)
 {
-	force_sig_fault(SIGTRAP, TRAP_BRKPT,
-			(void __user *)instruction_pointer(regs));
+	siginfo_t info;
+
+	info.si_signo = SIGTRAP;
+	info.si_errno = 0;
+	info.si_code  = TRAP_BRKPT;
+	info.si_addr  = (void __user *)instruction_pointer(regs);
+
+	force_sig_info(SIGTRAP, &info, tsk);
 }
 
 static int break_trap(struct pt_regs *regs, unsigned int instr)
 {
-	ptrace_break(regs);
+	ptrace_break(current, regs);
 	return 0;
 }
 
@@ -219,8 +227,8 @@ static struct undef_hook arm_break_hook = {
 };
 
 static struct undef_hook thumb_break_hook = {
-	.instr_mask	= 0xffffffff,
-	.instr_val	= 0x0000de01,
+	.instr_mask	= 0xffff,
+	.instr_val	= 0xde01,
 	.cpsr_mask	= PSR_T_BIT,
 	.cpsr_val	= PSR_T_BIT,
 	.fn		= break_trap,
@@ -381,6 +389,7 @@ static void ptrace_hbptriggered(struct perf_event *bp,
 	struct arch_hw_breakpoint *bkpt = counter_arch_bp(bp);
 	long num;
 	int i;
+	siginfo_t info;
 
 	for (i = 0; i < ARM_MAX_HBP_SLOTS; ++i)
 		if (current->thread.debug.hbp[i] == bp)
@@ -388,7 +397,12 @@ static void ptrace_hbptriggered(struct perf_event *bp,
 
 	num = (i == ARM_MAX_HBP_SLOTS) ? 0 : ptrace_hbp_idx_to_num(i);
 
-	force_sig_ptrace_errno_trap((int)num, (void __user *)(bkpt->trigger));
+	info.si_signo	= SIGTRAP;
+	info.si_errno	= (int)num;
+	info.si_code	= TRAP_HWBKPT;
+	info.si_addr	= (void __user *)(bkpt->trigger);
+
+	force_sig_info(SIGTRAP, &info, current);
 }
 
 /*
@@ -586,7 +600,7 @@ static int gpr_set(struct task_struct *target,
 		   const void *kbuf, const void __user *ubuf)
 {
 	int ret;
-	struct pt_regs newregs = *task_pt_regs(target);
+	struct pt_regs newregs;
 
 	ret = user_regset_copyin(&pos, &count, &kbuf, &ubuf,
 				 &newregs,
@@ -719,8 +733,8 @@ static int vfp_set(struct task_struct *target,
 	if (ret)
 		return ret;
 
-	thread->vfpstate.hard = new_vfp;
 	vfp_flush_hwstate(thread);
+	thread->vfpstate.hard = new_vfp;
 
 	return 0;
 }
@@ -918,19 +932,18 @@ asmlinkage int syscall_trace_enter(struct pt_regs *regs, int scno)
 {
 	current_thread_info()->syscall = scno;
 
-	if (test_thread_flag(TIF_SYSCALL_TRACE))
-		tracehook_report_syscall(regs, PTRACE_SYSCALL_ENTER);
-
-	/* Do seccomp after ptrace; syscall may have changed. */
+	/* Do the secure computing check first; failures should be fast. */
 #ifdef CONFIG_HAVE_ARCH_SECCOMP_FILTER
-	if (secure_computing(NULL) == -1)
+	if (secure_computing() == -1)
 		return -1;
 #else
 	/* XXX: remove this once OABI gets fixed */
-	secure_computing_strict(current_thread_info()->syscall);
+	secure_computing_strict(scno);
 #endif
 
-	/* Tracer or seccomp may have changed syscall. */
+	if (test_thread_flag(TIF_SYSCALL_TRACE))
+		tracehook_report_syscall(regs, PTRACE_SYSCALL_ENTER);
+
 	scno = current_thread_info()->syscall;
 
 	if (test_thread_flag(TIF_SYSCALL_TRACEPOINT))

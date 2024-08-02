@@ -56,11 +56,15 @@ static inline unsigned long kernel_stack_pointer(struct pt_regs *regs)
 	return regs->regs[31];
 }
 
+/*
+ * Don't use asm-generic/ptrace.h it defines FP accessors that don't make
+ * sense on MIPS.  We rather want an error if they get invoked.
+ */
+
 static inline void instruction_pointer_set(struct pt_regs *regs,
                                            unsigned long val)
 {
 	regs->cp0_epc = val;
-	regs->cp0_cause &= ~CAUSEF_BD;
 }
 
 /* Query offset/name of register from its name/offset */
@@ -141,6 +145,8 @@ extern int ptrace_set_watch_regs(struct task_struct *child,
  */
 #define user_mode(regs) (((regs)->cp0_status & KU_MASK) == KU_USER)
 
+#define user_stack(_regs) ((_regs)->regs[29])
+
 static inline int is_syscall_success(struct pt_regs *regs)
 {
 	return !regs->regs[7];
@@ -148,7 +154,7 @@ static inline int is_syscall_success(struct pt_regs *regs)
 
 static inline long regs_return_value(struct pt_regs *regs)
 {
-	if (is_syscall_success(regs) || !user_mode(regs))
+	if (is_syscall_success(regs))
 		return regs->regs[2];
 	else
 		return -regs->regs[2];
@@ -157,7 +163,7 @@ static inline long regs_return_value(struct pt_regs *regs)
 #define instruction_pointer(regs) ((regs)->cp0_epc)
 #define profile_pc(regs) instruction_pointer(regs)
 
-extern asmlinkage long syscall_trace_enter(struct pt_regs *regs);
+extern asmlinkage long syscall_trace_enter(struct pt_regs *regs, long syscall);
 extern asmlinkage void syscall_trace_leave(struct pt_regs *regs);
 
 extern void die(const char *, struct pt_regs *) __noreturn;
@@ -168,11 +174,24 @@ static inline void die_if_kernel(const char *str, struct pt_regs *regs)
 		die(str, regs);
 }
 
+#if 0
 #define current_pt_regs()						\
 ({									\
 	unsigned long sp = (unsigned long)__builtin_frame_address(0);	\
 	(struct pt_regs *)((sp | (THREAD_SIZE - 1)) + 1 - 32) - 1;	\
 })
+#endif
+#if 1
+/*
+ * Some older MIPS compilers are buggy, and do not return correct values
+ * for __builtin_frame_address. So we avoid it here.
+ */
+#define current_pt_regs()						\
+({									\
+	unsigned long sp = (unsigned long)&sp;				\
+	(struct pt_regs *)((sp | (THREAD_SIZE - 1)) + 1 - 32) - 1;	\
+})
+#endif
 
 /* Helpers for working with the user stack pointer */
 

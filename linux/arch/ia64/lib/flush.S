@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Cache flushing routines.
  *
@@ -9,7 +8,6 @@
  */
 
 #include <asm/asmmacro.h>
-#include <asm/export.h>
 
 
 	/*
@@ -62,7 +60,6 @@ GLOBAL_ENTRY(flush_icache_range)
 	mov	ar.lc=r3		// restore ar.lc
 	br.ret.sptk.many rp
 END(flush_icache_range)
-EXPORT_SYMBOL_GPL(flush_icache_range)
 
 	/*
 	 * clflush_cache_range(start,size)

@@ -1,6 +1,5 @@
 /*
  *    Disk Array driver for HP Smart Array SAS controllers
- *    Copyright 2016 Microsemi Corporation
  *    Copyright 2014-2015 PMC-Sierra, Inc.
  *    Copyright 2000,2009-2015 Hewlett-Packard Development Company, L.P.
  *
@@ -13,7 +12,7 @@
  *    MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
  *    NON INFRINGEMENT.  See the GNU General Public License for more details.
  *
- *    Questions/Comments/Bugfixes to esc.storagedev@microsemi.com
+ *    Questions/Comments/Bugfixes to storagedev@pmcs.com
  *
  */
 #ifndef HPSA_CMD_H
@@ -142,7 +141,6 @@
 #define DOORBELL_CTLR_RESET	0x00000004l
 #define DOORBELL_CTLR_RESET2	0x00000020l
 #define DOORBELL_CLEAR_EVENTS	0x00000040l
-#define DOORBELL_GENERATE_CHKPT	0x00000080l
 
 #define CFGTBL_Trans_Simple     0x00000002l
 #define CFGTBL_Trans_Performant 0x00000004l
@@ -157,9 +155,7 @@
 #define CFGTBL_BusType_Fibre2G  0x00000200l
 
 /* VPD Inquiry types */
-#define HPSA_INQUIRY_FAILED		0x02
 #define HPSA_VPD_SUPPORTED_PAGES        0x00
-#define HPSA_VPD_LV_DEVICE_ID           0x83
 #define HPSA_VPD_LV_DEVICE_GEOMETRY     0xC1
 #define HPSA_VPD_LV_IOACCEL_STATUS      0xC2
 #define HPSA_VPD_LV_STATUS		0xC3
@@ -168,7 +164,6 @@
 /* Logical volume states */
 #define HPSA_VPD_LV_STATUS_UNSUPPORTED			0xff
 #define HPSA_LV_OK                                      0x0
-#define HPSA_LV_FAILED					0x01
 #define HPSA_LV_NOT_AVAILABLE				0x0b
 #define HPSA_LV_UNDERGOING_ERASE			0x0F
 #define HPSA_LV_UNDERGOING_RPI				0x12
@@ -294,9 +289,8 @@ struct SenseSubsystem_info {
 #define BMIC_IDENTIFY_CONTROLLER 0x11
 #define BMIC_SET_DIAG_OPTIONS 0xF4
 #define BMIC_SENSE_DIAG_OPTIONS 0xF5
-#define HPSA_DIAG_OPTS_DISABLE_RLD_CACHING 0x80000000
+#define HPSA_DIAG_OPTS_DISABLE_RLD_CACHING 0x40000000
 #define BMIC_SENSE_SUBSYSTEM_INFORMATION 0x66
-#define BMIC_SENSE_STORAGE_BOX_PARAMS 0x65
 
 /* Command List Structure */
 union SCSI3Addr {
@@ -448,7 +442,7 @@ struct CommandList {
 	struct hpsa_scsi_dev_t *phys_disk;
 
 	int abort_pending;
-	struct hpsa_scsi_dev_t *device;
+	struct hpsa_scsi_dev_t *reset_pending;
 	atomic_t refcount; /* Must be last to avoid memset in hpsa_cmd_init() */
 } __aligned(COMMANDLIST_ALIGNMENT);
 
@@ -517,7 +511,6 @@ struct ioaccel2_sg_element {
 	u8 reserved[3];
 	u8 chain_indicator;
 #define IOACCEL2_CHAIN 0x80
-#define IOACCEL2_LAST_SG 0x40
 };
 
 /*
@@ -781,8 +774,6 @@ struct bmic_identify_physical_device {
 	u8     phys_bay_in_box;  /* phys drv bay this drive resides */
 	__le32 rpm;              /* Drive rotational speed in rpm */
 	u8     device_type;       /* type of drive */
-#define BMIC_DEVICE_TYPE_CONTROLLER	0x07
-
 	u8     sata_version;     /* only valid when drive_type is SATA */
 	__le64 big_total_block_count;
 	__le64 ris_starting_lba;
@@ -813,7 +804,10 @@ struct bmic_identify_physical_device {
 	u8     max_temperature_degreesC;
 	u8     logical_blocks_per_phys_block_exp; /* phyblocksize = 512*2^exp */
 	__le16 current_queue_depth_limit;
-	u8     reserved_switch_stuff[60];
+	u8     switch_name[10];
+	__le16 switch_port;
+	u8     alternate_paths_switch_name[40];
+	u8     alternate_paths_switch_port[8];
 	__le16 power_on_hours; /* valid only if gas gauge supported */
 	__le16 percent_endurance_used; /* valid only if gas gauge supported. */
 #define BMIC_PHYS_DRIVE_SSD_WEAROUT(idphydrv) \
@@ -829,22 +823,11 @@ struct bmic_identify_physical_device {
 	(idphydrv->smart_carrier_authentication == 0x01)
 	u8     smart_carrier_app_fw_version;
 	u8     smart_carrier_bootloader_fw_version;
-	u8     sanitize_support_flags;
-	u8     drive_key_flags;
 	u8     encryption_key_name[64];
 	__le32 misc_drive_flags;
 	__le16 dek_index;
-	__le16 hba_drive_encryption_flags;
-	__le16 max_overwrite_time;
-	__le16 max_block_erase_time;
-	__le16 max_crypto_erase_time;
-	u8     device_connector_info[5];
-	u8     connector_name[8][8];
-	u8     page_83_id[16];
-	u8     max_link_rate[256];
-	u8     neg_phys_link_rate[256];
-	u8     box_conn_name[8];
-} __attribute((aligned(512)));
+	u8     padding[112];
+};
 
 struct bmic_sense_subsystem_info {
 	u8	primary_slot_number;
@@ -857,18 +840,6 @@ struct bmic_sense_subsystem_info {
 	u8	secondary_array_serial_number[32];
 	u8	secondary_cache_serial_number[32];
 	u8	pad[332];
-};
-
-struct bmic_sense_storage_box_params {
-	u8	reserved[36];
-	u8	inquiry_valid;
-	u8	reserved_1[68];
-	u8	phys_box_on_port;
-	u8	reserved_2[22];
-	u16	connection_info;
-	u8	reserver_3[84];
-	u8	phys_connector[2];
-	u8	reserved_4[296];
 };
 
 #pragma pack()

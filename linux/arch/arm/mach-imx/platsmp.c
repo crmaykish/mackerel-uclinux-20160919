@@ -1,7 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2011 Freescale Semiconductor, Inc.
  * Copyright 2011 Linaro Ltd.
+ *
+ * The code contained herein is licensed under the GNU General Public
+ * License. You may obtain a copy of the GNU General Public License
+ * Version 2 or later at the following locations:
+ *
+ * http://www.opensource.org/licenses/gpl-license.html
+ * http://www.gnu.org/copyleft/gpl.html
  */
 
 #include <linux/init.h>
@@ -82,7 +88,7 @@ static void __init imx_smp_prepare_cpus(unsigned int max_cpus)
 	sync_cache_w(&g_diag_reg);
 }
 
-const struct smp_operations imx_smp_ops __initconst = {
+struct smp_operations  imx_smp_ops __initdata = {
 	.smp_init_cpus		= imx_smp_init_cpus,
 	.smp_prepare_cpus	= imx_smp_prepare_cpus,
 	.smp_boot_secondary	= imx_boot_secondary,
@@ -111,13 +117,13 @@ static void __init ls1021a_smp_prepare_cpus(unsigned int max_cpus)
 	dcfg_base = of_iomap(np, 0);
 	BUG_ON(!dcfg_base);
 
-	paddr = __pa_symbol(secondary_startup);
+	paddr = virt_to_phys(secondary_startup);
 	writel_relaxed(cpu_to_be32(paddr), dcfg_base + DCFG_CCSR_SCRATCHRW1);
 
 	iounmap(dcfg_base);
 }
 
-const struct smp_operations ls1021a_smp_ops __initconst = {
+struct smp_operations  ls1021a_smp_ops __initdata = {
 	.smp_prepare_cpus	= ls1021a_smp_prepare_cpus,
 	.smp_boot_secondary	= ls1021a_boot_secondary,
 };

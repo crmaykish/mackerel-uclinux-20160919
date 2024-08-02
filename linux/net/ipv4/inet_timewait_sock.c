@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -10,6 +9,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/kmemcheck.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <net/inet_hashtables.h>
@@ -76,7 +76,7 @@ void inet_twsk_free(struct inet_timewait_sock *tw)
 
 void inet_twsk_put(struct inet_timewait_sock *tw)
 {
-	if (refcount_dec_and_test(&tw->tw_refcnt))
+	if (atomic_dec_and_test(&tw->tw_refcnt))
 		inet_twsk_free(tw);
 }
 EXPORT_SYMBOL_GPL(inet_twsk_put);
@@ -98,7 +98,7 @@ static void inet_twsk_add_bind_node(struct inet_timewait_sock *tw,
  * Essentially we whip up a timewait bucket, copy the relevant info into it
  * from the SK, and mess with hash chains and list linkage.
  */
-void inet_twsk_hashdance(struct inet_timewait_sock *tw, struct sock *sk,
+void __inet_twsk_hashdance(struct inet_timewait_sock *tw, struct sock *sk,
 			   struct inet_hashinfo *hashinfo)
 {
 	const struct inet_sock *inet = inet_sk(sk);
@@ -120,6 +120,18 @@ void inet_twsk_hashdance(struct inet_timewait_sock *tw, struct sock *sk,
 
 	spin_lock(lock);
 
+	/*
+	 * Step 2: Hash TW into tcp ehash chain.
+	 * Notes :
+	 * - tw_refcnt is set to 4 because :
+	 * - We have one reference from bhash chain.
+	 * - We have one reference from ehash chain.
+	 * - We have one reference from timer.
+	 * - One reference for ourself (our caller will release it).
+	 * We can use atomic_set() because prior spin_lock()/spin_unlock()
+	 * committed into memory all tw fields.
+	 */
+	atomic_set(&tw->tw_refcnt, 4);
 	inet_twsk_add_node_rcu(tw, &ehead->chain);
 
 	/* Step 3: Remove SK from hash chain */
@@ -127,28 +139,17 @@ void inet_twsk_hashdance(struct inet_timewait_sock *tw, struct sock *sk,
 		sock_prot_inuse_add(sock_net(sk), sk->sk_prot, -1);
 
 	spin_unlock(lock);
-
-	/* tw_refcnt is set to 3 because we have :
-	 * - one reference for bhash chain.
-	 * - one reference for ehash chain.
-	 * - one reference for timer.
-	 * We can use atomic_set() because prior spin_lock()/spin_unlock()
-	 * committed into memory all tw fields.
-	 * Also note that after this point, we lost our implicit reference
-	 * so we are not allowed to use tw anymore.
-	 */
-	refcount_set(&tw->tw_refcnt, 3);
 }
-EXPORT_SYMBOL_GPL(inet_twsk_hashdance);
+EXPORT_SYMBOL_GPL(__inet_twsk_hashdance);
 
-static void tw_timer_handler(struct timer_list *t)
+static void tw_timer_handler(unsigned long data)
 {
-	struct inet_timewait_sock *tw = from_timer(tw, t, tw_timer);
+	struct inet_timewait_sock *tw = (struct inet_timewait_sock *)data;
 
 	if (tw->tw_kill)
-		__NET_INC_STATS(twsk_net(tw), LINUX_MIB_TIMEWAITKILLED);
+		NET_INC_STATS_BH(twsk_net(tw), LINUX_MIB_TIMEWAITKILLED);
 	else
-		__NET_INC_STATS(twsk_net(tw), LINUX_MIB_TIMEWAITED);
+		NET_INC_STATS_BH(twsk_net(tw), LINUX_MIB_TIMEWAITED);
 	inet_twsk_kill(tw);
 }
 
@@ -166,6 +167,8 @@ struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk,
 	if (tw) {
 		const struct inet_sock *inet = inet_sk(sk);
 
+		kmemcheck_annotate_bitfield(tw, flags);
+
 		tw->tw_dr	    = dr;
 		/* Give us an identity. */
 		tw->tw_daddr	    = inet->inet_daddr;
@@ -179,20 +182,19 @@ struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk,
 		tw->tw_dport	    = inet->inet_dport;
 		tw->tw_family	    = sk->sk_family;
 		tw->tw_reuse	    = sk->sk_reuse;
-		tw->tw_reuseport    = sk->sk_reuseport;
 		tw->tw_hash	    = sk->sk_hash;
 		tw->tw_ipv6only	    = 0;
 		tw->tw_transparent  = inet->transparent;
 		tw->tw_prot	    = sk->sk_prot_creator;
 		atomic64_set(&tw->tw_cookie, atomic64_read(&sk->sk_cookie));
 		twsk_net_set(tw, sock_net(sk));
-		timer_setup(&tw->tw_timer, tw_timer_handler, TIMER_PINNED);
+		setup_timer(&tw->tw_timer, tw_timer_handler, (unsigned long)tw);
 		/*
 		 * Because we use RCU lookups, we should not set tw_refcnt
 		 * to a non null value before everything is setup for this
 		 * timewait socket.
 		 */
-		refcount_set(&tw->tw_refcnt, 0);
+		atomic_set(&tw->tw_refcnt, 0);
 
 		__module_get(tw->tw_prot->owner);
 	}
@@ -246,7 +248,7 @@ void __inet_twsk_schedule(struct inet_timewait_sock *tw, int timeo, bool rearm)
 
 	tw->tw_kill = timeo <= 4*HZ;
 	if (!rearm) {
-		BUG_ON(mod_timer(&tw->tw_timer, jiffies + timeo));
+		BUG_ON(mod_timer_pinned(&tw->tw_timer, jiffies + timeo));
 		atomic_inc(&tw->tw_dr->tw_count);
 	} else {
 		mod_timer_pending(&tw->tw_timer, jiffies + timeo);
@@ -254,12 +256,13 @@ void __inet_twsk_schedule(struct inet_timewait_sock *tw, int timeo, bool rearm)
 }
 EXPORT_SYMBOL_GPL(__inet_twsk_schedule);
 
-/* Remove all non full sockets (TIME_WAIT and NEW_SYN_RECV) for dead netns */
-void inet_twsk_purge(struct inet_hashinfo *hashinfo, int family)
+void inet_twsk_purge(struct inet_hashinfo *hashinfo,
+		     struct inet_timewait_death_row *twdr, int family)
 {
+	struct inet_timewait_sock *tw;
+	struct sock *sk;
 	struct hlist_nulls_node *node;
 	unsigned int slot;
-	struct sock *sk;
 
 	for (slot = 0; slot <= hashinfo->ehash_mask; slot++) {
 		struct inet_ehash_bucket *head = &hashinfo->ehash[slot];
@@ -268,35 +271,25 @@ restart_rcu:
 		rcu_read_lock();
 restart:
 		sk_nulls_for_each_rcu(sk, node, &head->chain) {
-			int state = inet_sk_state_load(sk);
-
-			if ((1 << state) & ~(TCPF_TIME_WAIT |
-					     TCPF_NEW_SYN_RECV))
+			if (sk->sk_state != TCP_TIME_WAIT)
+				continue;
+			tw = inet_twsk(sk);
+			if ((tw->tw_family != family) ||
+				atomic_read(&twsk_net(tw)->count))
 				continue;
 
-			if (sk->sk_family != family ||
-			    refcount_read(&sock_net(sk)->count))
+			if (unlikely(!atomic_inc_not_zero(&tw->tw_refcnt)))
 				continue;
 
-			if (unlikely(!refcount_inc_not_zero(&sk->sk_refcnt)))
-				continue;
-
-			if (unlikely(sk->sk_family != family ||
-				     refcount_read(&sock_net(sk)->count))) {
-				sock_gen_put(sk);
+			if (unlikely((tw->tw_family != family) ||
+				     atomic_read(&twsk_net(tw)->count))) {
+				inet_twsk_put(tw);
 				goto restart;
 			}
 
 			rcu_read_unlock();
 			local_bh_disable();
-			if (state == TCP_TIME_WAIT) {
-				inet_twsk_deschedule_put(inet_twsk(sk));
-			} else {
-				struct request_sock *req = inet_reqsk(sk);
-
-				inet_csk_reqsk_queue_drop_and_put(req->rsk_listener,
-								  req);
-			}
+			inet_twsk_deschedule_put(tw);
 			local_bh_enable();
 			goto restart_rcu;
 		}

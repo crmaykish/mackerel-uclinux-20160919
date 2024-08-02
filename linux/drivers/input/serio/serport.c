@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Input device TTY line discipline
  *
@@ -8,8 +7,13 @@
  * 'serial io port' abstraction that the input device drivers use.
  */
 
+/*
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
+ */
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -67,7 +71,10 @@ static void serport_serio_close(struct serio *serio)
 
 	spin_lock_irqsave(&serport->lock, flags);
 	clear_bit(SERPORT_ACTIVE, &serport->flags);
+	set_bit(SERPORT_DEAD, &serport->flags);
 	spin_unlock_irqrestore(&serport->lock, flags);
+
+	wake_up_interruptible(&serport->wait);
 }
 
 /*
@@ -222,7 +229,7 @@ static int serport_ldisc_ioctl(struct tty_struct *tty, struct file *file,
 
 #ifdef CONFIG_COMPAT
 #define COMPAT_SPIOCSTYPE	_IOW('q', 0x01, compat_ulong_t)
-static int serport_ldisc_compat_ioctl(struct tty_struct *tty,
+static long serport_ldisc_compat_ioctl(struct tty_struct *tty,
 				       struct file *file,
 				       unsigned int cmd, unsigned long arg)
 {
@@ -240,19 +247,6 @@ static int serport_ldisc_compat_ioctl(struct tty_struct *tty,
 	return -EINVAL;
 }
 #endif
-
-static int serport_ldisc_hangup(struct tty_struct *tty)
-{
-	struct serport *serport = (struct serport *) tty->disc_data;
-	unsigned long flags;
-
-	spin_lock_irqsave(&serport->lock, flags);
-	set_bit(SERPORT_DEAD, &serport->flags);
-	spin_unlock_irqrestore(&serport->lock, flags);
-
-	wake_up_interruptible(&serport->wait);
-	return 0;
-}
 
 static void serport_ldisc_write_wakeup(struct tty_struct * tty)
 {
@@ -280,7 +274,6 @@ static struct tty_ldisc_ops serport_ldisc = {
 	.compat_ioctl =	serport_ldisc_compat_ioctl,
 #endif
 	.receive_buf =	serport_ldisc_receive,
-	.hangup =	serport_ldisc_hangup,
 	.write_wakeup =	serport_ldisc_write_wakeup
 };
 

@@ -1,14 +1,29 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *   ALSA driver for Intel ICH (i8x0) chipsets
  *
  *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *
+ *
  *   This code also contains alpha support for SiS 735 chipsets provided
  *   by Mike Pieper <mptei@users.sourceforge.net>. We have no datasheet
  *   for SiS735, so the code is not fully functional.
  *
+ *
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
+ *
  */      
 
 #include <linux/io.h>
@@ -23,6 +38,15 @@
 #include <sound/ac97_codec.h>
 #include <sound/info.h>
 #include <sound/initval.h>
+/* for 440MX workaround */
+#include <asm/pgtable.h>
+#include <asm/cacheflush.h>
+
+#ifdef CONFIG_KVM_GUEST
+#include <linux/kvm_para.h>
+#else
+#define kvm_para_available() (0)
+#endif
 
 MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("Intel 82801AA,82901AB,i810,i820,i830,i840,i845,MX440; SiS 7012; Ali 5455");
@@ -331,7 +355,7 @@ enum {
 struct ichdev {
 	unsigned int ichd;			/* ich device number */
 	unsigned long reg_offset;		/* offset to bmaddr */
-	__le32 *bdbar;				/* CPU address (32bit) */
+	u32 *bdbar;				/* CPU address (32bit) */
 	unsigned int bdbar_addr;		/* PCI bus address (32bit) */
 	struct snd_pcm_substream *substream;
 	unsigned int physbuf;			/* physical address (32bit) */
@@ -354,7 +378,7 @@ struct ichdev {
 	unsigned int ali_slot;			/* ALI DMA slot */
 	struct ac97_pcm *pcm;
 	int pcm_open_flag;
-	unsigned int prepared:1;
+	unsigned int page_attr_changed: 1;
 	unsigned int suspended: 1;
 };
 
@@ -657,7 +681,7 @@ static void snd_intel8x0_ali_codec_write(struct snd_ac97 *ac97, unsigned short r
 static void snd_intel8x0_setup_periods(struct intel8x0 *chip, struct ichdev *ichdev) 
 {
 	int idx;
-	__le32 *bdbar = ichdev->bdbar;
+	u32 *bdbar = ichdev->bdbar;
 	unsigned long port = ichdev->reg_offset;
 
 	iputdword(chip, port + ICH_REG_OFF_BDBAR, ichdev->bdbar_addr);
@@ -704,6 +728,25 @@ static void snd_intel8x0_setup_periods(struct intel8x0 *chip, struct ichdev *ich
 	iputbyte(chip, port + ichdev->roff_sr, ICH_FIFOE | ICH_BCIS | ICH_LVBCI);
 }
 
+#ifdef __i386__
+/*
+ * Intel 82443MX running a 100MHz processor system bus has a hardware bug,
+ * which aborts PCI busmaster for audio transfer.  A workaround is to set
+ * the pages as non-cached.  For details, see the errata in
+ *	http://download.intel.com/design/chipsets/specupdt/24505108.pdf
+ */
+static void fill_nocache(void *buf, int size, int nocache)
+{
+	size = (size + PAGE_SIZE - 1) >> PAGE_SHIFT;
+	if (nocache)
+		set_pages_uc(virt_to_page(buf), size);
+	else
+		set_pages_wb(virt_to_page(buf), size);
+}
+#else
+#define fill_nocache(buf, size, nocache) do { ; } while (0)
+#endif
+
 /*
  *  Interrupt handler
  */
@@ -714,9 +757,6 @@ static inline void snd_intel8x0_update(struct intel8x0 *chip, struct ichdev *ich
 	unsigned long flags;
 	int status, civ, i, step;
 	int ack = 0;
-
-	if (!(ichdev->prepared || chip->in_measurement) || ichdev->suspended)
-		return;
 
 	spin_lock_irqsave(&chip->reg_lock, flags);
 	status = igetbyte(chip, port + ichdev->roff_sr);
@@ -814,7 +854,7 @@ static int snd_intel8x0_pcm_trigger(struct snd_pcm_substream *substream, int cmd
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_RESUME:
 		ichdev->suspended = 0;
-		/* fall through */
+		/* fallthru */
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		val = ICH_IOCE | ICH_STARTBM;
@@ -822,7 +862,7 @@ static int snd_intel8x0_pcm_trigger(struct snd_pcm_substream *substream, int cmd
 		break;
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 		ichdev->suspended = 1;
-		/* fall through */
+		/* fallthru */
 	case SNDRV_PCM_TRIGGER_STOP:
 		val = 0;
 		break;
@@ -856,7 +896,7 @@ static int snd_intel8x0_ali_trigger(struct snd_pcm_substream *substream, int cmd
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_RESUME:
 		ichdev->suspended = 0;
-		/* fall through */
+		/* fallthru */
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
@@ -873,7 +913,7 @@ static int snd_intel8x0_ali_trigger(struct snd_pcm_substream *substream, int cmd
 		break;
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 		ichdev->suspended = 1;
-		/* fall through */
+		/* fallthru */
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 		/* pause */
@@ -902,16 +942,26 @@ static int snd_intel8x0_hw_params(struct snd_pcm_substream *substream,
 {
 	struct intel8x0 *chip = snd_pcm_substream_chip(substream);
 	struct ichdev *ichdev = get_ichdev(substream);
+	struct snd_pcm_runtime *runtime = substream->runtime;
 	int dbl = params_rate(hw_params) > 48000;
 	int err;
 
+	if (chip->fix_nocache && ichdev->page_attr_changed) {
+		fill_nocache(runtime->dma_area, runtime->dma_bytes, 0); /* clear */
+		ichdev->page_attr_changed = 0;
+	}
 	err = snd_pcm_lib_malloc_pages(substream, params_buffer_bytes(hw_params));
 	if (err < 0)
 		return err;
+	if (chip->fix_nocache) {
+		if (runtime->dma_area && ! ichdev->page_attr_changed) {
+			fill_nocache(runtime->dma_area, runtime->dma_bytes, 1);
+			ichdev->page_attr_changed = 1;
+		}
+	}
 	if (ichdev->pcm_open_flag) {
 		snd_ac97_pcm_close(ichdev->pcm);
 		ichdev->pcm_open_flag = 0;
-		ichdev->prepared = 0;
 	}
 	err = snd_ac97_pcm_open(ichdev->pcm, params_rate(hw_params),
 				params_channels(hw_params),
@@ -928,12 +978,16 @@ static int snd_intel8x0_hw_params(struct snd_pcm_substream *substream,
 
 static int snd_intel8x0_hw_free(struct snd_pcm_substream *substream)
 {
+	struct intel8x0 *chip = snd_pcm_substream_chip(substream);
 	struct ichdev *ichdev = get_ichdev(substream);
 
 	if (ichdev->pcm_open_flag) {
 		snd_ac97_pcm_close(ichdev->pcm);
 		ichdev->pcm_open_flag = 0;
-		ichdev->prepared = 0;
+	}
+	if (chip->fix_nocache && ichdev->page_attr_changed) {
+		fill_nocache(substream->runtime->dma_area, substream->runtime->dma_bytes, 0);
+		ichdev->page_attr_changed = 0;
 	}
 	return snd_pcm_lib_free_pages(substream);
 }
@@ -1008,7 +1062,6 @@ static int snd_intel8x0_pcm_prepare(struct snd_pcm_substream *substream)
 			ichdev->pos_shift = (runtime->sample_bits > 16) ? 2 : 1;
 	}
 	snd_intel8x0_setup_periods(chip, ichdev);
-	ichdev->prepared = 1;
 	return 0;
 }
 
@@ -1066,7 +1119,7 @@ static snd_pcm_uframes_t snd_intel8x0_pcm_pointer(struct snd_pcm_substream *subs
 	return bytes_to_frames(substream->runtime, ptr);
 }
 
-static const struct snd_pcm_hardware snd_intel8x0_stream =
+static struct snd_pcm_hardware snd_intel8x0_stream =
 {
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -1087,31 +1140,31 @@ static const struct snd_pcm_hardware snd_intel8x0_stream =
 	.fifo_size =		0,
 };
 
-static const unsigned int channels4[] = {
+static unsigned int channels4[] = {
 	2, 4,
 };
 
-static const struct snd_pcm_hw_constraint_list hw_constraints_channels4 = {
+static struct snd_pcm_hw_constraint_list hw_constraints_channels4 = {
 	.count = ARRAY_SIZE(channels4),
 	.list = channels4,
 	.mask = 0,
 };
 
-static const unsigned int channels6[] = {
+static unsigned int channels6[] = {
 	2, 4, 6,
 };
 
-static const struct snd_pcm_hw_constraint_list hw_constraints_channels6 = {
+static struct snd_pcm_hw_constraint_list hw_constraints_channels6 = {
 	.count = ARRAY_SIZE(channels6),
 	.list = channels6,
 	.mask = 0,
 };
 
-static const unsigned int channels8[] = {
+static unsigned int channels8[] = {
 	2, 4, 6, 8,
 };
 
-static const struct snd_pcm_hw_constraint_list hw_constraints_channels8 = {
+static struct snd_pcm_hw_constraint_list hw_constraints_channels8 = {
 	.count = ARRAY_SIZE(channels8),
 	.list = channels8,
 	.mask = 0,
@@ -1318,7 +1371,7 @@ static int snd_intel8x0_ali_spdifout_close(struct snd_pcm_substream *substream)
 }
 #endif
 
-static const struct snd_pcm_ops snd_intel8x0_playback_ops = {
+static struct snd_pcm_ops snd_intel8x0_playback_ops = {
 	.open =		snd_intel8x0_playback_open,
 	.close =	snd_intel8x0_playback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1329,7 +1382,7 @@ static const struct snd_pcm_ops snd_intel8x0_playback_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_capture_ops = {
+static struct snd_pcm_ops snd_intel8x0_capture_ops = {
 	.open =		snd_intel8x0_capture_open,
 	.close =	snd_intel8x0_capture_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1340,7 +1393,7 @@ static const struct snd_pcm_ops snd_intel8x0_capture_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_capture_mic_ops = {
+static struct snd_pcm_ops snd_intel8x0_capture_mic_ops = {
 	.open =		snd_intel8x0_mic_open,
 	.close =	snd_intel8x0_mic_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1351,7 +1404,7 @@ static const struct snd_pcm_ops snd_intel8x0_capture_mic_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_capture_mic2_ops = {
+static struct snd_pcm_ops snd_intel8x0_capture_mic2_ops = {
 	.open =		snd_intel8x0_mic2_open,
 	.close =	snd_intel8x0_mic2_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1362,7 +1415,7 @@ static const struct snd_pcm_ops snd_intel8x0_capture_mic2_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_capture2_ops = {
+static struct snd_pcm_ops snd_intel8x0_capture2_ops = {
 	.open =		snd_intel8x0_capture2_open,
 	.close =	snd_intel8x0_capture2_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1373,7 +1426,7 @@ static const struct snd_pcm_ops snd_intel8x0_capture2_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_spdif_ops = {
+static struct snd_pcm_ops snd_intel8x0_spdif_ops = {
 	.open =		snd_intel8x0_spdif_open,
 	.close =	snd_intel8x0_spdif_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1384,7 +1437,7 @@ static const struct snd_pcm_ops snd_intel8x0_spdif_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_ali_playback_ops = {
+static struct snd_pcm_ops snd_intel8x0_ali_playback_ops = {
 	.open =		snd_intel8x0_playback_open,
 	.close =	snd_intel8x0_playback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1395,7 +1448,7 @@ static const struct snd_pcm_ops snd_intel8x0_ali_playback_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_ali_capture_ops = {
+static struct snd_pcm_ops snd_intel8x0_ali_capture_ops = {
 	.open =		snd_intel8x0_capture_open,
 	.close =	snd_intel8x0_capture_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1406,7 +1459,7 @@ static const struct snd_pcm_ops snd_intel8x0_ali_capture_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_ali_capture_mic_ops = {
+static struct snd_pcm_ops snd_intel8x0_ali_capture_mic_ops = {
 	.open =		snd_intel8x0_mic_open,
 	.close =	snd_intel8x0_mic_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1417,7 +1470,7 @@ static const struct snd_pcm_ops snd_intel8x0_ali_capture_mic_ops = {
 	.pointer =	snd_intel8x0_pcm_pointer,
 };
 
-static const struct snd_pcm_ops snd_intel8x0_ali_ac97spdifout_ops = {
+static struct snd_pcm_ops snd_intel8x0_ali_ac97spdifout_ops = {
 	.open =		snd_intel8x0_ali_ac97spdifout_open,
 	.close =	snd_intel8x0_ali_ac97spdifout_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1454,15 +1507,12 @@ static struct snd_pcm_ops snd_intel8x0_ali_spdifout_ops = {
 
 struct ich_pcm_table {
 	char *suffix;
-	const struct snd_pcm_ops *playback_ops;
-	const struct snd_pcm_ops *capture_ops;
+	struct snd_pcm_ops *playback_ops;
+	struct snd_pcm_ops *capture_ops;
 	size_t prealloc_size;
 	size_t prealloc_max_size;
 	int ac97_idx;
 };
-
-#define intel8x0_dma_type(chip) \
-	((chip)->fix_nocache ? SNDRV_DMA_TYPE_DEV_UC : SNDRV_DMA_TYPE_DEV)
 
 static int snd_intel8x0_pcm1(struct intel8x0 *chip, int device,
 			     struct ich_pcm_table *rec)
@@ -1494,7 +1544,7 @@ static int snd_intel8x0_pcm1(struct intel8x0 *chip, int device,
 		strcpy(pcm->name, chip->card->shortname);
 	chip->pcm[device] = pcm;
 
-	snd_pcm_lib_preallocate_pages_for_all(pcm, intel8x0_dma_type(chip),
+	snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV,
 					      snd_dma_pci_data(chip->pci),
 					      rec->prealloc_size, rec->prealloc_max_size);
 
@@ -1675,7 +1725,7 @@ static void snd_intel8x0_mixer_free_ac97(struct snd_ac97 *ac97)
 	chip->ac97[ac97->num] = NULL;
 }
 
-static const struct ac97_pcm ac97_pcm_defs[] = {
+static struct ac97_pcm ac97_pcm_defs[] = {
 	/* front PCM */
 	{
 		.exclusive = 1,
@@ -2583,8 +2633,11 @@ static int snd_intel8x0_free(struct intel8x0 *chip)
       __hw_end:
 	if (chip->irq >= 0)
 		free_irq(chip->irq, chip);
-	if (chip->bdbars.area)
+	if (chip->bdbars.area) {
+		if (chip->fix_nocache)
+			fill_nocache(chip->bdbars.area, chip->bdbars.bytes, 0);
 		snd_dma_free_pages(&chip->bdbars);
+	}
 	if (chip->addr)
 		pci_iounmap(chip->pci, chip->addr);
 	if (chip->bmaddr)
@@ -2606,6 +2659,19 @@ static int intel8x0_suspend(struct device *dev)
 	int i;
 
 	snd_power_change_state(card, SNDRV_CTL_POWER_D3hot);
+	for (i = 0; i < chip->pcm_devs; i++)
+		snd_pcm_suspend_all(chip->pcm[i]);
+	/* clear nocache */
+	if (chip->fix_nocache) {
+		for (i = 0; i < chip->bdbars_count; i++) {
+			struct ichdev *ichdev = &chip->ichd[i];
+			if (ichdev->substream && ichdev->page_attr_changed) {
+				struct snd_pcm_runtime *runtime = ichdev->substream->runtime;
+				if (runtime->dma_area)
+					fill_nocache(runtime->dma_area, runtime->dma_bytes, 0);
+			}
+		}
+	}
 	for (i = 0; i < chip->ncodecs; i++)
 		snd_ac97_suspend(chip->ac97[i]);
 	if (chip->device_type == DEVICE_INTEL_ICH4)
@@ -2646,8 +2712,24 @@ static int intel8x0_resume(struct device *dev)
 			  ICH_PCM_SPDIF_1011);
 	}
 
+	/* refill nocache */
+	if (chip->fix_nocache)
+		fill_nocache(chip->bdbars.area, chip->bdbars.bytes, 1);
+
 	for (i = 0; i < chip->ncodecs; i++)
 		snd_ac97_resume(chip->ac97[i]);
+
+	/* refill nocache */
+	if (chip->fix_nocache) {
+		for (i = 0; i < chip->bdbars_count; i++) {
+			struct ichdev *ichdev = &chip->ichd[i];
+			if (ichdev->substream && ichdev->page_attr_changed) {
+				struct snd_pcm_runtime *runtime = ichdev->substream->runtime;
+				if (runtime->dma_area)
+					fill_nocache(runtime->dma_area, runtime->dma_bytes, 1);
+			}
+		}
+	}
 
 	/* resume status */
 	for (i = 0; i < chip->bdbars_count; i++) {
@@ -2797,7 +2879,6 @@ static void intel8x0_measure_ac97_clock(struct intel8x0 *chip)
 
 static struct snd_pci_quirk intel8x0_clock_list[] = {
 	SND_PCI_QUIRK(0x0e11, 0x008a, "AD1885", 41000),
-	SND_PCI_QUIRK(0x1014, 0x0581, "AD1981B", 48000),
 	SND_PCI_QUIRK(0x1028, 0x00be, "AD1885", 44100),
 	SND_PCI_QUIRK(0x1028, 0x0177, "AD1980", 48000),
 	SND_PCI_QUIRK(0x1028, 0x01ad, "AD1981B", 48000),
@@ -2855,8 +2936,10 @@ static void snd_intel8x0_proc_read(struct snd_info_entry * entry,
 
 static void snd_intel8x0_proc_init(struct intel8x0 *chip)
 {
-	snd_card_ro_proc_new(chip->card, "intel8x0", chip,
-			     snd_intel8x0_proc_read);
+	struct snd_info_entry *entry;
+
+	if (! snd_card_proc_new(chip->card, "intel8x0", &entry))
+		snd_info_set_text_ops(entry, chip, snd_intel8x0_proc_read);
 }
 
 static int snd_intel8x0_dev_free(struct snd_device *device)
@@ -2888,17 +2971,25 @@ static int snd_intel8x0_inside_vm(struct pci_dev *pci)
 		goto fini;
 	}
 
+	/* detect KVM and Parallels virtual environments */
+	result = kvm_para_available();
+#ifdef X86_FEATURE_HYPERVISOR
+	result = result || boot_cpu_has(X86_FEATURE_HYPERVISOR);
+#endif
+	if (!result)
+		goto fini;
+
 	/* check for known (emulated) devices */
-	result = 0;
-	if (pci->subsystem_vendor == PCI_SUBVENDOR_ID_REDHAT_QUMRANET &&
-	    pci->subsystem_device == PCI_SUBDEVICE_ID_QEMU) {
+	if (pci->subsystem_vendor == 0x1af4 &&
+	    pci->subsystem_device == 0x1100) {
 		/* KVM emulated sound, PCI SSID: 1af4:1100 */
 		msg = "enable KVM";
-		result = 1;
 	} else if (pci->subsystem_vendor == 0x1ab8) {
 		/* Parallels VM emulated sound, PCI SSID: 1ab8:xxxx */
 		msg = "enable Parallels VM";
-		result = 1;
+	} else {
+		msg = "disable (unknown or VT-d) VM";
+		result = 0;
 	}
 
 fini:
@@ -2977,12 +3068,6 @@ static int snd_intel8x0_create(struct snd_card *card,
 
 	chip->inside_vm = snd_intel8x0_inside_vm(pci);
 
-	/*
-	 * Intel 82443MX running a 100MHz processor system bus has a hardware
-	 * bug, which aborts PCI busmaster for audio transfer.  A workaround
-	 * is to set the pages as non-cached.  For details, see the errata in
-	 *     http://download.intel.com/design/chipsets/specupdt/24505108.pdf
-	 */
 	if (pci->vendor == PCI_VENDOR_ID_INTEL &&
 	    pci->device == PCI_DEVICE_ID_INTEL_440MX)
 		chip->fix_nocache = 1; /* enable workaround */
@@ -3054,7 +3139,7 @@ static int snd_intel8x0_create(struct snd_card *card,
 
 	/* allocate buffer descriptor lists */
 	/* the start of each lists must be aligned to 8 bytes */
-	if (snd_dma_alloc_pages(intel8x0_dma_type(chip), snd_dma_pci_data(pci),
+	if (snd_dma_alloc_pages(SNDRV_DMA_TYPE_DEV, snd_dma_pci_data(pci),
 				chip->bdbars_count * sizeof(u32) * ICH_MAX_FRAGS * 2,
 				&chip->bdbars) < 0) {
 		snd_intel8x0_free(chip);
@@ -3063,10 +3148,13 @@ static int snd_intel8x0_create(struct snd_card *card,
 	}
 	/* tables must be aligned to 8 bytes here, but the kernel pages
 	   are much bigger, so we don't care (on i386) */
+	/* workaround for 440MX */
+	if (chip->fix_nocache)
+		fill_nocache(chip->bdbars.area, chip->bdbars.bytes, 1);
 	int_sta_masks = 0;
 	for (i = 0; i < chip->bdbars_count; i++) {
 		ichdev = &chip->ichd[i];
-		ichdev->bdbar = ((__le32 *)chip->bdbars.area) +
+		ichdev->bdbar = ((u32 *)chip->bdbars.area) +
 			(i * ICH_MAX_FRAGS * 2);
 		ichdev->bdbar_addr = chip->bdbars.addr +
 			(i * sizeof(u32) * ICH_MAX_FRAGS * 2);

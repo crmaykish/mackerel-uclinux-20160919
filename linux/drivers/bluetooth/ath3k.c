@@ -1,7 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2008-2009 Atheros Communications Inc.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  */
+
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -67,7 +82,6 @@ static const struct usb_device_id ath3k_table[] = {
 	{ USB_DEVICE(0x0489, 0xe05f) },
 	{ USB_DEVICE(0x0489, 0xe076) },
 	{ USB_DEVICE(0x0489, 0xe078) },
-	{ USB_DEVICE(0x0489, 0xe095) },
 	{ USB_DEVICE(0x04c5, 0x1330) },
 	{ USB_DEVICE(0x04CA, 0x3004) },
 	{ USB_DEVICE(0x04CA, 0x3005) },
@@ -78,8 +92,6 @@ static const struct usb_device_id ath3k_table[] = {
 	{ USB_DEVICE(0x04CA, 0x300d) },
 	{ USB_DEVICE(0x04CA, 0x300f) },
 	{ USB_DEVICE(0x04CA, 0x3010) },
-	{ USB_DEVICE(0x04CA, 0x3014) },
-	{ USB_DEVICE(0x04CA, 0x3018) },
 	{ USB_DEVICE(0x0930, 0x0219) },
 	{ USB_DEVICE(0x0930, 0x021c) },
 	{ USB_DEVICE(0x0930, 0x0220) },
@@ -101,15 +113,11 @@ static const struct usb_device_id ath3k_table[] = {
 	{ USB_DEVICE(0x13d3, 0x3362) },
 	{ USB_DEVICE(0x13d3, 0x3375) },
 	{ USB_DEVICE(0x13d3, 0x3393) },
-	{ USB_DEVICE(0x13d3, 0x3395) },
 	{ USB_DEVICE(0x13d3, 0x3402) },
 	{ USB_DEVICE(0x13d3, 0x3408) },
 	{ USB_DEVICE(0x13d3, 0x3423) },
 	{ USB_DEVICE(0x13d3, 0x3432) },
-	{ USB_DEVICE(0x13d3, 0x3472) },
 	{ USB_DEVICE(0x13d3, 0x3474) },
-	{ USB_DEVICE(0x13d3, 0x3487) },
-	{ USB_DEVICE(0x13d3, 0x3490) },
 
 	/* Atheros AR5BBU12 with sflash firmware */
 	{ USB_DEVICE(0x0489, 0xE02C) },
@@ -125,9 +133,9 @@ MODULE_DEVICE_TABLE(usb, ath3k_table);
 
 #define BTUSB_ATH3012		0x80
 /* This table is to load patch and sysconfig files
- * for AR3012
- */
+ * for AR3012 */
 static const struct usb_device_id ath3k_blist_tbl[] = {
+
 	/* Atheros AR3012 with sflash firmware*/
 	{ USB_DEVICE(0x0489, 0xe04e), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x0489, 0xe04d), .driver_info = BTUSB_ATH3012 },
@@ -136,7 +144,6 @@ static const struct usb_device_id ath3k_blist_tbl[] = {
 	{ USB_DEVICE(0x0489, 0xe05f), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x0489, 0xe076), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x0489, 0xe078), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x0489, 0xe095), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x04c5, 0x1330), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x04ca, 0x3004), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x04ca, 0x3005), .driver_info = BTUSB_ATH3012 },
@@ -147,8 +154,6 @@ static const struct usb_device_id ath3k_blist_tbl[] = {
 	{ USB_DEVICE(0x04ca, 0x300d), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x04ca, 0x300f), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x04ca, 0x3010), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x04ca, 0x3014), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x04ca, 0x3018), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x0930, 0x0219), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x0930, 0x021c), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x0930, 0x0220), .driver_info = BTUSB_ATH3012 },
@@ -170,15 +175,11 @@ static const struct usb_device_id ath3k_blist_tbl[] = {
 	{ USB_DEVICE(0x13d3, 0x3362), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x13d3, 0x3375), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x13d3, 0x3393), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x13d3, 0x3395), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x13d3, 0x3402), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x13d3, 0x3408), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x13d3, 0x3423), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x13d3, 0x3432), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x13d3, 0x3472), .driver_info = BTUSB_ATH3012 },
 	{ USB_DEVICE(0x13d3, 0x3474), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x13d3, 0x3487), .driver_info = BTUSB_ATH3012 },
-	{ USB_DEVICE(0x13d3, 0x3490), .driver_info = BTUSB_ATH3012 },
 
 	/* Atheros AR5BBU22 with sflash firmware */
 	{ USB_DEVICE(0x0489, 0xE036), .driver_info = BTUSB_ATH3012 },
@@ -187,13 +188,6 @@ static const struct usb_device_id ath3k_blist_tbl[] = {
 	{ }	/* Terminating entry */
 };
 
-static inline void ath3k_log_failed_loading(int err, int len, int size,
-					    int count)
-{
-	BT_ERR("Firmware loading err = %d, len = %d, size = %d, count = %d",
-	       err, len, size, count);
-}
-
 #define USB_REQ_DFU_DNLOAD	1
 #define BULK_SIZE		4096
 #define FW_HDR_SIZE		20
@@ -201,11 +195,10 @@ static inline void ath3k_log_failed_loading(int err, int len, int size,
 #define TIMEGAP_USEC_MAX	100
 
 static int ath3k_load_firmware(struct usb_device *udev,
-			       const struct firmware *firmware)
+				const struct firmware *firmware)
 {
 	u8 *send_buf;
-	int len = 0;
-	int err, pipe, size, sent = 0;
+	int err, pipe, len, size, sent = 0;
 	int count = firmware->size;
 
 	BT_DBG("udev %p", udev);
@@ -218,16 +211,15 @@ static int ath3k_load_firmware(struct usb_device *udev,
 		return -ENOMEM;
 	}
 
-	memcpy(send_buf, firmware->data, FW_HDR_SIZE);
+	memcpy(send_buf, firmware->data, 20);
 	err = usb_control_msg(udev, pipe, USB_REQ_DFU_DNLOAD, USB_TYPE_VENDOR,
-			      0, 0, send_buf, FW_HDR_SIZE,
-			      USB_CTRL_SET_TIMEOUT);
+			      0, 0, send_buf, 20, USB_CTRL_SET_TIMEOUT);
 	if (err < 0) {
 		BT_ERR("Can't change to loading configuration err");
 		goto error;
 	}
-	sent += FW_HDR_SIZE;
-	count -= FW_HDR_SIZE;
+	sent += 20;
+	count -= 20;
 
 	pipe = usb_sndbulkpipe(udev, 0x02);
 
@@ -239,10 +231,11 @@ static int ath3k_load_firmware(struct usb_device *udev,
 		memcpy(send_buf, firmware->data + sent, size);
 
 		err = usb_bulk_msg(udev, pipe, send_buf, size,
-				   &len, 3000);
+					&len, 3000);
 
-		if (err || len != size) {
-			ath3k_log_failed_loading(err, len, size, count);
+		if (err || (len != size)) {
+			BT_ERR("Error in firmware loading err = %d,"
+				"len = %d, size = %d", err, len, size);
 			goto error;
 		}
 
@@ -276,7 +269,7 @@ static int ath3k_get_state(struct usb_device *udev, unsigned char *state)
 }
 
 static int ath3k_get_version(struct usb_device *udev,
-			     struct ath3k_version *version)
+			struct ath3k_version *version)
 {
 	int ret, pipe = 0;
 	struct ath3k_version *buf;
@@ -298,11 +291,10 @@ static int ath3k_get_version(struct usb_device *udev,
 }
 
 static int ath3k_load_fwfile(struct usb_device *udev,
-			     const struct firmware *firmware)
+		const struct firmware *firmware)
 {
 	u8 *send_buf;
-	int len = 0;
-	int err, pipe, size, count, sent = 0;
+	int err, pipe, len, size, count, sent = 0;
 	int ret;
 
 	count = firmware->size;
@@ -339,9 +331,10 @@ static int ath3k_load_fwfile(struct usb_device *udev,
 		memcpy(send_buf, firmware->data + sent, size);
 
 		err = usb_bulk_msg(udev, pipe, send_buf, size,
-				   &len, 3000);
-		if (err || len != size) {
-			ath3k_log_failed_loading(err, len, size, count);
+					&len, 3000);
+		if (err || (len != size)) {
+			BT_ERR("Error in firmware loading err = %d,"
+				"len = %d, size = %d", err, len, size);
 			kfree(send_buf);
 			return err;
 		}
@@ -388,7 +381,7 @@ static int ath3k_set_normal_mode(struct usb_device *udev)
 static int ath3k_load_patch(struct usb_device *udev)
 {
 	unsigned char fw_state;
-	char filename[ATH3K_NAME_LEN];
+	char filename[ATH3K_NAME_LEN] = {0};
 	const struct firmware *firmware;
 	struct ath3k_version fw_version;
 	__u32 pt_rom_version, pt_build_version;
@@ -441,7 +434,7 @@ static int ath3k_load_patch(struct usb_device *udev)
 static int ath3k_load_syscfg(struct usb_device *udev)
 {
 	unsigned char fw_state;
-	char filename[ATH3K_NAME_LEN];
+	char filename[ATH3K_NAME_LEN] = {0};
 	const struct firmware *firmware;
 	struct ath3k_version fw_version;
 	int clk_value, ret;
@@ -459,6 +452,7 @@ static int ath3k_load_syscfg(struct usb_device *udev)
 	}
 
 	switch (fw_version.ref_clock) {
+
 	case ATH3K_XTAL_FREQ_26M:
 		clk_value = 26;
 		break;
@@ -474,7 +468,7 @@ static int ath3k_load_syscfg(struct usb_device *udev)
 	}
 
 	snprintf(filename, ATH3K_NAME_LEN, "ar3k/ramps_0x%08x_%d%s",
-		 le32_to_cpu(fw_version.rom_version), clk_value, ".dfu");
+		le32_to_cpu(fw_version.rom_version), clk_value, ".dfu");
 
 	ret = request_firmware(&firmware, filename, &udev->dev);
 	if (ret < 0) {
@@ -489,7 +483,7 @@ static int ath3k_load_syscfg(struct usb_device *udev)
 }
 
 static int ath3k_probe(struct usb_interface *intf,
-		       const struct usb_device_id *id)
+			const struct usb_device_id *id)
 {
 	const struct firmware *firmware;
 	struct usb_device *udev = interface_to_usbdev(intf);
@@ -503,7 +497,6 @@ static int ath3k_probe(struct usb_interface *intf,
 	/* match device ID in ath3k blacklist table */
 	if (!id->driver_info) {
 		const struct usb_device_id *match;
-
 		match = usb_match_id(intf, ath3k_blist_tbl);
 		if (match)
 			id = match;
@@ -511,6 +504,7 @@ static int ath3k_probe(struct usb_interface *intf,
 
 	/* load patch and sysconfig files for AR3012 */
 	if (id->driver_info & BTUSB_ATH3012) {
+
 		/* New firmware with patch and sysconfig files already loaded */
 		if (le16_to_cpu(udev->descriptor.bcdDevice) > 0x0001)
 			return -ENODEV;
@@ -538,10 +532,10 @@ static int ath3k_probe(struct usb_interface *intf,
 	if (ret < 0) {
 		if (ret == -ENOENT)
 			BT_ERR("Firmware file \"%s\" not found",
-			       ATH3K_FIRMWARE);
+							ATH3K_FIRMWARE);
 		else
 			BT_ERR("Firmware file \"%s\" request failed (err=%d)",
-			       ATH3K_FIRMWARE, ret);
+							ATH3K_FIRMWARE, ret);
 		return ret;
 	}
 
@@ -553,7 +547,7 @@ static int ath3k_probe(struct usb_interface *intf,
 
 static void ath3k_disconnect(struct usb_interface *intf)
 {
-	BT_DBG("%s intf %p", __func__, intf);
+	BT_DBG("ath3k_disconnect intf %p", intf);
 }
 
 static struct usb_driver ath3k_driver = {

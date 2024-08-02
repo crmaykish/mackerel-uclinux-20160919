@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * arch/alpha/lib/ev6-memcpy.S
  * 21264 version by Rick Gorton <rick.gorton@alpha-processor.com>
@@ -20,7 +19,7 @@
  * Temp usage notes:
  *	$1,$2,		- scratch
  */
-#include <asm/export.h>
+
 	.set noreorder
 	.set noat
 
@@ -243,7 +242,6 @@ $nomoredata:
 	nop				# E :
 
 	.end memcpy
-	EXPORT_SYMBOL(memcpy)
 
 /* For backwards module compatibility.  */
 __memcpy = memcpy

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * IgorPlug-USB IR Receiver
  *
@@ -10,6 +9,16 @@
  * Based on the lirc_igorplugusb.c driver:
  *	Copyright (C) 2004 Jan M. Hochstein
  *	<hochstein@algo.informatik.tu-darmstadt.de>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 #include <linux/device.h>
 #include <linux/kernel.h>
@@ -47,7 +56,7 @@ static void igorplugusb_cmd(struct igorplugusb *ir, int cmd);
 
 static void igorplugusb_irdata(struct igorplugusb *ir, unsigned len)
 {
-	struct ir_raw_event rawir = {};
+	DEFINE_IR_RAW_EVENT(rawir);
 	unsigned i, start, overflow;
 
 	dev_dbg(ir->dev, "irdata: %*ph (len=%u)", len, ir->buf_in, len);
@@ -64,11 +73,9 @@ static void igorplugusb_irdata(struct igorplugusb *ir, unsigned len)
 	if (start >= len) {
 		dev_err(ir->dev, "receive overflow invalid: %u", overflow);
 	} else {
-		if (overflow > 0) {
+		if (overflow > 0)
 			dev_warn(ir->dev, "receive overflow, at least %u lost",
 								overflow);
-			ir_raw_event_reset(ir->rc);
-		}
 
 		do {
 			rawir.duration = ir->buf_in[i] * 85333;
@@ -130,9 +137,9 @@ static void igorplugusb_cmd(struct igorplugusb *ir, int cmd)
 		dev_err(ir->dev, "submit urb failed: %d", ret);
 }
 
-static void igorplugusb_timer(struct timer_list *t)
+static void igorplugusb_timer(unsigned long data)
 {
-	struct igorplugusb *ir = from_timer(ir, t, timer);
+	struct igorplugusb *ir = (struct igorplugusb *)data;
 
 	igorplugusb_cmd(ir, GET_INFRACODE);
 }
@@ -145,7 +152,7 @@ static int igorplugusb_probe(struct usb_interface *intf,
 	struct usb_endpoint_descriptor *ep;
 	struct igorplugusb *ir;
 	struct rc_dev *rc;
-	int ret = -ENOMEM;
+	int ret;
 
 	udev = interface_to_usbdev(intf);
 	idesc = intf->cur_altsetting;
@@ -167,7 +174,7 @@ static int igorplugusb_probe(struct usb_interface *intf,
 
 	ir->dev = &intf->dev;
 
-	timer_setup(&ir->timer, igorplugusb_timer, 0);
+	setup_timer(&ir->timer, igorplugusb_timer, (unsigned long)ir);
 
 	ir->request.bRequest = GET_INFRACODE;
 	ir->request.bRequestType = USB_TYPE_VENDOR | USB_DIR_IN;
@@ -175,7 +182,7 @@ static int igorplugusb_probe(struct usb_interface *intf,
 
 	ir->urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!ir->urb)
-		goto fail;
+		return -ENOMEM;
 
 	usb_fill_control_urb(ir->urb, udev,
 		usb_rcvctrlpipe(udev, 0), (uint8_t *)&ir->request,
@@ -183,23 +190,19 @@ static int igorplugusb_probe(struct usb_interface *intf,
 
 	usb_make_path(udev, ir->phys, sizeof(ir->phys));
 
-	rc = rc_allocate_device(RC_DRIVER_IR_RAW);
-	if (!rc)
-		goto fail;
-
-	rc->device_name = DRIVER_DESC;
+	rc = rc_allocate_device();
+	rc->input_name = DRIVER_DESC;
 	rc->input_phys = ir->phys;
 	usb_to_input_id(udev, &rc->input_id);
 	rc->dev.parent = &intf->dev;
+	rc->driver_type = RC_DRIVER_IR_RAW;
 	/*
 	 * This device can only store 36 pulses + spaces, which is not enough
 	 * for the NEC protocol and many others.
 	 */
-	rc->allowed_protocols = RC_PROTO_BIT_ALL_IR_DECODER &
-		~(RC_PROTO_BIT_NEC | RC_PROTO_BIT_NECX | RC_PROTO_BIT_NEC32 |
-		  RC_PROTO_BIT_RC6_6A_20 | RC_PROTO_BIT_RC6_6A_24 |
-		  RC_PROTO_BIT_RC6_6A_32 | RC_PROTO_BIT_RC6_MCE |
-		  RC_PROTO_BIT_SONY20 | RC_PROTO_BIT_SANYO);
+	rc->allowed_protocols = RC_BIT_ALL & ~(RC_BIT_NEC | RC_BIT_RC6_6A_20 |
+			RC_BIT_RC6_6A_24 | RC_BIT_RC6_6A_32 | RC_BIT_RC6_MCE |
+			RC_BIT_SONY20 | RC_BIT_MCE_KBD | RC_BIT_SANYO);
 
 	rc->priv = ir;
 	rc->driver_name = DRIVER_NAME;
@@ -211,7 +214,9 @@ static int igorplugusb_probe(struct usb_interface *intf,
 	ret = rc_register_device(rc);
 	if (ret) {
 		dev_err(&intf->dev, "failed to register rc device: %d", ret);
-		goto fail;
+		rc_free_device(rc);
+		usb_free_urb(ir->urb);
+		return ret;
 	}
 
 	usb_set_intfdata(intf, ir);
@@ -219,12 +224,6 @@ static int igorplugusb_probe(struct usb_interface *intf,
 	igorplugusb_cmd(ir, SET_INFRABUFFER_EMPTY);
 
 	return 0;
-fail:
-	rc_free_device(ir->rc);
-	usb_free_urb(ir->urb);
-	del_timer(&ir->timer);
-
-	return ret;
 }
 
 static void igorplugusb_disconnect(struct usb_interface *intf)
@@ -238,7 +237,7 @@ static void igorplugusb_disconnect(struct usb_interface *intf)
 	usb_free_urb(ir->urb);
 }
 
-static const struct usb_device_id igorplugusb_table[] = {
+static struct usb_device_id igorplugusb_table[] = {
 	/* Igor Plug USB (Atmel's Manufact. ID) */
 	{ USB_DEVICE(0x03eb, 0x0002) },
 	/* Fit PC2 Infrared Adapter */

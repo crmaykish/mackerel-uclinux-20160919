@@ -1,11 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0+
-// imx-pcm-fiq.c  --  ALSA Soc Audio Layer
-//
-// Copyright 2009 Sascha Hauer <s.hauer@pengutronix.de>
-//
-// This code is based on code copyrighted by Freescale,
-// Liam Girdwood, Javier Martin and probably others.
-
+/*
+ * imx-pcm-fiq.c  --  ALSA Soc Audio Layer
+ *
+ * Copyright 2009 Sascha Hauer <s.hauer@pengutronix.de>
+ *
+ * This code is based on code copyrighted by Freescale,
+ * Liam Girdwood, Javier Martin and probably others.
+ *
+ *  This program is free software; you can redistribute  it and/or modify it
+ *  under  the terms of  the GNU General  Public License as published by the
+ *  Free Software Foundation;  either version 2 of the  License, or (at your
+ *  option) any later version.
+ */
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -149,7 +154,7 @@ static snd_pcm_uframes_t snd_imx_pcm_pointer(struct snd_pcm_substream *substream
 	return bytes_to_frames(substream->runtime, iprtd->offset);
 }
 
-static const struct snd_pcm_hardware snd_imx_hardware = {
+static struct snd_pcm_hardware snd_imx_hardware = {
 	.info = SNDRV_PCM_INFO_INTERLEAVED |
 		SNDRV_PCM_INFO_BLOCK_TRANSFER |
 		SNDRV_PCM_INFO_MMAP |
@@ -212,17 +217,17 @@ static int snd_imx_pcm_mmap(struct snd_pcm_substream *substream,
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	int ret;
 
-	ret = dma_mmap_wc(substream->pcm->card->dev, vma, runtime->dma_area,
-			  runtime->dma_addr, runtime->dma_bytes);
+	ret = dma_mmap_writecombine(substream->pcm->card->dev, vma,
+		runtime->dma_area, runtime->dma_addr, runtime->dma_bytes);
 
-	pr_debug("%s: ret: %d %p %pad 0x%08zx\n", __func__, ret,
+	pr_debug("%s: ret: %d %p 0x%08x 0x%08x\n", __func__, ret,
 			runtime->dma_area,
-			&runtime->dma_addr,
+			runtime->dma_addr,
 			runtime->dma_bytes);
 	return ret;
 }
 
-static const struct snd_pcm_ops imx_pcm_ops = {
+static struct snd_pcm_ops imx_pcm_ops = {
 	.open		= snd_imx_open,
 	.close		= snd_imx_close,
 	.ioctl		= snd_pcm_lib_ioctl,
@@ -242,7 +247,8 @@ static int imx_pcm_preallocate_dma_buffer(struct snd_pcm *pcm, int stream)
 	buf->dev.type = SNDRV_DMA_TYPE_DEV;
 	buf->dev.dev = pcm->card->dev;
 	buf->private_data = NULL;
-	buf->area = dma_alloc_wc(pcm->card->dev, size, &buf->addr, GFP_KERNEL);
+	buf->area = dma_alloc_writecombine(pcm->card->dev, size,
+					   &buf->addr, GFP_KERNEL);
 	if (!buf->area)
 		return -ENOMEM;
 	buf->bytes = size;
@@ -277,7 +283,7 @@ static int imx_pcm_new(struct snd_soc_pcm_runtime *rtd)
 	return 0;
 }
 
-static int ssi_irq;
+static int ssi_irq = 0;
 
 static int imx_pcm_fiq_new(struct snd_soc_pcm_runtime *rtd)
 {
@@ -324,7 +330,8 @@ static void imx_pcm_free(struct snd_pcm *pcm)
 		if (!buf->area)
 			continue;
 
-		dma_free_wc(pcm->card->dev, buf->bytes, buf->area, buf->addr);
+		dma_free_writecombine(pcm->card->dev, buf->bytes,
+				      buf->area, buf->addr);
 		buf->area = NULL;
 	}
 }
@@ -336,7 +343,7 @@ static void imx_pcm_fiq_free(struct snd_pcm *pcm)
 	imx_pcm_free(pcm);
 }
 
-static const struct snd_soc_component_driver imx_soc_component_fiq = {
+static struct snd_soc_platform_driver imx_soc_platform_fiq = {
 	.ops		= &imx_pcm_ops,
 	.pcm_new	= imx_pcm_fiq_new,
 	.pcm_free	= imx_pcm_fiq_free,
@@ -363,8 +370,7 @@ int imx_pcm_fiq_init(struct platform_device *pdev,
 	params->dma_params_tx->maxburst = 4;
 	params->dma_params_rx->maxburst = 6;
 
-	ret = devm_snd_soc_register_component(&pdev->dev, &imx_soc_component_fiq,
-					      NULL, 0);
+	ret = snd_soc_register_platform(&pdev->dev, &imx_soc_platform_fiq);
 	if (ret)
 		goto failed_register;
 
@@ -380,6 +386,7 @@ EXPORT_SYMBOL_GPL(imx_pcm_fiq_init);
 
 void imx_pcm_fiq_exit(struct platform_device *pdev)
 {
+	snd_soc_unregister_platform(&pdev->dev);
 }
 EXPORT_SYMBOL_GPL(imx_pcm_fiq_exit);
 

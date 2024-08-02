@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;
@@ -10,7 +9,7 @@
 		};
 	};
 
-	cpuintc: cpuintc {
+	cpuintc: cpuintc@0 {
 		#address-cells = <0>;
 		#interrupt-cells = <1>;
 		interrupt-controller;

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for Samsung S5K6AAFX SXGA 1/6" 1.3M CMOS Image Sensor
  * with embedded SoC ISP.
@@ -8,6 +7,11 @@
  *
  * Based on a driver authored by Dongsoo Nathaniel Kim.
  * Copyright (C) 2009, Dongsoo Nathaniel Kim <dongsoo45.kim@samsung.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/clk.h>
@@ -24,7 +28,7 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
-#include <media/i2c/s5k6aa.h>
+#include <media/s5k6aa.h>
 
 static int debug;
 module_param(debug, int, 0644);
@@ -177,7 +181,7 @@ static const char * const s5k6aa_supply_names[] = {
 
 enum s5k6aa_gpio_id {
 	STBY,
-	RSET,
+	RST,
 	GPIO_NUM,
 };
 
@@ -417,7 +421,6 @@ static int s5k6aa_set_ahb_address(struct i2c_client *client)
 
 /**
  * s5k6aa_configure_pixel_clock - apply ISP main clock/PLL configuration
- * @s5k6aa: pointer to &struct s5k6aa describing the device
  *
  * Configure the internal ISP PLL for the required output frequency.
  * Locking: called with s5k6aa.lock mutex held.
@@ -666,7 +669,6 @@ static int s5k6aa_set_input_params(struct s5k6aa *s5k6aa)
 
 /**
  * s5k6aa_configure_video_bus - configure the video output interface
- * @s5k6aa: pointer to &struct s5k6aa describing the device
  * @bus_type: video bus type: parallel or MIPI-CSI
  * @nlanes: number of MIPI lanes to be used (MIPI-CSI only)
  *
@@ -684,7 +686,7 @@ static int s5k6aa_configure_video_bus(struct s5k6aa *s5k6aa,
 	 * but there is nothing indicating how to switch between both
 	 * in the datasheet. For now default BT.601 interface is assumed.
 	 */
-	if (bus_type == V4L2_MBUS_CSI2_DPHY)
+	if (bus_type == V4L2_MBUS_CSI2)
 		cfg = nlanes;
 	else if (bus_type != V4L2_MBUS_PARALLEL)
 		return -EINVAL;
@@ -722,10 +724,8 @@ static int s5k6aa_new_config_sync(struct i2c_client *client, int timeout,
 
 /**
  * s5k6aa_set_prev_config - write user preview register set
- * @s5k6aa: pointer to &struct s5k6aa describing the device
- * @preset: s5kaa preset to be applied
  *
- * Configure output resolution and color format, pixel clock
+ * Configure output resolution and color fromat, pixel clock
  * frequency range, device frame rate type and frame period range.
  */
 static int s5k6aa_set_prev_config(struct s5k6aa *s5k6aa,
@@ -777,7 +777,6 @@ static int s5k6aa_set_prev_config(struct s5k6aa *s5k6aa,
 
 /**
  * s5k6aa_initialize_isp - basic ISP MCU initialization
- * @sd: pointer to V4L2 sub-device descriptor
  *
  * Configure AHB addresses for registers read/write; configure PLLs for
  * required output pixel clock. The ISP power supply needs to be already
@@ -839,9 +838,9 @@ static int __s5k6aa_power_on(struct s5k6aa *s5k6aa)
 
 	if (s5k6aa->s_power)
 		ret = s5k6aa->s_power(1);
-	usleep_range(4000, 5000);
+	usleep_range(4000, 4000);
 
-	if (s5k6aa_gpio_deassert(s5k6aa, RSET))
+	if (s5k6aa_gpio_deassert(s5k6aa, RST))
 		msleep(20);
 
 	return ret;
@@ -851,7 +850,7 @@ static int __s5k6aa_power_off(struct s5k6aa *s5k6aa)
 {
 	int ret;
 
-	if (s5k6aa_gpio_assert(s5k6aa, RSET))
+	if (s5k6aa_gpio_assert(s5k6aa, RST))
 		usleep_range(100, 150);
 
 	if (s5k6aa->s_power) {
@@ -1510,7 +1509,7 @@ static int s5k6aa_configure_gpios(struct s5k6aa *s5k6aa,
 	int ret;
 
 	s5k6aa->gpio[STBY].gpio = -EINVAL;
-	s5k6aa->gpio[RSET].gpio  = -EINVAL;
+	s5k6aa->gpio[RST].gpio  = -EINVAL;
 
 	gpio = &pdata->gpio_stby;
 	if (gpio_is_valid(gpio->gpio)) {
@@ -1533,7 +1532,7 @@ static int s5k6aa_configure_gpios(struct s5k6aa *s5k6aa,
 		if (ret < 0)
 			return ret;
 
-		s5k6aa->gpio[RSET] = *gpio;
+		s5k6aa->gpio[RST] = *gpio;
 	}
 
 	return 0;
@@ -1572,15 +1571,14 @@ static int s5k6aa_probe(struct i2c_client *client,
 
 	sd = &s5k6aa->sd;
 	v4l2_i2c_subdev_init(sd, client, &s5k6aa_subdev_ops);
-	/* Static name; NEVER use in new drivers! */
-	strscpy(sd->name, DRIVER_NAME, sizeof(sd->name));
+	strlcpy(sd->name, DRIVER_NAME, sizeof(sd->name));
 
 	sd->internal_ops = &s5k6aa_subdev_internal_ops;
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 
 	s5k6aa->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
-	ret = media_entity_pads_init(&sd->entity, 1, &s5k6aa->pad);
+	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
+	ret = media_entity_init(&sd->entity, 1, &s5k6aa->pad, 0);
 	if (ret)
 		return ret;
 

@@ -172,9 +172,9 @@ struct xpc_arch_operations xpc_arch_ops;
  * Timer function to enforce the timelimit on the partition disengage.
  */
 static void
-xpc_timeout_partition_disengage(struct timer_list *t)
+xpc_timeout_partition_disengage(unsigned long data)
 {
-	struct xpc_partition *part = from_timer(part, t, disengage_timer);
+	struct xpc_partition *part = (struct xpc_partition *)data;
 
 	DBUG_ON(time_is_after_jiffies(part->disengage_timeout));
 
@@ -190,7 +190,7 @@ xpc_timeout_partition_disengage(struct timer_list *t)
  * specify when the next timeout should occur.
  */
 static void
-xpc_hb_beater(struct timer_list *unused)
+xpc_hb_beater(unsigned long dummy)
 {
 	xpc_arch_ops.increment_heartbeat();
 
@@ -205,7 +205,8 @@ static void
 xpc_start_hb_beater(void)
 {
 	xpc_arch_ops.heartbeat_init();
-	timer_setup(&xpc_hb_timer, xpc_hb_beater, 0);
+	init_timer(&xpc_hb_timer);
+	xpc_hb_timer.function = xpc_hb_beater;
 	xpc_hb_beater(0);
 }
 
@@ -279,6 +280,13 @@ xpc_hb_checker(void *ignore)
 
 			dev_dbg(xpc_part, "checking remote heartbeats\n");
 			xpc_check_remote_hb();
+
+			/*
+			 * On sn2 we need to periodically recheck to ensure no
+			 * IRQ/amo pairs have been missed.
+			 */
+			if (is_shub())
+				force_IRQ = 1;
 		}
 
 		/* check for outstanding IRQs */
@@ -409,8 +417,7 @@ xpc_setup_ch_structures(struct xpc_partition *part)
 	 * memory.
 	 */
 	DBUG_ON(part->channels != NULL);
-	part->channels = kcalloc(XPC_MAX_NCHANNELS,
-				 sizeof(struct xpc_channel),
+	part->channels = kzalloc(sizeof(struct xpc_channel) * XPC_MAX_NCHANNELS,
 				 GFP_KERNEL);
 	if (part->channels == NULL) {
 		dev_err(xpc_chan, "can't get memory for channels\n");
@@ -899,9 +906,8 @@ xpc_setup_partitions(void)
 	short partid;
 	struct xpc_partition *part;
 
-	xpc_partitions = kcalloc(xp_max_npartitions,
-				 sizeof(struct xpc_partition),
-				 GFP_KERNEL);
+	xpc_partitions = kzalloc(sizeof(struct xpc_partition) *
+				 xp_max_npartitions, GFP_KERNEL);
 	if (xpc_partitions == NULL) {
 		dev_err(xpc_part, "can't get memory for partition structure\n");
 		return -ENOMEM;
@@ -925,8 +931,10 @@ xpc_setup_partitions(void)
 		part->act_state = XPC_P_AS_INACTIVE;
 		XPC_SET_REASON(part, 0, 0);
 
-		timer_setup(&part->disengage_timer,
-			    xpc_timeout_partition_disengage, 0);
+		init_timer(&part->disengage_timer);
+		part->disengage_timer.function =
+		    xpc_timeout_partition_disengage;
+		part->disengage_timer.data = (unsigned long)part;
 
 		part->setup_state = XPC_P_SS_UNSET;
 		init_waitqueue_head(&part->teardown_wq);
@@ -1043,7 +1051,9 @@ xpc_do_exit(enum xp_retval reason)
 
 	xpc_teardown_partitions();
 
-	if (is_uv())
+	if (is_shub())
+		xpc_exit_sn2();
+	else if (is_uv())
 		xpc_exit_uv();
 }
 
@@ -1226,7 +1236,21 @@ xpc_init(void)
 	dev_set_name(xpc_part, "part");
 	dev_set_name(xpc_chan, "chan");
 
-	if (is_uv()) {
+	if (is_shub()) {
+		/*
+		 * The ia64-sn2 architecture supports at most 64 partitions.
+		 * And the inability to unregister remote amos restricts us
+		 * further to only support exactly 64 partitions on this
+		 * architecture, no less.
+		 */
+		if (xp_max_npartitions != 64) {
+			dev_err(xpc_part, "max #of partitions not set to 64\n");
+			ret = -EINVAL;
+		} else {
+			ret = xpc_init_sn2();
+		}
+
+	} else if (is_uv()) {
 		ret = xpc_init_uv();
 
 	} else {
@@ -1312,7 +1336,9 @@ out_2:
 
 	xpc_teardown_partitions();
 out_1:
-	if (is_uv())
+	if (is_shub())
+		xpc_exit_sn2();
+	else if (is_uv())
 		xpc_exit_uv();
 	return ret;
 }

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  The NFC Controller Interface is the communication protocol between an
  *  NFC Controller (NFCC) and a Device Host (DH).
@@ -7,6 +6,19 @@
  *  Copyright (C) 2014 Marvell International Ltd.
  *
  *  Written by Ilan Elias <ilane@ti.com>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License version 2
+ *  as published by the Free Software Foundation
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, see <http://www.gnu.org/licenses/>.
+ *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": %s: " fmt, __func__
@@ -69,7 +81,7 @@ static inline void nci_push_data_hdr(struct nci_dev *ndev,
 	struct nci_data_hdr *hdr;
 	int plen = skb->len;
 
-	hdr = skb_push(skb, NCI_DATA_HDR_SIZE);
+	hdr = (struct nci_data_hdr *) skb_push(skb, NCI_DATA_HDR_SIZE);
 	hdr->conn_id = conn_id;
 	hdr->rfu = 0;
 	hdr->plen = plen;
@@ -107,7 +119,7 @@ static int nci_queue_tx_data_frags(struct nci_dev *ndev,
 	conn_info = nci_get_conn_info_by_conn_id(ndev, conn_id);
 	if (!conn_info) {
 		rc = -EPROTO;
-		goto exit;
+		goto free_exit;
 	}
 
 	__skb_queue_head_init(&frags_q);
@@ -118,7 +130,7 @@ static int nci_queue_tx_data_frags(struct nci_dev *ndev,
 
 		skb_frag = nci_skb_alloc(ndev,
 					 (NCI_DATA_HDR_SIZE + frag_len),
-					 GFP_ATOMIC);
+					 GFP_KERNEL);
 		if (skb_frag == NULL) {
 			rc = -ENOMEM;
 			goto free_exit;
@@ -126,7 +138,7 @@ static int nci_queue_tx_data_frags(struct nci_dev *ndev,
 		skb_reserve(skb_frag, NCI_DATA_HDR_SIZE);
 
 		/* first, copy the data */
-		skb_put_data(skb_frag, data, frag_len);
+		memcpy(skb_put(skb_frag, frag_len), data, frag_len);
 
 		/* second, set the header */
 		nci_push_data_hdr(ndev, conn_id, skb_frag,
@@ -279,10 +291,8 @@ void nci_rx_data_packet(struct nci_dev *ndev, struct sk_buff *skb)
 		 nci_plen(skb->data));
 
 	conn_info = nci_get_conn_info_by_conn_id(ndev, nci_conn_id(skb->data));
-	if (!conn_info) {
-		kfree_skb(skb);
+	if (!conn_info)
 		return;
-	}
 
 	/* strip the nci data header */
 	skb_pull(skb, NCI_DATA_HDR_SIZE);

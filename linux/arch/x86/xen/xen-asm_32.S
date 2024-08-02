@@ -1,9 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Asm versions of Xen pv-ops, suitable for direct use.
+ * Asm versions of Xen pv-ops, suitable for either direct use or
+ * inlining.  The inline versions are the same as the direct-use
+ * versions, with the pre- and post-amble chopped off.
+ *
+ * This code is encoded for size rather than absolute efficiency, with
+ * a view to being able to inline as much as possible.
  *
  * We only bother with direct forms (ie, vcpu in pda) of the
- * operations here; the indirect forms are better handled in C.
+ * operations here; the indirect forms are better handled in C, since
+ * they're generally too large to inline anyway.
  */
 
 #include <asm/thread_info.h>
@@ -13,10 +18,35 @@
 
 #include <xen/interface/xen.h>
 
-#include <linux/linkage.h>
+#include "xen-asm.h"
 
-/* Pseudo-flag used for virtual NMI, which we don't implement yet */
-#define XEN_EFLAGS_NMI  0x80000000
+/*
+ * Force an event check by making a hypercall, but preserve regs
+ * before making the call.
+ */
+check_events:
+	push %eax
+	push %ecx
+	push %edx
+	call xen_force_evtchn_callback
+	pop %edx
+	pop %ecx
+	pop %eax
+	ret
+
+/*
+ * We can't use sysexit directly, because we're not running in ring0.
+ * But we can easily fake it up using iret.  Assuming xen_sysexit is
+ * jumped to with a standard stack frame, we can just strip it back to
+ * a standard iret frame and use iret.
+ */
+ENTRY(xen_sysexit)
+	movl PT_EAX(%esp), %eax			/* Shouldn't be necessary? */
+	orl $X86_EFLAGS_IF, PT_EFLAGS(%esp)
+	lea PT_EIP(%esp), %esp
+
+	jmp xen_iret
+ENDPROC(xen_sysexit)
 
 /*
  * This is run where a normal iret would be run, with the same stack setup:
@@ -56,7 +86,7 @@
 	_ASM_EXTABLE(1b,2b)
 .endm
 
-SYM_CODE_START(xen_iret)
+ENTRY(xen_iret)
 	/* test eflags for special cases */
 	testl $(X86_EFLAGS_VM | XEN_EFLAGS_NMI), 8(%esp)
 	jnz hyper_iret
@@ -122,14 +152,14 @@ xen_iret_end_crit:
 hyper_iret:
 	/* put this out of line since its very rarely used */
 	jmp hypercall_page + __HYPERVISOR_iret * 32
-SYM_CODE_END(xen_iret)
 
 	.globl xen_iret_start_crit, xen_iret_end_crit
 
 /*
- * This is called by xen_hypervisor_callback in entry_32.S when it sees
+ * This is called by xen_hypervisor_callback in entry.S when it sees
  * that the EIP at the time of interrupt was between
- * xen_iret_start_crit and xen_iret_end_crit.
+ * xen_iret_start_crit and xen_iret_end_crit.  We're passed the EIP in
+ * %eax so we can do a more refined determination of what to do.
  *
  * The stack format at this point is:
  *	----------------
@@ -138,46 +168,70 @@ SYM_CODE_END(xen_iret)
  *	 eflags		}  outer exception info
  *	 cs		}
  *	 eip		}
- *	----------------
+ *	---------------- <- edi (copy dest)
  *	 eax		:  outer eax if it hasn't been restored
  *	----------------
- *	 eflags		}
- *	 cs		}  nested exception info
- *	 eip		}
- *	 return address	: (into xen_hypervisor_callback)
+ *	 eflags		}  nested exception info
+ *	 cs		}   (no ss/esp because we're nested
+ *	 eip		}    from the same ring)
+ *	 orig_eax	}<- esi (copy src)
+ *	 - - - - - - - -
+ *	 fs		}
+ *	 es		}
+ *	 ds		}  SAVE_ALL state
+ *	 eax		}
+ *	  :		:
+ *	 ebx		}<- esp
+ *	----------------
  *
- * In order to deliver the nested exception properly, we need to discard the
- * nested exception frame such that when we handle the exception, we do it
- * in the context of the outer exception rather than starting a new one.
+ * In order to deliver the nested exception properly, we need to shift
+ * everything from the return addr up to the error code so it sits
+ * just under the outer exception info.  This means that when we
+ * handle the exception, we do it in the context of the outer
+ * exception rather than starting a new one.
  *
- * The only caveat is that if the outer eax hasn't been restored yet (i.e.
- * it's still on stack), we need to restore its value here.
+ * The only caveat is that if the outer eax hasn't been restored yet
+ * (ie, it's still on stack), we need to insert its value into the
+ * SAVE_ALL state before going on, since it's usermode state which we
+ * eventually need to restore.
  */
-SYM_CODE_START(xen_iret_crit_fixup)
+ENTRY(xen_iret_crit_fixup)
 	/*
 	 * Paranoia: Make sure we're really coming from kernel space.
 	 * One could imagine a case where userspace jumps into the
 	 * critical range address, but just before the CPU delivers a
-	 * PF, it decides to deliver an interrupt instead.  Unlikely?
-	 * Definitely.  Easy to avoid?  Yes.
+	 * GP, it decides to deliver an interrupt instead.  Unlikely?
+	 * Definitely.  Easy to avoid?  Yes.  The Intel documents
+	 * explicitly say that the reported EIP for a bad jump is the
+	 * jump instruction itself, not the destination, but some
+	 * virtual environments get this wrong.
 	 */
-	testb $2, 2*4(%esp)		/* nested CS */
-	jnz 2f
+	movl PT_CS(%esp), %ecx
+	andl $SEGMENT_RPL_MASK, %ecx
+	cmpl $USER_RPL, %ecx
+	je 2f
+
+	lea PT_ORIG_EAX(%esp), %esi
+	lea PT_EFLAGS(%esp), %edi
 
 	/*
 	 * If eip is before iret_restore_end then stack
 	 * hasn't been restored yet.
 	 */
-	cmpl $iret_restore_end, 1*4(%esp)
+	cmp $iret_restore_end, %eax
 	jae 1f
 
-	movl 4*4(%esp), %eax		/* load outer EAX */
-	ret $4*4			/* discard nested EIP, CS, and EFLAGS as
-					 * well as the just restored EAX */
+	movl 0+4(%edi), %eax		/* copy EAX (just above top of frame) */
+	movl %eax, PT_EAX(%esp)
 
-1:
-	ret $3*4			/* discard nested EIP, CS, and EFLAGS */
+	lea ESP_OFFSET(%edi), %edi	/* move dest up over saved regs */
 
-2:
-	ret
-SYM_CODE_END(xen_iret_crit_fixup)
+	/* set up the copy */
+1:	std
+	mov $PT_EIP / 4, %ecx		/* saved regs up to orig_eax */
+	rep movsl
+	cld
+
+	lea 4(%edi), %esp		/* point esp to new frame */
+2:	jmp xen_do_upcall
+

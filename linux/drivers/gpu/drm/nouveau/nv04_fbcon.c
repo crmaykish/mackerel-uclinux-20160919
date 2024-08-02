@@ -22,7 +22,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#include "nouveau_drv.h"
+#include "nouveau_drm.h"
 #include "nouveau_dma.h"
 #include "nouveau_fbcon.h"
 
@@ -30,7 +30,7 @@ int
 nv04_fbcon_copyarea(struct fb_info *info, const struct fb_copyarea *region)
 {
 	struct nouveau_fbdev *nfbdev = info->par;
-	struct nouveau_drm *drm = nouveau_drm(nfbdev->helper.dev);
+	struct nouveau_drm *drm = nouveau_drm(nfbdev->dev);
 	struct nouveau_channel *chan = drm->channel;
 	int ret;
 
@@ -50,7 +50,7 @@ int
 nv04_fbcon_fillrect(struct fb_info *info, const struct fb_fillrect *rect)
 {
 	struct nouveau_fbdev *nfbdev = info->par;
-	struct nouveau_drm *drm = nouveau_drm(nfbdev->helper.dev);
+	struct nouveau_drm *drm = nouveau_drm(nfbdev->dev);
 	struct nouveau_channel *chan = drm->channel;
 	int ret;
 
@@ -77,11 +77,12 @@ int
 nv04_fbcon_imageblit(struct fb_info *info, const struct fb_image *image)
 {
 	struct nouveau_fbdev *nfbdev = info->par;
-	struct nouveau_drm *drm = nouveau_drm(nfbdev->helper.dev);
+	struct nouveau_drm *drm = nouveau_drm(nfbdev->dev);
 	struct nouveau_channel *chan = drm->channel;
 	uint32_t fg;
 	uint32_t bg;
 	uint32_t dsize;
+	uint32_t width;
 	uint32_t *data = (uint32_t *)image->data;
 	int ret;
 
@@ -91,6 +92,9 @@ nv04_fbcon_imageblit(struct fb_info *info, const struct fb_image *image)
 	ret = RING_SPACE(chan, 8);
 	if (ret)
 		return ret;
+
+	width = ALIGN(image->width, 8);
+	dsize = ALIGN(width * image->height, 32) >> 5;
 
 	if (info->fix.visual == FB_VISUAL_TRUECOLOR ||
 	    info->fix.visual == FB_VISUAL_DIRECTCOLOR) {
@@ -107,11 +111,10 @@ nv04_fbcon_imageblit(struct fb_info *info, const struct fb_image *image)
 			 ((image->dx + image->width) & 0xffff));
 	OUT_RING(chan, bg);
 	OUT_RING(chan, fg);
-	OUT_RING(chan, (image->height << 16) | ALIGN(image->width, 8));
+	OUT_RING(chan, (image->height << 16) | width);
 	OUT_RING(chan, (image->height << 16) | image->width);
 	OUT_RING(chan, (image->dy << 16) | (image->dx & 0xffff));
 
-	dsize = ALIGN(ALIGN(image->width, 8) * image->height, 32) >> 5;
 	while (dsize) {
 		int iter_len = dsize > 128 ? 128 : dsize;
 
@@ -133,10 +136,10 @@ int
 nv04_fbcon_accel_init(struct fb_info *info)
 {
 	struct nouveau_fbdev *nfbdev = info->par;
-	struct drm_device *dev = nfbdev->helper.dev;
+	struct drm_device *dev = nfbdev->dev;
 	struct nouveau_drm *drm = nouveau_drm(dev);
 	struct nouveau_channel *chan = drm->channel;
-	struct nvif_device *device = &drm->client.device;
+	struct nvif_device *device = &drm->device;
 	int surface_fmt, pattern_fmt, rect_fmt;
 	int ret;
 

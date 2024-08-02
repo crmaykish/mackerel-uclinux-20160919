@@ -902,8 +902,6 @@ static int s3fb_set_par(struct fb_info *info)
 	value = clamp((htotal + hsstart + 1) / 2 + 2, hsstart + 4, htotal + 1);
 	svga_wcrt_multi(par->state.vgabase, s3_dtpc_regs, value);
 
-	if (screen_size > info->screen_size)
-		screen_size = info->screen_size;
 	memset_io(info->screen_base, 0x00, screen_size);
 	/* Device and screen back on */
 	svga_wcrt_mask(par->state.vgabase, 0x17, 0x80, 0x80);
@@ -1130,8 +1128,10 @@ static int s3_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 
 	/* Allocate and fill driver data structure */
 	info = framebuffer_alloc(sizeof(struct s3fb_info), &(dev->dev));
-	if (!info)
+	if (!info) {
+		dev_err(&(dev->dev), "cannot allocate memory\n");
 		return -ENOMEM;
+	}
 
 	par = info->par;
 	mutex_init(&par->open_lock);
@@ -1483,7 +1483,7 @@ static int s3_pci_resume(struct pci_dev* dev)
 
 /* List of boards that we are trying to support */
 
-static const struct pci_device_id s3_devices[] = {
+static struct pci_device_id s3_devices[] = {
 	{PCI_DEVICE(PCI_VENDOR_ID_S3, 0x8810), .driver_data = CHIP_XXX_TRIO},
 	{PCI_DEVICE(PCI_VENDOR_ID_S3, 0x8811), .driver_data = CHIP_XXX_TRIO},
 	{PCI_DEVICE(PCI_VENDOR_ID_S3, 0x8812), .driver_data = CHIP_M65_AURORA64VP},

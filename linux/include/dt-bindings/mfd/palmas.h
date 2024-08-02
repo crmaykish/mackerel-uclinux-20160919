@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * This header provides macros for Palmas device bindings.
  *
@@ -8,7 +7,7 @@
  *
  */
 
-#ifndef __DT_BINDINGS_PALMAS_H
+#ifndef __DT_BINDINGS_PALMAS_H__
 #define __DT_BINDINGS_PALMAS_H
 
 /* External control pins */

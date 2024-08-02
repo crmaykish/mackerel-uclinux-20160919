@@ -1,6 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2013 Red Hat, Inc., Frederic Weisbecker <fweisbec@redhat.com>
+ *
+ * Licensed under the terms of the GNU GPL License version 2
  *
  * Selftests for a few posix timers interface.
  *
@@ -66,7 +67,7 @@ static int check_diff(struct timeval start, struct timeval end)
 	diff = end.tv_usec - start.tv_usec;
 	diff += (end.tv_sec - start.tv_sec) * USECS_PER_SEC;
 
-	if (llabs(diff - DELAY * USECS_PER_SEC) > USECS_PER_SEC / 2) {
+	if (abs(diff - DELAY * USECS_PER_SEC) > USECS_PER_SEC / 2) {
 		printf("Diff too high: %lld..", diff);
 		return -1;
 	}
@@ -121,7 +122,7 @@ static int check_itimer(int which)
 	else if (which == ITIMER_REAL)
 		idle_loop();
 
-	err = gettimeofday(&end, NULL);
+	gettimeofday(&end, NULL);
 	if (err < 0) {
 		perror("Can't call gettimeofday()\n");
 		return -1;
@@ -174,7 +175,7 @@ static int check_timer_create(int which)
 
 	user_loop();
 
-	err = gettimeofday(&end, NULL);
+	gettimeofday(&end, NULL);
 	if (err < 0) {
 		perror("Can't call gettimeofday()\n");
 		return -1;

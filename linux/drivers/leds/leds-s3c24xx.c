@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* drivers/leds/leds-s3c24xx.c
  *
  * (c) 2006 Simtec Electronics
@@ -6,6 +5,10 @@
  *	Ben Dooks <ben@simtec.co.uk>
  *
  * S3C24XX - LEDs GPIO driver
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
 */
 
 #include <linux/kernel.h>
@@ -25,6 +28,11 @@ struct s3c24xx_gpio_led {
 	struct led_classdev		 cdev;
 	struct s3c24xx_led_platdata	*pdata;
 };
+
+static inline struct s3c24xx_gpio_led *pdev_to_gpio(struct platform_device *dev)
+{
+	return platform_get_drvdata(dev);
+}
 
 static inline struct s3c24xx_gpio_led *to_gpio(struct led_classdev *led_cdev)
 {
@@ -51,6 +59,15 @@ static void s3c24xx_led_set(struct led_classdev *led_cdev,
 	}
 }
 
+static int s3c24xx_led_remove(struct platform_device *dev)
+{
+	struct s3c24xx_gpio_led *led = pdev_to_gpio(dev);
+
+	led_classdev_unregister(&led->cdev);
+
+	return 0;
+}
+
 static int s3c24xx_led_probe(struct platform_device *dev)
 {
 	struct s3c24xx_led_platdata *pdata = dev_get_platdata(&dev->dev);
@@ -61,6 +78,8 @@ static int s3c24xx_led_probe(struct platform_device *dev)
 			   GFP_KERNEL);
 	if (!led)
 		return -ENOMEM;
+
+	platform_set_drvdata(dev, led);
 
 	led->cdev.brightness_set = s3c24xx_led_set;
 	led->cdev.default_trigger = pdata->def_trigger;
@@ -85,7 +104,7 @@ static int s3c24xx_led_probe(struct platform_device *dev)
 
 	/* register our new led device */
 
-	ret = devm_led_classdev_register(&dev->dev, &led->cdev);
+	ret = led_classdev_register(&dev->dev, &led->cdev);
 	if (ret < 0)
 		dev_err(&dev->dev, "led_classdev_register failed\n");
 
@@ -94,6 +113,7 @@ static int s3c24xx_led_probe(struct platform_device *dev)
 
 static struct platform_driver s3c24xx_led_driver = {
 	.probe		= s3c24xx_led_probe,
+	.remove		= s3c24xx_led_remove,
 	.driver		= {
 		.name		= "s3c24xx_led",
 	},

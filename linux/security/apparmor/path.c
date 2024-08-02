@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AppArmor security module
  *
@@ -6,6 +5,11 @@
  *
  * Copyright (C) 1998-2008 Novell/SUSE
  * Copyright 2009-2010 Canonical Ltd.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, version 2 of the
+ * License.
  */
 
 #include <linux/magic.h>
@@ -21,6 +25,7 @@
 #include "include/path.h"
 #include "include/policy.h"
 
+
 /* modified from dcache.c */
 static int prepend(char **buffer, int buflen, const char *str, int namelen)
 {
@@ -34,50 +39,13 @@ static int prepend(char **buffer, int buflen, const char *str, int namelen)
 
 #define CHROOT_NSCONNECT (PATH_CHROOT_REL | PATH_CHROOT_NSCONNECT)
 
-/* If the path is not connected to the expected root,
- * check if it is a sysctl and handle specially else remove any
- * leading / that __d_path may have returned.
- * Unless
- *     specifically directed to connect the path,
- * OR
- *     if in a chroot and doing chroot relative paths and the path
- *     resolves to the namespace root (would be connected outside
- *     of chroot) and specifically directed to connect paths to
- *     namespace root.
- */
-static int disconnect(const struct path *path, char *buf, char **name,
-		      int flags, const char *disconnected)
-{
-	int error = 0;
-
-	if (!(flags & PATH_CONNECT_PATH) &&
-	    !(((flags & CHROOT_NSCONNECT) == CHROOT_NSCONNECT) &&
-	      our_mnt(path->mnt))) {
-		/* disconnected path, don't return pathname starting
-		 * with '/'
-		 */
-		error = -EACCES;
-		if (**name == '/')
-			*name = *name + 1;
-	} else {
-		if (**name != '/')
-			/* CONNECT_PATH with missing root */
-			error = prepend(name, *name - buf, "/", 1);
-		if (!error && disconnected)
-			error = prepend(name, *name - buf, disconnected,
-					strlen(disconnected));
-	}
-
-	return error;
-}
-
 /**
  * d_namespace_path - lookup a name associated with a given path
  * @path: path to lookup  (NOT NULL)
  * @buf:  buffer to store path to  (NOT NULL)
+ * @buflen: length of @buf
  * @name: Returns - pointer for start of path name with in @buf (NOT NULL)
  * @flags: flags controlling path lookup
- * @disconnected: string to prefix to disconnected paths
  *
  * Handle path name lookup.
  *
@@ -85,14 +53,12 @@ static int disconnect(const struct path *path, char *buf, char **name,
  *          When no error the path name is returned in @name which points to
  *          to a position in @buf
  */
-static int d_namespace_path(const struct path *path, char *buf, char **name,
-			    int flags, const char *disconnected)
+static int d_namespace_path(struct path *path, char *buf, int buflen,
+			    char **name, int flags)
 {
 	char *res;
 	int error = 0;
 	int connected = 1;
-	int isdir = (flags & PATH_IS_DIR) ? 1 : 0;
-	int buflen = aa_g_path_max - isdir;
 
 	if (path->mnt->mnt_flags & MNT_INTERNAL) {
 		/* it's not mounted anywhere */
@@ -107,12 +73,9 @@ static int d_namespace_path(const struct path *path, char *buf, char **name,
 			/* TODO: convert over to using a per namespace
 			 * control instead of hard coded /proc
 			 */
-			error = prepend(name, *name - buf, "/proc", 5);
-			goto out;
-		} else
-			error = disconnect(path, buf, name, flags,
-					   disconnected);
-		goto out;
+			return prepend(name, *name - buf, "/proc", 5);
+		}
+		return 0;
 	}
 
 	/* resolve paths relative to chroot?*/
@@ -131,11 +94,8 @@ static int d_namespace_path(const struct path *path, char *buf, char **name,
 	 * be returned.
 	 */
 	if (!res || IS_ERR(res)) {
-		if (PTR_ERR(res) == -ENAMETOOLONG) {
-			error = -ENAMETOOLONG;
-			*name = buf;
-			goto out;
-		}
+		if (PTR_ERR(res) == -ENAMETOOLONG)
+			return -ENAMETOOLONG;
 		connected = 0;
 		res = dentry_path_raw(path->dentry, buf, buflen);
 		if (IS_ERR(res)) {
@@ -148,9 +108,6 @@ static int d_namespace_path(const struct path *path, char *buf, char **name,
 
 	*name = res;
 
-	if (!connected)
-		error = disconnect(path, buf, name, flags, disconnected);
-
 	/* Handle two cases:
 	 * 1. A deleted dentry && profile is not allowing mediation of deleted
 	 * 2. On some filesystems, newly allocated dentries appear to the
@@ -158,47 +115,61 @@ static int d_namespace_path(const struct path *path, char *buf, char **name,
 	 *    allocated.
 	 */
 	if (d_unlinked(path->dentry) && d_is_positive(path->dentry) &&
-	    !(flags & (PATH_MEDIATE_DELETED | PATH_DELEGATE_DELETED))) {
+	    !(flags & PATH_MEDIATE_DELETED)) {
 			error = -ENOENT;
 			goto out;
 	}
 
-out:
-	/*
-	 * Append "/" to the pathname.  The root directory is a special
-	 * case; it already ends in slash.
+	/* If the path is not connected to the expected root,
+	 * check if it is a sysctl and handle specially else remove any
+	 * leading / that __d_path may have returned.
+	 * Unless
+	 *     specifically directed to connect the path,
+	 * OR
+	 *     if in a chroot and doing chroot relative paths and the path
+	 *     resolves to the namespace root (would be connected outside
+	 *     of chroot) and specifically directed to connect paths to
+	 *     namespace root.
 	 */
-	if (!error && isdir && ((*name)[1] != '\0' || (*name)[0] != '/'))
-		strcpy(&buf[aa_g_path_max - 2], "/");
+	if (!connected) {
+		if (!(flags & PATH_CONNECT_PATH) &&
+			   !(((flags & CHROOT_NSCONNECT) == CHROOT_NSCONNECT) &&
+			     our_mnt(path->mnt))) {
+			/* disconnected path, don't return pathname starting
+			 * with '/'
+			 */
+			error = -EACCES;
+			if (*res == '/')
+				*name = res + 1;
+		}
+	}
 
+out:
 	return error;
 }
 
 /**
- * aa_path_name - get the pathname to a buffer ensure dir / is appended
- * @path: path the file  (NOT NULL)
- * @flags: flags controlling path name generation
- * @buffer: buffer to put name in (NOT NULL)
- * @name: Returns - the generated path name if !error (NOT NULL)
- * @info: Returns - information on why the path lookup failed (MAYBE NULL)
- * @disconnected: string to prepend to disconnected paths
+ * get_name_to_buffer - get the pathname to a buffer ensure dir / is appended
+ * @path: path to get name for  (NOT NULL)
+ * @flags: flags controlling path lookup
+ * @buffer: buffer to put name in  (NOT NULL)
+ * @size: size of buffer
+ * @name: Returns - contains position of path name in @buffer (NOT NULL)
  *
- * @name is a pointer to the beginning of the pathname (which usually differs
- * from the beginning of the buffer), or NULL.  If there is an error @name
- * may contain a partial or invalid name that can be used for audit purposes,
- * but it can not be used for mediation.
- *
- * We need PATH_IS_DIR to indicate whether the file is a directory or not
- * because the file may not yet exist, and so we cannot check the inode's
- * file type.
- *
- * Returns: %0 else error code if could retrieve name
+ * Returns: %0 else error on failure
  */
-int aa_path_name(const struct path *path, int flags, char *buffer,
-		 const char **name, const char **info, const char *disconnected)
+static int get_name_to_buffer(struct path *path, int flags, char *buffer,
+			      int size, char **name, const char **info)
 {
-	char *str = NULL;
-	int error = d_namespace_path(path, buffer, &str, flags, disconnected);
+	int adjust = (flags & PATH_IS_DIR) ? 1 : 0;
+	int error = d_namespace_path(path, buffer, size - adjust, name, flags);
+
+	if (!error && (flags & PATH_IS_DIR) && (*name)[1] != '\0')
+		/*
+		 * Append "/" to the pathname.  The root directory is a special
+		 * case; it already ends in slash.
+		 */
+		strcpy(&buffer[size - 2], "/");
 
 	if (info && error) {
 		if (error == -ENOENT)
@@ -211,6 +182,54 @@ int aa_path_name(const struct path *path, int flags, char *buffer,
 			*info = "Failed name lookup";
 	}
 
+	return error;
+}
+
+/**
+ * aa_path_name - compute the pathname of a file
+ * @path: path the file  (NOT NULL)
+ * @flags: flags controlling path name generation
+ * @buffer: buffer that aa_get_name() allocated  (NOT NULL)
+ * @name: Returns - the generated path name if !error (NOT NULL)
+ * @info: Returns - information on why the path lookup failed (MAYBE NULL)
+ *
+ * @name is a pointer to the beginning of the pathname (which usually differs
+ * from the beginning of the buffer), or NULL.  If there is an error @name
+ * may contain a partial or invalid name that can be used for audit purposes,
+ * but it can not be used for mediation.
+ *
+ * We need PATH_IS_DIR to indicate whether the file is a directory or not
+ * because the file may not yet exist, and so we cannot check the inode's
+ * file type.
+ *
+ * Returns: %0 else error code if could retrieve name
+ */
+int aa_path_name(struct path *path, int flags, char **buffer, const char **name,
+		 const char **info)
+{
+	char *buf, *str = NULL;
+	int size = 256;
+	int error;
+
+	*name = NULL;
+	*buffer = NULL;
+	for (;;) {
+		/* freed by caller */
+		buf = kmalloc(size, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
+
+		error = get_name_to_buffer(path, flags, buf, size, &str, info);
+		if (error != -ENAMETOOLONG)
+			break;
+
+		kfree(buf);
+		size <<= 1;
+		if (size > aa_g_path_max)
+			return -ENAMETOOLONG;
+		*info = NULL;
+	}
+	*buffer = buf;
 	*name = str;
 
 	return error;

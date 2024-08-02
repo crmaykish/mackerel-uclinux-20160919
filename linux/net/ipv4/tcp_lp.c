@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TCP Low Priority (TCP-LP)
  *
@@ -38,7 +37,7 @@
 #include <net/tcp.h>
 
 /* resolution of owd */
-#define LP_RESOL       TCP_TS_HZ
+#define LP_RESOL       1000
 
 /**
  * enum tcp_lp_state
@@ -148,9 +147,9 @@ static u32 tcp_lp_remote_hz_estimator(struct sock *sk)
 	    tp->rx_opt.rcv_tsecr == lp->local_ref_time)
 		goto out;
 
-	m = TCP_TS_HZ *
-	    (tp->rx_opt.rcv_tsval - lp->remote_ref_time) /
-	    (tp->rx_opt.rcv_tsecr - lp->local_ref_time);
+	m = HZ * (tp->rx_opt.rcv_tsval -
+		  lp->remote_ref_time) / (tp->rx_opt.rcv_tsecr -
+					  lp->local_ref_time);
 	if (m < 0)
 		m = -m;
 
@@ -195,7 +194,7 @@ static u32 tcp_lp_owd_calculator(struct sock *sk)
 	if (lp->flag & LP_VALID_RHZ) {
 		owd =
 		    tp->rx_opt.rcv_tsval * (LP_RESOL / lp->remote_hz) -
-		    tp->rx_opt.rcv_tsecr * (LP_RESOL / TCP_TS_HZ);
+		    tp->rx_opt.rcv_tsecr * (LP_RESOL / HZ);
 		if (owd < 0)
 			owd = -owd;
 	}
@@ -261,23 +260,20 @@ static void tcp_lp_rtt_sample(struct sock *sk, u32 rtt)
  * newReno in increase case.
  * We work it out by following the idea from TCP-LP's paper directly
  */
-static void tcp_lp_pkts_acked(struct sock *sk, const struct ack_sample *sample)
+static void tcp_lp_pkts_acked(struct sock *sk, u32 num_acked, s32 rtt_us)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct lp *lp = inet_csk_ca(sk);
-	u32 now = tcp_time_stamp(tp);
-	u32 delta;
 
-	if (sample->rtt_us > 0)
-		tcp_lp_rtt_sample(sk, sample->rtt_us);
+	if (rtt_us > 0)
+		tcp_lp_rtt_sample(sk, rtt_us);
 
 	/* calc inference */
-	delta = now - tp->rx_opt.rcv_tsecr;
-	if ((s32)delta > 0)
-		lp->inference = 3 * delta;
+	if (tcp_time_stamp > tp->rx_opt.rcv_tsecr)
+		lp->inference = 3 * (tcp_time_stamp - tp->rx_opt.rcv_tsecr);
 
 	/* test if within inference */
-	if (lp->last_drop && (now - lp->last_drop < lp->inference))
+	if (lp->last_drop && (tcp_time_stamp - lp->last_drop < lp->inference))
 		lp->flag |= LP_WITHIN_INF;
 	else
 		lp->flag &= ~LP_WITHIN_INF;
@@ -314,13 +310,12 @@ static void tcp_lp_pkts_acked(struct sock *sk, const struct ack_sample *sample)
 		tp->snd_cwnd = max(tp->snd_cwnd >> 1U, 1U);
 
 	/* record this drop time */
-	lp->last_drop = now;
+	lp->last_drop = tcp_time_stamp;
 }
 
 static struct tcp_congestion_ops tcp_lp __read_mostly = {
 	.init = tcp_lp_init,
 	.ssthresh = tcp_reno_ssthresh,
-	.undo_cwnd = tcp_reno_undo_cwnd,
 	.cong_avoid = tcp_lp_cong_avoid,
 	.pkts_acked = tcp_lp_pkts_acked,
 

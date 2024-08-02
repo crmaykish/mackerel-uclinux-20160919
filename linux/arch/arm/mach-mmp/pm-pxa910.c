@@ -1,6 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * PXA910 Power Management Routines
+ *
+ * This software program is licensed subject to the GNU General Public License
+ * (GPL).Version 2,June 1991, available at http://www.fsf.org/copyleft/gpl.html
  *
  * (C) Copyright 2009 Marvell International Ltd.
  * All Rights Reserved
@@ -17,12 +19,12 @@
 #include <linux/irq.h>
 #include <asm/mach-types.h>
 #include <asm/outercache.h>
-
-#include "cputype.h"
-#include "addr-map.h"
-#include "pm-pxa910.h"
-#include "regs-icu.h"
-#include "irqs.h"
+#include <mach/hardware.h>
+#include <mach/cputype.h>
+#include <mach/addr-map.h>
+#include <mach/pm-pxa910.h>
+#include <mach/regs-icu.h>
+#include <mach/irqs.h>
 
 int pxa910_set_wake(struct irq_data *data, unsigned int on)
 {

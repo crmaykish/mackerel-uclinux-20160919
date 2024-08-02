@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Linux driver for Disk-On-Chip devices
  *
@@ -6,6 +5,21 @@
  * Copyright © 1999-2010 David Woodhouse <dwmw2@infradead.org>
  * Copyright © 2002-2003 Greg Ungerer <gerg@snapgear.com>
  * Copyright © 2002-2003 SnapGear Inc
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
 #ifndef __MTD_DOC2000_H__
@@ -99,6 +113,25 @@ static inline void WriteDOC_(u8 data, u16 __iomem *addr, unsigned long reg)
 	wmb();
 }
 #define DOC_IOREMAP_LEN 0x4000
+
+#elif defined(CONFIG_SH_SECUREEDGE5410)
+
+static inline unsigned char _ReadDOC_(unsigned long adr, int reg)
+{
+	readb((adr ^ 0x04000000) & 0xf4000000); /* read other flash chip */
+	return(readb(((unsigned long)adr)+(reg)));
+}
+
+static inline void _WriteDOC_(unsigned char d, unsigned long adr, int reg)
+{
+	readb((adr ^ 0x04000000) & 0xf4000000); /* read other flash chip */
+	writeb(d, ((unsigned long)adr) + (reg));
+}
+
+#define ReadDOC_(adr, reg) _ReadDOC_((unsigned long)(adr), (int)(reg))
+#define WriteDOC_(d, adr, reg) _WriteDOC_((unsigned char)(d), (unsigned long)(adr), (int)(reg))
+
+#define DOC_IOREMAP_LEN 0x2000
 #else
 #define ReadDOC_(adr, reg)      readb((void __iomem *)(adr) + (reg))
 #define WriteDOC_(d, adr, reg)  writeb(d, (void __iomem *)(adr) + (reg))

@@ -1,9 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Shared Transport Line discipline driver Core
  *	This hooks up ST KIM driver and ST LL driver
  *  Copyright (C) 2009-2010 Texas Instruments
  *  Author: Pavan Savoy <pavan_savoy@ti.com>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License version 2 as
+ *  published by the Free Software Foundation.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  */
 
 #define pr_fmt(fmt)	"(stc): " fmt
@@ -15,7 +28,6 @@
 #include <linux/skbuff.h>
 
 #include <linux/ti_wilink_st.h>
-#include <linux/netdevice.h>
 
 extern void st_kim_recv(void *, const unsigned char *, long);
 void st_int_recv(void *, const unsigned char *, long);
@@ -129,7 +141,7 @@ static void st_send_frame(unsigned char chnl_id, struct st_data_s *st_gdata)
  * This function is being called with spin lock held, protocol drivers are
  * only expected to complete their waits and do nothing more than that.
  */
-static void st_reg_complete(struct st_data_s *st_gdata, int err)
+static void st_reg_complete(struct st_data_s *st_gdata, char err)
 {
 	unsigned char i = 0;
 	pr_info(" %s ", __func__);
@@ -250,7 +262,7 @@ void st_int_recv(void *disc_data,
 	while (count) {
 		if (st_gdata->rx_count) {
 			len = min_t(unsigned int, st_gdata->rx_count, count);
-			skb_put_data(st_gdata->rx_skb, ptr, len);
+			memcpy(skb_put(st_gdata->rx_skb, len), ptr, len);
 			st_gdata->rx_count -= len;
 			count -= len;
 			ptr += len;
@@ -424,7 +436,7 @@ static void st_int_enqueue(struct st_data_s *st_gdata, struct sk_buff *skb)
 	case ST_LL_AWAKE_TO_ASLEEP:
 		pr_err("ST LL is illegal state(%ld),"
 			   "purging received skb.", st_ll_getstate(st_gdata));
-		dev_kfree_skb_irq(skb);
+		kfree_skb(skb);
 		break;
 	case ST_LL_ASLEEP:
 		skb_queue_tail(&st_gdata->tx_waitq, skb);
@@ -433,7 +445,7 @@ static void st_int_enqueue(struct st_data_s *st_gdata, struct sk_buff *skb)
 	default:
 		pr_err("ST LL is illegal state(%ld),"
 			   "purging received skb.", st_ll_getstate(st_gdata));
-		dev_kfree_skb_irq(skb);
+		kfree_skb(skb);
 		break;
 	}
 
@@ -487,7 +499,7 @@ void st_tx_wakeup(struct st_data_s *st_data)
 				spin_unlock_irqrestore(&st_data->lock, flags);
 				break;
 			}
-			dev_kfree_skb_irq(skb);
+			kfree_skb(skb);
 			spin_unlock_irqrestore(&st_data->lock, flags);
 		}
 		/* if wake-up is set in another context- restart sending */
@@ -620,6 +632,7 @@ long st_register(struct st_proto_s *new_proto)
 		spin_unlock_irqrestore(&st_gdata->lock, flags);
 		return err;
 	}
+	pr_debug("done %s(%d) ", __func__, new_proto->chnl_id);
 }
 EXPORT_SYMBOL_GPL(st_register);
 

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Hi6220 stub clock driver
  *
@@ -6,6 +5,11 @@
  * Copyright (c) 2015 Linaro Limited.
  *
  * Author: Leo Yan <leo.yan@linaro.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #include <linux/clk-provider.h>
@@ -231,7 +235,7 @@ static int hi6220_stub_clk_probe(struct platform_device *pdev)
 	init.name = "acpu0";
 	init.ops = &hi6220_stub_clk_ops;
 	init.num_parents = 0;
-	init.flags = 0;
+	init.flags = CLK_IS_ROOT;
 
 	clk = devm_clk_register(dev, &stub_clk->hw);
 	if (IS_ERR(clk))

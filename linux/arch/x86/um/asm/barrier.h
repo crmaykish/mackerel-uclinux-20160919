@@ -1,8 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_UM_BARRIER_H_
 #define _ASM_UM_BARRIER_H_
 
-#include <asm/alternative.h>
+#include <asm/asm.h>
+#include <asm/segment.h>
+#include <asm/cpufeature.h>
+#include <asm/cmpxchg.h>
+#include <asm/nops.h>
+
+#include <linux/kernel.h>
+#include <linux/irqflags.h>
 
 /*
  * Force strict CPU ordering.
@@ -23,6 +29,20 @@
 
 #endif /* CONFIG_X86_32 */
 
-#include <asm-generic/barrier.h>
+#ifdef CONFIG_X86_PPRO_FENCE
+#define dma_rmb()	rmb()
+#else /* CONFIG_X86_PPRO_FENCE */
+#define dma_rmb()	barrier()
+#endif /* CONFIG_X86_PPRO_FENCE */
+#define dma_wmb()	barrier()
+
+#define smp_mb()	barrier()
+#define smp_rmb()	barrier()
+#define smp_wmb()	barrier()
+
+#define smp_store_mb(var, value) do { WRITE_ONCE(var, value); barrier(); } while (0)
+
+#define read_barrier_depends()		do { } while (0)
+#define smp_read_barrier_depends()	do { } while (0)
 
 #endif

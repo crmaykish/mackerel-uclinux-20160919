@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*****************************************************************************/
 
 /*
@@ -6,6 +5,20 @@
  *
  *	Copyright (C) 1999, 2005, 2010
  *	    Thomas Sailer (t.sailer@alumni.ethz.ch)
+ *
+ *	This program is free software; you can redistribute it and/or modify
+ *	it under the terms of the GNU General Public License as published by
+ *	the Free Software Foundation; either version 2 of the License, or
+ *	(at your option) any later version.
+ *
+ *	This program is distributed in the hope that it will be useful,
+ *	but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *	GNU General Public License for more details.
+ *
+ *	You should have received a copy of the GNU General Public License
+ *	along with this program; if not, write to the Free Software
+ *	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *
  *  Based on parport_pc.c
  *
@@ -37,8 +50,11 @@
 #include <linux/completion.h>
 #include <linux/kref.h>
 #include <linux/slab.h>
-#include <linux/sched/signal.h>
 
+/*
+ * Version Information
+ */
+#define DRIVER_VERSION "v0.6"
 #define DRIVER_AUTHOR "Thomas M. Sailer, t.sailer@alumni.ethz.ch"
 #define DRIVER_DESC "USB Parport Cable driver for Cables using the Lucent Technologies USS720 Chip"
 
@@ -71,7 +87,6 @@ static void destroy_priv(struct kref *kref)
 
 	dev_dbg(&priv->usbdev->dev, "destroying priv datastructure\n");
 	usb_put_dev(priv->usbdev);
-	priv->usbdev = NULL;
 	kfree(priv);
 }
 
@@ -135,8 +150,10 @@ static struct uss720_async_request *submit_async_request(struct parport_uss720_p
 	if (!usbdev)
 		return NULL;
 	rq = kzalloc(sizeof(struct uss720_async_request), mem_flags);
-	if (!rq)
+	if (!rq) {
+		dev_err(&usbdev->dev, "submit_async_request out of memory\n");
 		return NULL;
+	}
 	kref_init(&rq->ref_count);
 	INIT_LIST_HEAD(&rq->asynclist);
 	init_completion(&rq->compl);
@@ -145,6 +162,7 @@ static struct uss720_async_request *submit_async_request(struct parport_uss720_p
 	rq->urb = usb_alloc_urb(0, mem_flags);
 	if (!rq->urb) {
 		kref_put(&rq->ref_count, destroy_async);
+		dev_err(&usbdev->dev, "submit_async_request out of memory\n");
 		return NULL;
 	}
 	rq->dr = kmalloc(sizeof(*rq->dr), mem_flags);
@@ -370,7 +388,7 @@ static unsigned char parport_uss720_frob_control(struct parport *pp, unsigned ch
 	mask &= 0x0f;
 	val &= 0x0f;
 	d = (priv->reg[1] & (~mask)) ^ val;
-	if (set_1284_register(pp, 2, d, GFP_ATOMIC))
+	if (set_1284_register(pp, 2, d, GFP_KERNEL))
 		return 0;
 	priv->reg[1] = d;
 	return d & 0xf;
@@ -380,7 +398,7 @@ static unsigned char parport_uss720_read_status(struct parport *pp)
 {
 	unsigned char ret;
 
-	if (get_1284_register(pp, 1, &ret, GFP_ATOMIC))
+	if (get_1284_register(pp, 1, &ret, GFP_KERNEL))
 		return 0;
 	return ret & 0xf8;
 }
@@ -511,7 +529,7 @@ static size_t parport_uss720_epp_write_data(struct parport *pp, const void *buf,
 		return 0;
 	i = usb_bulk_msg(usbdev, usb_sndbulkpipe(usbdev, 1), (void *)buf, length, &rlen, 20000);
 	if (i)
-		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %zu rlen %u\n", buf, length, rlen);
+		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %Zu rlen %u\n", buf, length, rlen);
 	change_mode(pp, ECR_PS2);
 	return rlen;
 #endif
@@ -572,7 +590,7 @@ static size_t parport_uss720_ecp_write_data(struct parport *pp, const void *buff
 		return 0;
 	i = usb_bulk_msg(usbdev, usb_sndbulkpipe(usbdev, 1), (void *)buffer, len, &rlen, 20000);
 	if (i)
-		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %zu rlen %u\n", buffer, len, rlen);
+		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %Zu rlen %u\n", buffer, len, rlen);
 	change_mode(pp, ECR_PS2);
 	return rlen;
 }
@@ -590,7 +608,7 @@ static size_t parport_uss720_ecp_read_data(struct parport *pp, void *buffer, siz
 		return 0;
 	i = usb_bulk_msg(usbdev, usb_rcvbulkpipe(usbdev, 2), buffer, len, &rlen, 20000);
 	if (i)
-		printk(KERN_ERR "uss720: recvbulk ep 2 buf %p len %zu rlen %u\n", buffer, len, rlen);
+		printk(KERN_ERR "uss720: recvbulk ep 2 buf %p len %Zu rlen %u\n", buffer, len, rlen);
 	change_mode(pp, ECR_PS2);
 	return rlen;
 }
@@ -623,7 +641,7 @@ static size_t parport_uss720_write_compat(struct parport *pp, const void *buffer
 		return 0;
 	i = usb_bulk_msg(usbdev, usb_sndbulkpipe(usbdev, 1), (void *)buffer, len, &rlen, 20000);
 	if (i)
-		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %zu rlen %u\n", buffer, len, rlen);
+		printk(KERN_ERR "uss720: sendbulk ep 1 buf %p len %Zu rlen %u\n", buffer, len, rlen);
 	change_mode(pp, ECR_PS2);
 	return rlen;
 }
@@ -673,11 +691,11 @@ static int uss720_probe(struct usb_interface *intf,
 {
 	struct usb_device *usbdev = usb_get_dev(interface_to_usbdev(intf));
 	struct usb_host_interface *interface;
-	struct usb_endpoint_descriptor *epd;
+	struct usb_host_endpoint *endpoint;
 	struct parport_uss720_private *priv;
 	struct parport *pp;
 	unsigned char reg;
-	int ret;
+	int i;
 
 	dev_dbg(&intf->dev, "probe: vendor id 0x%x, device id 0x%x\n",
 		le16_to_cpu(usbdev->descriptor.idVendor),
@@ -688,15 +706,10 @@ static int uss720_probe(struct usb_interface *intf,
 		usb_put_dev(usbdev);
 		return -ENODEV;
 	}
-	ret = usb_set_interface(usbdev, intf->altsetting->desc.bInterfaceNumber, 2);
-	dev_dbg(&intf->dev, "set interface result %d\n", ret);
+	i = usb_set_interface(usbdev, intf->altsetting->desc.bInterfaceNumber, 2);
+	dev_dbg(&intf->dev, "set interface result %d\n", i);
 
 	interface = intf->cur_altsetting;
-
-	if (interface->desc.bNumEndpoints < 3) {
-		usb_put_dev(usbdev);
-		return -ENODEV;
-	}
 
 	/*
 	 * Allocate parport interface 
@@ -725,21 +738,13 @@ static int uss720_probe(struct usb_interface *intf,
 	set_1284_register(pp, 7, 0x00, GFP_KERNEL);
 	set_1284_register(pp, 6, 0x30, GFP_KERNEL);  /* PS/2 mode */
 	set_1284_register(pp, 2, 0x0c, GFP_KERNEL);
-
-	/* The Belkin F5U002 Rev 2 P80453-B USB parallel port adapter shares the
-	 * device ID 050d:0002 with some other device that works with this
-	 * driver, but it itself does not. Detect and handle the bad cable
-	 * here. */
-	ret = get_1284_register(pp, 0, &reg, GFP_KERNEL);
+	/* debugging */
+	get_1284_register(pp, 0, &reg, GFP_KERNEL);
 	dev_dbg(&intf->dev, "reg: %7ph\n", priv->reg);
-	if (ret < 0)
-		return ret;
 
-	ret = usb_find_last_int_in_endpoint(interface, &epd);
-	if (!ret) {
-		dev_dbg(&intf->dev, "epaddr %d interval %d\n",
-				epd->bEndpointAddress, epd->bInterval);
-	}
+	endpoint = &interface->endpoint[2];
+	dev_dbg(&intf->dev, "epaddr %d interval %d\n",
+		endpoint->desc.bEndpointAddress, endpoint->desc.bInterval);
 	parport_announce_port(pp);
 
 	usb_set_intfdata(intf, pp);
@@ -755,11 +760,14 @@ static void uss720_disconnect(struct usb_interface *intf)
 {
 	struct parport *pp = usb_get_intfdata(intf);
 	struct parport_uss720_private *priv;
+	struct usb_device *usbdev;
 
 	dev_dbg(&intf->dev, "disconnect\n");
 	usb_set_intfdata(intf, NULL);
 	if (pp) {
 		priv = pp->private_data;
+		usbdev = priv->usbdev;
+		priv->usbdev = NULL;
 		priv->pp = NULL;
 		dev_dbg(&intf->dev, "parport_remove_port\n");
 		parport_remove_port(pp);
@@ -773,15 +781,10 @@ static void uss720_disconnect(struct usb_interface *intf)
 /* table of cables that work through this driver */
 static const struct usb_device_id uss720_table[] = {
 	{ USB_DEVICE(0x047e, 0x1001) },
-	{ USB_DEVICE(0x04b8, 0x0002) },
-	{ USB_DEVICE(0x04b8, 0x0003) },
-	{ USB_DEVICE(0x050d, 0x0002) },
-	{ USB_DEVICE(0x050d, 0x1202) },
 	{ USB_DEVICE(0x0557, 0x2001) },
-	{ USB_DEVICE(0x05ab, 0x0002) },
-	{ USB_DEVICE(0x06c6, 0x0100) },
 	{ USB_DEVICE(0x0729, 0x1284) },
 	{ USB_DEVICE(0x1293, 0x0002) },
+	{ USB_DEVICE(0x050d, 0x0002) },
 	{ }						/* Terminating entry */
 };
 
@@ -808,7 +811,8 @@ static int __init uss720_init(void)
 	if (retval)
 		goto out;
 
-	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_DESC "\n");
+	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
+	       DRIVER_DESC "\n");
 	printk(KERN_INFO KBUILD_MODNAME ": NOTE: this is a special purpose "
 	       "driver to allow nonstandard\n");
 	printk(KERN_INFO KBUILD_MODNAME ": protocols (eg. bitbang) over "

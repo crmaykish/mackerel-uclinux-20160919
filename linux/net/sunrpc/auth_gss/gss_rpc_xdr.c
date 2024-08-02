@@ -1,8 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * GSS Proxy upcall module
  *
  *  Copyright (C) 2012 Simo Sorce <simo@redhat.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/sunrpc/svcauth.h>
@@ -31,7 +44,7 @@ static int gssx_dec_bool(struct xdr_stream *xdr, u32 *v)
 }
 
 static int gssx_enc_buffer(struct xdr_stream *xdr,
-			   const gssx_buffer *buf)
+			   gssx_buffer *buf)
 {
 	__be32 *p;
 
@@ -43,7 +56,7 @@ static int gssx_enc_buffer(struct xdr_stream *xdr,
 }
 
 static int gssx_enc_in_token(struct xdr_stream *xdr,
-			     const struct gssp_in_token *in)
+			     struct gssp_in_token *in)
 {
 	__be32 *p;
 
@@ -117,7 +130,7 @@ static int gssx_dec_option(struct xdr_stream *xdr,
 }
 
 static int dummy_enc_opt_array(struct xdr_stream *xdr,
-				const struct gssx_option_array *oa)
+				struct gssx_option_array *oa)
 {
 	__be32 *p;
 
@@ -216,9 +229,8 @@ static int gssx_dec_linux_creds(struct xdr_stream *xdr,
 		kgid = make_kgid(&init_user_ns, tmp);
 		if (!gid_valid(kgid))
 			goto out_free_groups;
-		creds->cr_group_info->gid[i] = kgid;
+		GROUP_AT(creds->cr_group_info, i) = kgid;
 	}
-	groups_sort(creds->cr_group_info);
 
 	return 0;
 out_free_groups:
@@ -248,10 +260,10 @@ static int gssx_dec_option_array(struct xdr_stream *xdr,
 	if (!oa->data)
 		return -ENOMEM;
 
-	creds = kzalloc(sizeof(struct svc_cred), GFP_KERNEL);
+	creds = kmalloc(sizeof(struct svc_cred), GFP_KERNEL);
 	if (!creds) {
-		err = -ENOMEM;
-		goto free_oa;
+		kfree(oa->data);
+		return -ENOMEM;
 	}
 
 	oa->data[0].option.data = CREDS_VALUE;
@@ -265,40 +277,29 @@ static int gssx_dec_option_array(struct xdr_stream *xdr,
 
 		/* option buffer */
 		p = xdr_inline_decode(xdr, 4);
-		if (unlikely(p == NULL)) {
-			err = -ENOSPC;
-			goto free_creds;
-		}
+		if (unlikely(p == NULL))
+			return -ENOSPC;
 
 		length = be32_to_cpup(p);
 		p = xdr_inline_decode(xdr, length);
-		if (unlikely(p == NULL)) {
-			err = -ENOSPC;
-			goto free_creds;
-		}
+		if (unlikely(p == NULL))
+			return -ENOSPC;
 
 		if (length == sizeof(CREDS_VALUE) &&
 		    memcmp(p, CREDS_VALUE, sizeof(CREDS_VALUE)) == 0) {
 			/* We have creds here. parse them */
 			err = gssx_dec_linux_creds(xdr, creds);
 			if (err)
-				goto free_creds;
+				return err;
 			oa->data[0].value.len = 1; /* presence */
 		} else {
 			/* consume uninteresting buffer */
 			err = gssx_dec_buffer(xdr, &dummy);
 			if (err)
-				goto free_creds;
+				return err;
 		}
 	}
 	return 0;
-
-free_creds:
-	kfree(creds);
-free_oa:
-	kfree(oa->data);
-	oa->data = NULL;
-	return err;
 }
 
 static int gssx_dec_status(struct xdr_stream *xdr,
@@ -347,7 +348,7 @@ static int gssx_dec_status(struct xdr_stream *xdr,
 }
 
 static int gssx_enc_call_ctx(struct xdr_stream *xdr,
-			     const struct gssx_call_ctx *ctx)
+			     struct gssx_call_ctx *ctx)
 {
 	struct gssx_option opt;
 	__be32 *p;
@@ -732,9 +733,8 @@ static int gssx_enc_cb(struct xdr_stream *xdr, struct gssx_cb *cb)
 
 void gssx_enc_accept_sec_context(struct rpc_rqst *req,
 				 struct xdr_stream *xdr,
-				 const void *data)
+				 struct gssx_arg_accept_sec_context *arg)
 {
-	const struct gssx_arg_accept_sec_context *arg = data;
 	int err;
 
 	err = gssx_enc_call_ctx(xdr, &arg->call_ctx);
@@ -782,7 +782,6 @@ void gssx_enc_accept_sec_context(struct rpc_rqst *req,
 	xdr_inline_pages(&req->rq_rcv_buf,
 		PAGE_SIZE/2 /* pretty arbitrary */,
 		arg->pages, 0 /* page base */, arg->npages * PAGE_SIZE);
-	req->rq_rcv_buf.flags |= XDRBUF_SPARSE_PAGES;
 done:
 	if (err)
 		dprintk("RPC:       gssx_enc_accept_sec_context: %d\n", err);
@@ -790,9 +789,8 @@ done:
 
 int gssx_dec_accept_sec_context(struct rpc_rqst *rqstp,
 				struct xdr_stream *xdr,
-				void *data)
+				struct gssx_res_accept_sec_context *res)
 {
-	struct gssx_res_accept_sec_context *res = data;
 	u32 value_follows;
 	int err;
 	struct page *scratch;

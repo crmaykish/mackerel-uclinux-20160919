@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Performance counter callchain support - powerpc architecture code
  *
  * Copyright © 2009 Paul Mackerras, IBM Corporation.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -18,7 +22,6 @@
 #ifdef CONFIG_PPC64
 #include "../kernel/ppc32.h"
 #endif
-#include <asm/pte-walk.h>
 
 
 /*
@@ -44,7 +47,7 @@ static int valid_next_sp(unsigned long sp, unsigned long prev_sp)
 }
 
 void
-perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs)
+perf_callchain_kernel(struct perf_callchain_entry *entry, struct pt_regs *regs)
 {
 	unsigned long sp, next_sp;
 	unsigned long next_ip;
@@ -64,7 +67,6 @@ perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *re
 		next_sp = fp[0];
 
 		if (next_sp == sp + STACK_INT_FRAME_SIZE &&
-		    validate_sp(sp, current, STACK_INT_FRAME_SIZE) &&
 		    fp[STACK_FRAME_MARKER] == STACK_FRAME_REGS_MARKER) {
 			/*
 			 * This looks like an interrupt frame for an
@@ -74,7 +76,7 @@ perf_callchain_kernel(struct perf_callchain_entry_ctx *entry, struct pt_regs *re
 			next_ip = regs->nip;
 			lr = regs->link;
 			level = 0;
-			perf_callchain_store_context(entry, PERF_CONTEXT_KERNEL);
+			perf_callchain_store(entry, PERF_CONTEXT_KERNEL);
 
 		} else {
 			if (level == 0)
@@ -125,7 +127,7 @@ static int read_user_stack_slow(void __user *ptr, void *buf, int nb)
 		return -EFAULT;
 
 	local_irq_save(flags);
-	ptep = find_current_mm_pte(pgdir, addr, NULL, &shift);
+	ptep = find_linux_pte_or_hugepte(pgdir, addr, NULL, &shift);
 	if (!ptep)
 		goto err_out;
 	if (!shift)
@@ -135,7 +137,7 @@ static int read_user_stack_slow(void __user *ptr, void *buf, int nb)
 	offset = addr & ((1UL << shift) - 1);
 
 	pte = READ_ONCE(*ptep);
-	if (!pte_present(pte) || !pte_user(pte))
+	if (!pte_present(pte) || !(pte_val(pte) & _PAGE_USER))
 		goto err_out;
 	pfn = pte_pfn(pte);
 	if (!page_is_ram(pfn))
@@ -230,7 +232,7 @@ static int sane_signal_64_frame(unsigned long sp)
 		puc == (unsigned long) &sf->uc;
 }
 
-static void perf_callchain_user_64(struct perf_callchain_entry_ctx *entry,
+static void perf_callchain_user_64(struct perf_callchain_entry *entry,
 				   struct pt_regs *regs)
 {
 	unsigned long sp, next_sp;
@@ -245,7 +247,7 @@ static void perf_callchain_user_64(struct perf_callchain_entry_ctx *entry,
 	sp = regs->gpr[1];
 	perf_callchain_store(entry, next_ip);
 
-	while (entry->nr < entry->max_stack) {
+	while (entry->nr < PERF_MAX_STACK_DEPTH) {
 		fp = (unsigned long __user *) sp;
 		if (!valid_user_sp(sp, 1) || read_user_stack_64(fp, &next_sp))
 			return;
@@ -272,7 +274,7 @@ static void perf_callchain_user_64(struct perf_callchain_entry_ctx *entry,
 			    read_user_stack_64(&uregs[PT_R1], &sp))
 				return;
 			level = 0;
-			perf_callchain_store_context(entry, PERF_CONTEXT_USER);
+			perf_callchain_store(entry, PERF_CONTEXT_USER);
 			perf_callchain_store(entry, next_ip);
 			continue;
 		}
@@ -317,7 +319,7 @@ static int read_user_stack_32(unsigned int __user *ptr, unsigned int *ret)
 	return rc;
 }
 
-static inline void perf_callchain_user_64(struct perf_callchain_entry_ctx *entry,
+static inline void perf_callchain_user_64(struct perf_callchain_entry *entry,
 					  struct pt_regs *regs)
 {
 }
@@ -437,7 +439,7 @@ static unsigned int __user *signal_frame_32_regs(unsigned int sp,
 	return mctx->mc_gregs;
 }
 
-static void perf_callchain_user_32(struct perf_callchain_entry_ctx *entry,
+static void perf_callchain_user_32(struct perf_callchain_entry *entry,
 				   struct pt_regs *regs)
 {
 	unsigned int sp, next_sp;
@@ -451,7 +453,7 @@ static void perf_callchain_user_32(struct perf_callchain_entry_ctx *entry,
 	sp = regs->gpr[1];
 	perf_callchain_store(entry, next_ip);
 
-	while (entry->nr < entry->max_stack) {
+	while (entry->nr < PERF_MAX_STACK_DEPTH) {
 		fp = (unsigned int __user *) (unsigned long) sp;
 		if (!valid_user_sp(sp, 0) || read_user_stack_32(fp, &next_sp))
 			return;
@@ -471,7 +473,7 @@ static void perf_callchain_user_32(struct perf_callchain_entry_ctx *entry,
 			    read_user_stack_32(&uregs[PT_R1], &sp))
 				return;
 			level = 0;
-			perf_callchain_store_context(entry, PERF_CONTEXT_USER);
+			perf_callchain_store(entry, PERF_CONTEXT_USER);
 			perf_callchain_store(entry, next_ip);
 			continue;
 		}
@@ -485,7 +487,7 @@ static void perf_callchain_user_32(struct perf_callchain_entry_ctx *entry,
 }
 
 void
-perf_callchain_user(struct perf_callchain_entry_ctx *entry, struct pt_regs *regs)
+perf_callchain_user(struct perf_callchain_entry *entry, struct pt_regs *regs)
 {
 	if (current_is_64bit())
 		perf_callchain_user_64(entry, regs);

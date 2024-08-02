@@ -1,9 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * A hwmon driver for ACPI 4.0 power meters
  * Copyright (C) 2009 IBM
  *
  * Author: Darrick J. Wong <darrick.wong@oracle.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/module.h>
@@ -32,7 +45,6 @@ ACPI_MODULE_NAME(ACPI_POWER_METER_NAME);
 #define POWER_METER_CAN_NOTIFY	(1 << 3)
 #define POWER_METER_IS_BATTERY	(1 << 8)
 #define UNKNOWN_HYSTERESIS	0xFFFFFFFF
-#define UNKNOWN_POWER		0xFFFFFFFF
 
 #define METER_NOTIFY_CONFIG	0x80
 #define METER_NOTIFY_TRIP	0x81
@@ -344,9 +356,6 @@ static ssize_t show_power(struct device *dev,
 	update_meter(resource);
 	mutex_unlock(&resource->lock);
 
-	if (resource->power == UNKNOWN_POWER)
-		return -ENODATA;
-
 	return sprintf(buf, "%llu\n", resource->power * 1000);
 }
 
@@ -566,9 +575,8 @@ static int read_domain_devices(struct acpi_power_meter_resource *resource)
 	if (!pss->package.count)
 		goto end;
 
-	resource->domain_devices = kcalloc(pss->package.count,
-					   sizeof(struct acpi_device *),
-					   GFP_KERNEL);
+	resource->domain_devices = kzalloc(sizeof(struct acpi_device *) *
+					   pss->package.count, GFP_KERNEL);
 	if (!resource->domain_devices) {
 		res = -ENOMEM;
 		goto end;
@@ -629,12 +637,12 @@ static int register_attrs(struct acpi_power_meter_resource *resource,
 
 	while (attrs->label) {
 		sensors->dev_attr.attr.name = attrs->label;
-		sensors->dev_attr.attr.mode = 0444;
+		sensors->dev_attr.attr.mode = S_IRUGO;
 		sensors->dev_attr.show = attrs->show;
 		sensors->index = attrs->index;
 
 		if (attrs->set) {
-			sensors->dev_attr.attr.mode |= 0200;
+			sensors->dev_attr.attr.mode |= S_IWUSR;
 			sensors->dev_attr.store = attrs->set;
 		}
 
@@ -685,8 +693,8 @@ static int setup_attrs(struct acpi_power_meter_resource *resource)
 
 	if (resource->caps.flags & POWER_METER_CAN_CAP) {
 		if (!can_cap_in_hardware()) {
-			dev_warn(&resource->acpi_dev->dev,
-				 "Ignoring unsafe software power cap!\n");
+			dev_err(&resource->acpi_dev->dev,
+				"Ignoring unsafe software power cap!\n");
 			goto skip_unsafe_cap;
 		}
 
@@ -788,7 +796,7 @@ static int read_capabilities(struct acpi_power_meter_resource *resource)
 			goto error;
 		}
 
-		*str = kcalloc(element->string.length + 1, sizeof(u8),
+		*str = kzalloc(sizeof(u8) * (element->string.length + 1),
 			       GFP_KERNEL);
 		if (!*str) {
 			res = -ENOMEM;
@@ -887,7 +895,7 @@ static int acpi_power_meter_add(struct acpi_device *device)
 
 	res = setup_attrs(resource);
 	if (res)
-		goto exit_free_capability;
+		goto exit_free;
 
 	resource->hwmon_dev = hwmon_device_register(&device->dev);
 	if (IS_ERR(resource->hwmon_dev)) {
@@ -900,8 +908,6 @@ static int acpi_power_meter_add(struct acpi_device *device)
 
 exit_remove:
 	remove_attrs(resource);
-exit_free_capability:
-	free_capabilities(resource);
 exit_free:
 	kfree(resource);
 exit:
@@ -967,7 +973,7 @@ static int __init enable_cap_knobs(const struct dmi_system_id *d)
 	return 0;
 }
 
-static const struct dmi_system_id pm_dmi_table[] __initconst = {
+static struct dmi_system_id __initdata pm_dmi_table[] = {
 	{
 		enable_cap_knobs, "IBM Active Energy Manager",
 		{

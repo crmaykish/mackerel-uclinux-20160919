@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /* Faraday FOTG210 EHCI-like driver
  *
  * Copyright (c) 2013 Faraday Technology Corporation
@@ -8,9 +7,22 @@
  *	   Po-Yu Chuang <ratbert.chuang@gmail.com>
  *
  * Most of code borrowed from the Linux-3.7 EHCI driver
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software Foundation,
+ * Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 #include <linux/module.h>
-#include <linux/of.h>
 #include <linux/device.h>
 #include <linux/dmapool.h>
 #include <linux/kernel.h>
@@ -32,7 +44,6 @@
 #include <linux/uaccess.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
-#include <linux/clk.h>
 
 #include <asm/byteorder.h>
 #include <asm/irq.h>
@@ -428,6 +439,8 @@ static void qh_lines(struct fotg210_hcd *fotg210, struct fotg210_qh *qh,
 			temp = size;
 		size -= temp;
 		next += temp;
+		if (temp == size)
+			goto done;
 	}
 
 	temp = snprintf(next, size, "\n");
@@ -437,6 +450,7 @@ static void qh_lines(struct fotg210_hcd *fotg210, struct fotg210_qh *qh,
 	size -= temp;
 	next += temp;
 
+done:
 	*sizep = size;
 	*nextp = next;
 }
@@ -843,16 +857,28 @@ static int debug_registers_open(struct inode *inode, struct file *file)
 static inline void create_debug_files(struct fotg210_hcd *fotg210)
 {
 	struct usb_bus *bus = &fotg210_to_hcd(fotg210)->self;
-	struct dentry *root;
 
-	root = debugfs_create_dir(bus->bus_name, fotg210_debug_root);
-	fotg210->debug_dir = root;
+	fotg210->debug_dir = debugfs_create_dir(bus->bus_name,
+			fotg210_debug_root);
+	if (!fotg210->debug_dir)
+		return;
 
-	debugfs_create_file("async", S_IRUGO, root, bus, &debug_async_fops);
-	debugfs_create_file("periodic", S_IRUGO, root, bus,
-			    &debug_periodic_fops);
-	debugfs_create_file("registers", S_IRUGO, root, bus,
-			    &debug_registers_fops);
+	if (!debugfs_create_file("async", S_IRUGO, fotg210->debug_dir, bus,
+			&debug_async_fops))
+		goto file_error;
+
+	if (!debugfs_create_file("periodic", S_IRUGO, fotg210->debug_dir, bus,
+			&debug_periodic_fops))
+		goto file_error;
+
+	if (!debugfs_create_file("registers", S_IRUGO, fotg210->debug_dir, bus,
+			&debug_registers_fops))
+		goto file_error;
+
+	return;
+
+file_error:
+	debugfs_remove_recursive(fotg210->debug_dir);
 }
 
 static inline void remove_debug_files(struct fotg210_hcd *fotg210)
@@ -1054,7 +1080,8 @@ static void fotg210_enable_event(struct fotg210_hcd *fotg210, unsigned event,
 	ktime_t *timeout = &fotg210->hr_timeouts[event];
 
 	if (resched)
-		*timeout = ktime_add(ktime_get(), event_delays_ns[event]);
+		*timeout = ktime_add(ktime_get(),
+				ktime_set(0, event_delays_ns[event]));
 	fotg210->enabled_hrtimer_events |= (1 << event);
 
 	/* Track only the lowest-numbered pending event */
@@ -1284,7 +1311,7 @@ static void fotg210_iaa_watchdog(struct fotg210_hcd *fotg210)
 		 */
 		status = fotg210_readl(fotg210, &fotg210->regs->status);
 		if ((status & STS_IAA) || !(cmd & CMD_IAAD)) {
-			INCR(fotg210->stats.lost_iaa);
+			COUNT(fotg210->stats.lost_iaa);
 			fotg210_writel(fotg210, STS_IAA,
 					&fotg210->regs->status);
 		}
@@ -1354,7 +1381,7 @@ static enum hrtimer_restart fotg210_hrtimer_func(struct hrtimer *t)
 	 */
 	now = ktime_get();
 	for_each_set_bit(e, &events, FOTG210_HRTIMER_NUM_EVENTS) {
-		if (ktime_compare(now, fotg210->hr_timeouts[e]) >= 0)
+		if (now.tv64 >= fotg210->hr_timeouts[e].tv64)
 			event_handlers[e](fotg210);
 		else
 			fotg210_enable_event(fotg210, e, false);
@@ -1626,10 +1653,6 @@ static int fotg210_hub_control(struct usb_hcd *hcd, u16 typeReq, u16 wValue,
 			/* see what we found out */
 			temp = check_reset_complete(fotg210, wIndex, status_reg,
 					fotg210_readl(fotg210, status_reg));
-
-			/* restart schedule */
-			fotg210->command |= CMD_RUN;
-			fotg210_writel(fotg210, fotg210->command, &fotg210->regs->command);
 		}
 
 		if (!(temp & (PORT_RESUME|PORT_RESET))) {
@@ -1856,9 +1879,11 @@ static struct fotg210_qh *fotg210_qh_alloc(struct fotg210_hcd *fotg210,
 	qh = kzalloc(sizeof(*qh), GFP_ATOMIC);
 	if (!qh)
 		goto done;
-	qh->hw = dma_pool_zalloc(fotg210->qh_pool, flags, &dma);
+	qh->hw = (struct fotg210_qh_hw *)
+		dma_pool_alloc(fotg210->qh_pool, flags, &dma);
 	if (!qh->hw)
 		goto fail;
+	memset(qh->hw, 0, sizeof(*qh->hw));
 	qh->qh_dma = dma;
 	INIT_LIST_HEAD(&qh->qtd_list);
 
@@ -2207,12 +2232,12 @@ __acquires(fotg210->lock)
 	}
 
 	if (unlikely(urb->unlinked)) {
-		INCR(fotg210->stats.unlink);
+		COUNT(fotg210->stats.unlink);
 	} else {
 		/* report non-error and short read status as zero */
 		if (status == -EINPROGRESS || status == -EREMOTEIO)
 			status = 0;
-		INCR(fotg210->stats.complete);
+		COUNT(fotg210->stats.complete);
 	}
 
 #ifdef FOTG210_URB_TRACE
@@ -2242,7 +2267,7 @@ static unsigned qh_completions(struct fotg210_hcd *fotg210,
 		struct fotg210_qh *qh)
 {
 	struct fotg210_qtd *last, *end = qh->dummy;
-	struct fotg210_qtd *qtd, *tmp;
+	struct list_head *entry, *tmp;
 	int last_status;
 	int stopped;
 	unsigned count = 0;
@@ -2276,10 +2301,12 @@ rescan:
 	 * then let the queue advance.
 	 * if queue is stopped, handles unlinks.
 	 */
-	list_for_each_entry_safe(qtd, tmp, &qh->qtd_list, qtd_list) {
+	list_for_each_safe(entry, tmp, &qh->qtd_list) {
+		struct fotg210_qtd *qtd;
 		struct urb *urb;
 		u32 token = 0;
 
+		qtd = list_entry(entry, struct fotg210_qtd, qtd_list);
 		urb = qtd->urb;
 
 		/* clean up any state from previous QTD ...*/
@@ -2508,15 +2535,23 @@ retry_xacterr:
 	return count;
 }
 
+/* high bandwidth multiplier, as encoded in highspeed endpoint descriptors */
+#define hb_mult(wMaxPacketSize) (1 + (((wMaxPacketSize) >> 11) & 0x03))
+/* ... and packet size, for any kind of endpoint descriptor */
+#define max_packet(wMaxPacketSize) ((wMaxPacketSize) & 0x07ff)
+
 /* reverse of qh_urb_transaction:  free a list of TDs.
  * used for cleanup after errors, before HC sees an URB's TDs.
  */
 static void qtd_list_free(struct fotg210_hcd *fotg210, struct urb *urb,
-		struct list_head *head)
+		struct list_head *qtd_list)
 {
-	struct fotg210_qtd *qtd, *temp;
+	struct list_head *entry, *temp;
 
-	list_for_each_entry_safe(qtd, temp, head, qtd_list) {
+	list_for_each_safe(entry, temp, qtd_list) {
+		struct fotg210_qtd *qtd;
+
+		qtd = list_entry(entry, struct fotg210_qtd, qtd_list);
 		list_del(&qtd->qtd_list);
 		fotg210_qtd_free(fotg210, qtd);
 	}
@@ -2593,7 +2628,7 @@ static struct list_head *qh_urb_transaction(struct fotg210_hcd *fotg210,
 		token |= (1 /* "in" */ << 8);
 	/* else it's already initted to "out" pid (0 << 8) */
 
-	maxpacket = usb_maxpacket(urb->dev, urb->pipe, !is_input);
+	maxpacket = max_packet(usb_maxpacket(urb->dev, urb->pipe, !is_input));
 
 	/*
 	 * buffer gets wrapped in one or more qtds;
@@ -2707,11 +2742,9 @@ static struct fotg210_qh *qh_make(struct fotg210_hcd *fotg210, struct urb *urb,
 		gfp_t flags)
 {
 	struct fotg210_qh *qh = fotg210_qh_alloc(fotg210, flags);
-	struct usb_host_endpoint *ep;
 	u32 info1 = 0, info2 = 0;
 	int is_input, type;
 	int maxp = 0;
-	int mult;
 	struct usb_tt *tt = urb->dev->tt;
 	struct fotg210_qh_hw *hw;
 
@@ -2726,15 +2759,14 @@ static struct fotg210_qh *qh_make(struct fotg210_hcd *fotg210, struct urb *urb,
 
 	is_input = usb_pipein(urb->pipe);
 	type = usb_pipetype(urb->pipe);
-	ep = usb_pipe_endpoint(urb->dev, urb->pipe);
-	maxp = usb_endpoint_maxp(&ep->desc);
-	mult = usb_endpoint_maxp_mult(&ep->desc);
+	maxp = usb_maxpacket(urb->dev, urb->pipe, !is_input);
 
 	/* 1024 byte maxpacket is a hardware ceiling.  High bandwidth
 	 * acts like up to 3KB, but is built from smaller packets.
 	 */
-	if (maxp > 1024) {
-		fotg210_dbg(fotg210, "bogus qh maxpacket %d\n", maxp);
+	if (max_packet(maxp) > 1024) {
+		fotg210_dbg(fotg210, "bogus qh maxpacket %d\n",
+				max_packet(maxp));
 		goto done;
 	}
 
@@ -2748,7 +2780,8 @@ static struct fotg210_qh *qh_make(struct fotg210_hcd *fotg210, struct urb *urb,
 	 */
 	if (type == PIPE_INTERRUPT) {
 		qh->usecs = NS_TO_US(usb_calc_bus_time(USB_SPEED_HIGH,
-				is_input, 0, mult * maxp));
+				is_input, 0,
+				hb_mult(maxp) * max_packet(maxp)));
 		qh->start = NO_FRAME;
 
 		if (urb->dev->speed == USB_SPEED_HIGH) {
@@ -2785,7 +2818,7 @@ static struct fotg210_qh *qh_make(struct fotg210_hcd *fotg210, struct urb *urb,
 			think_time = tt ? tt->think_time : 0;
 			qh->tt_usecs = NS_TO_US(think_time +
 					usb_calc_bus_time(urb->dev->speed,
-					is_input, 0, maxp));
+					is_input, 0, max_packet(maxp)));
 			qh->period = urb->interval;
 			if (qh->period > fotg210->periodic_size) {
 				qh->period = fotg210->periodic_size;
@@ -2848,11 +2881,11 @@ static struct fotg210_qh *qh_make(struct fotg210_hcd *fotg210, struct urb *urb,
 			 * to help them do so.  So now people expect to use
 			 * such nonconformant devices with Linux too; sigh.
 			 */
-			info1 |= maxp << 16;
+			info1 |= max_packet(maxp) << 16;
 			info2 |= (FOTG210_TUNE_MULT_HS << 30);
 		} else {		/* PIPE_INTERRUPT */
-			info1 |= maxp << 16;
-			info2 |= mult << 30;
+			info1 |= max_packet(maxp) << 16;
+			info2 |= hb_mult(maxp) << 30;
 		}
 		break;
 	default:
@@ -3922,7 +3955,6 @@ static void iso_stream_init(struct fotg210_hcd *fotg210,
 	int is_input;
 	long bandwidth;
 	unsigned multi;
-	struct usb_host_endpoint *ep;
 
 	/*
 	 * this might be a "high bandwidth" highspeed endpoint,
@@ -3930,14 +3962,14 @@ static void iso_stream_init(struct fotg210_hcd *fotg210,
 	 */
 	epnum = usb_pipeendpoint(pipe);
 	is_input = usb_pipein(pipe) ? USB_DIR_IN : 0;
-	ep = usb_pipe_endpoint(dev, pipe);
-	maxp = usb_endpoint_maxp(&ep->desc);
+	maxp = usb_maxpacket(dev, pipe, !is_input);
 	if (is_input)
 		buf1 = (1 << 11);
 	else
 		buf1 = 0;
 
-	multi = usb_endpoint_maxp_mult(&ep->desc);
+	maxp = max_packet(maxp);
+	multi = hb_mult(maxp);
 	buf1 |= maxp;
 	maxp *= multi;
 
@@ -4108,7 +4140,7 @@ static int itd_urb_transaction(struct fotg210_iso_stream *stream,
 		} else {
 alloc_itd:
 			spin_unlock_irqrestore(&fotg210->lock, flags);
-			itd = dma_pool_zalloc(fotg210->itd_pool, mem_flags,
+			itd = dma_pool_alloc(fotg210->itd_pool, mem_flags,
 					&itd_dma);
 			spin_lock_irqsave(&fotg210->lock, flags);
 			if (!itd) {
@@ -4118,6 +4150,7 @@ alloc_itd:
 			}
 		}
 
+		memset(itd, 0, sizeof(*itd));
 		itd->itd_dma = itd_dma;
 		list_add(&itd->itd_list, &sched->td_list);
 	}
@@ -4458,12 +4491,13 @@ static bool itd_complete(struct fotg210_hcd *fotg210, struct fotg210_itd *itd)
 
 			/* HC need not update length with this error */
 			if (!(t & FOTG210_ISOC_BABBLE)) {
-				desc->actual_length = FOTG210_ITD_LENGTH(t);
+				desc->actual_length =
+					fotg210_itdlen(urb, desc, t);
 				urb->actual_length += desc->actual_length;
 			}
 		} else if (likely((t & FOTG210_ISOC_ACTIVE) == 0)) {
 			desc->status = 0;
-			desc->actual_length = FOTG210_ITD_LENGTH(t);
+			desc->actual_length = fotg210_itdlen(urb, desc, t);
 			urb->actual_length += desc->actual_length;
 		} else {
 			/* URB was too late */
@@ -4681,7 +4715,7 @@ static void scan_isoc(struct fotg210_hcd *fotg210)
 
 /* Display / Set uframe_periodic_max
  */
-static ssize_t uframe_periodic_max_show(struct device *dev,
+static ssize_t show_uframe_periodic_max(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct fotg210_hcd *fotg210;
@@ -4693,7 +4727,7 @@ static ssize_t uframe_periodic_max_show(struct device *dev,
 }
 
 
-static ssize_t uframe_periodic_max_store(struct device *dev,
+static ssize_t store_uframe_periodic_max(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct fotg210_hcd *fotg210;
@@ -4760,13 +4794,20 @@ out_unlock:
 	return ret;
 }
 
-static DEVICE_ATTR_RW(uframe_periodic_max);
+static DEVICE_ATTR(uframe_periodic_max, 0644, show_uframe_periodic_max,
+		   store_uframe_periodic_max);
 
 static inline int create_sysfs_files(struct fotg210_hcd *fotg210)
 {
 	struct device *controller = fotg210_to_hcd(fotg210)->self.controller;
+	int i = 0;
 
-	return device_create_file(controller, &dev_attr_uframe_periodic_max);
+	if (i)
+		goto out;
+
+	i = device_create_file(controller, &dev_attr_uframe_periodic_max);
+out:
+	return i;
 }
 
 static inline void remove_sysfs_files(struct fotg210_hcd *fotg210)
@@ -4994,7 +5035,7 @@ static int hcd_fotg210_init(struct usb_hcd *hcd)
 	fotg210->command = temp;
 
 	/* Accept arbitrarily long scatter-gather lists */
-	if (!hcd->localmem_pool)
+	if (!(hcd->driver->flags & HCD_LOCAL_MEM))
 		hcd->self.sg_tablesize = ~0;
 	return 0;
 }
@@ -5018,7 +5059,7 @@ static int fotg210_run(struct usb_hcd *hcd)
 	/*
 	 * hcc_params controls whether fotg210->regs->segment must (!!!)
 	 * be used; it constrains QH/ITD/SITD and QTD locations.
-	 * dma_pool consistent memory always uses segment zero.
+	 * pci_pool consistent memory always uses segment zero.
 	 * streaming mappings for I/O buffers, like pci_map_single(),
 	 * can return segments above 4GB, if the device allows.
 	 *
@@ -5153,9 +5194,9 @@ static irqreturn_t fotg210_irq(struct usb_hcd *hcd)
 	/* normal [4.15.1.2] or error [4.15.1.1] completion */
 	if (likely((status & (STS_INT|STS_ERR)) != 0)) {
 		if (likely((status & STS_ERR) == 0))
-			INCR(fotg210->stats.normal);
+			COUNT(fotg210->stats.normal);
 		else
-			INCR(fotg210->stats.error);
+			COUNT(fotg210->stats.error);
 		bh = 1;
 	}
 
@@ -5180,7 +5221,7 @@ static irqreturn_t fotg210_irq(struct usb_hcd *hcd)
 		if (cmd & CMD_IAAD)
 			fotg210_dbg(fotg210, "IAA with IAAD still set?\n");
 		if (fotg210->async_iaa) {
-			INCR(fotg210->stats.iaa);
+			COUNT(fotg210->stats.iaa);
 			end_unlink_async(fotg210);
 		} else
 			fotg210_dbg(fotg210, "IAA with nothing unlinked?\n");
@@ -5420,7 +5461,7 @@ idle_timeout:
 			qh_destroy(fotg210, qh);
 			break;
 		}
-		/* fall through */
+		/* else FALL THROUGH */
 	default:
 		/* caller was supposed to have unlinked any requests;
 		 * that's not our job.  just leak this memory.
@@ -5502,7 +5543,7 @@ static const struct hc_driver fotg210_fotg210_hc_driver = {
 	 * generic hardware linkage
 	 */
 	.irq			= fotg210_irq,
-	.flags			= HCD_MEMORY | HCD_DMA | HCD_USB2,
+	.flags			= HCD_MEMORY | HCD_USB2,
 
 	/*
 	 * basic lifecycle operations
@@ -5565,7 +5606,7 @@ static int fotg210_hcd_probe(struct platform_device *pdev)
 	struct usb_hcd *hcd;
 	struct resource *res;
 	int irq;
-	int retval;
+	int retval = -ENODEV;
 	struct fotg210_hcd *fotg210;
 
 	if (usb_disabled())
@@ -5585,7 +5626,7 @@ static int fotg210_hcd_probe(struct platform_device *pdev)
 	hcd = usb_create_hcd(&fotg210_fotg210_hc_driver, dev,
 			dev_name(dev));
 	if (!hcd) {
-		dev_err(dev, "failed to create hcd\n");
+		dev_err(dev, "failed to create hcd with err %d\n", retval);
 		retval = -ENOMEM;
 		goto fail_create_hcd;
 	}
@@ -5596,7 +5637,7 @@ static int fotg210_hcd_probe(struct platform_device *pdev)
 	hcd->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(hcd->regs)) {
 		retval = PTR_ERR(hcd->regs);
-		goto failed_put_hcd;
+		goto failed;
 	}
 
 	hcd->rsrc_start = res->start;
@@ -5606,43 +5647,22 @@ static int fotg210_hcd_probe(struct platform_device *pdev)
 
 	fotg210->caps = hcd->regs;
 
-	/* It's OK not to supply this clock */
-	fotg210->pclk = clk_get(dev, "PCLK");
-	if (!IS_ERR(fotg210->pclk)) {
-		retval = clk_prepare_enable(fotg210->pclk);
-		if (retval) {
-			dev_err(dev, "failed to enable PCLK\n");
-			goto failed_put_hcd;
-		}
-	} else if (PTR_ERR(fotg210->pclk) == -EPROBE_DEFER) {
-		/*
-		 * Percolate deferrals, for anything else,
-		 * just live without the clocking.
-		 */
-		retval = PTR_ERR(fotg210->pclk);
-		goto failed_dis_clk;
-	}
-
 	retval = fotg210_setup(hcd);
 	if (retval)
-		goto failed_dis_clk;
+		goto failed;
 
 	fotg210_init(fotg210);
 
 	retval = usb_add_hcd(hcd, irq, IRQF_SHARED);
 	if (retval) {
 		dev_err(dev, "failed to add hcd with err %d\n", retval);
-		goto failed_dis_clk;
+		goto failed;
 	}
 	device_wakeup_enable(hcd->self.controller);
-	platform_set_drvdata(pdev, hcd);
 
 	return retval;
 
-failed_dis_clk:
-	if (!IS_ERR(fotg210->pclk))
-		clk_disable_unprepare(fotg210->pclk);
-failed_put_hcd:
+failed:
 	usb_put_hcd(hcd);
 fail_create_hcd:
 	dev_err(dev, "init %s fail, %d\n", dev_name(dev), retval);
@@ -5656,11 +5676,11 @@ fail_create_hcd:
  */
 static int fotg210_hcd_remove(struct platform_device *pdev)
 {
-	struct usb_hcd *hcd = platform_get_drvdata(pdev);
-	struct fotg210_hcd *fotg210 = hcd_to_fotg210(hcd);
+	struct device *dev = &pdev->dev;
+	struct usb_hcd *hcd = dev_get_drvdata(dev);
 
-	if (!IS_ERR(fotg210->pclk))
-		clk_disable_unprepare(fotg210->pclk);
+	if (!hcd)
+		return 0;
 
 	usb_remove_hcd(hcd);
 	usb_put_hcd(hcd);
@@ -5668,18 +5688,9 @@ static int fotg210_hcd_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_OF
-static const struct of_device_id fotg210_of_match[] = {
-	{ .compatible = "faraday,fotg210" },
-	{},
-};
-MODULE_DEVICE_TABLE(of, fotg210_of_match);
-#endif
-
 static struct platform_driver fotg210_hcd_driver = {
 	.driver = {
 		.name   = "fotg210-hcd",
-		.of_match_table = of_match_ptr(fotg210_of_match),
 	},
 	.probe  = fotg210_hcd_probe,
 	.remove = fotg210_hcd_remove,
@@ -5698,12 +5709,16 @@ static int __init fotg210_hcd_init(void)
 			test_bit(USB_OHCI_LOADED, &usb_hcds_loaded))
 		pr_warn("Warning! fotg210_hcd should always be loaded before uhci_hcd and ohci_hcd, not after\n");
 
-	pr_debug("%s: block sizes: qh %zd qtd %zd itd %zd\n",
+	pr_debug("%s: block sizes: qh %Zd qtd %Zd itd %Zd\n",
 			hcd_name, sizeof(struct fotg210_qh),
 			sizeof(struct fotg210_qtd),
 			sizeof(struct fotg210_itd));
 
 	fotg210_debug_root = debugfs_create_dir("fotg210", usb_debug_root);
+	if (!fotg210_debug_root) {
+		retval = -ENOENT;
+		goto err_debug;
+	}
 
 	retval = platform_driver_register(&fotg210_hcd_driver);
 	if (retval < 0)
@@ -5713,7 +5728,7 @@ static int __init fotg210_hcd_init(void)
 clean:
 	debugfs_remove(fotg210_debug_root);
 	fotg210_debug_root = NULL;
-
+err_debug:
 	clear_bit(USB_EHCI_LOADED, &usb_hcds_loaded);
 	return retval;
 }

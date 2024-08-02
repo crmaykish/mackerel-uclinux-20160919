@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* -*- mode: c; c-basic-offset: 8; -*-
  * vim: noexpandtab sw=8 ts=8 sts=0:
  *
@@ -7,6 +6,21 @@
  * Node local data allocation
  *
  * Copyright (C) 2002, 2004 Oracle.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public
+ * License along with this program; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 021110-1307, USA.
  */
 
 #include <linux/fs.h>
@@ -331,17 +345,12 @@ int ocfs2_load_local_alloc(struct ocfs2_super *osb)
 	if (num_used
 	    || alloc->id1.bitmap1.i_used
 	    || alloc->id1.bitmap1.i_total
-	    || la->la_bm_off) {
-		mlog(ML_ERROR, "inconsistent detected, clean journal with"
-		     " unrecovered local alloc, please run fsck.ocfs2!\n"
+	    || la->la_bm_off)
+		mlog(ML_ERROR, "Local alloc hasn't been recovered!\n"
 		     "found = %u, set = %u, taken = %u, off = %u\n",
 		     num_used, le32_to_cpu(alloc->id1.bitmap1.i_used),
 		     le32_to_cpu(alloc->id1.bitmap1.i_total),
 		     OCFS2_LOCAL_ALLOC(alloc)->la_bm_off);
-
-		status = -EINVAL;
-		goto bail;
-	}
 
 	osb->local_alloc_bh = alloc_bh;
 	osb->local_alloc_state = OCFS2_LA_ENABLED;
@@ -349,7 +358,8 @@ int ocfs2_load_local_alloc(struct ocfs2_super *osb)
 bail:
 	if (status < 0)
 		brelse(alloc_bh);
-	iput(inode);
+	if (inode)
+		iput(inode);
 
 	trace_ocfs2_load_local_alloc(osb->local_alloc_bits);
 
@@ -377,8 +387,7 @@ void ocfs2_shutdown_local_alloc(struct ocfs2_super *osb)
 	struct ocfs2_dinode *alloc = NULL;
 
 	cancel_delayed_work(&osb->la_enable_wq);
-	if (osb->ocfs2_wq)
-		flush_workqueue(osb->ocfs2_wq);
+	flush_workqueue(ocfs2_wq);
 
 	if (osb->local_alloc_state == OCFS2_LA_UNUSED)
 		goto out;
@@ -406,7 +415,7 @@ void ocfs2_shutdown_local_alloc(struct ocfs2_super *osb)
 		goto out;
 	}
 
-	inode_lock(main_bm_inode);
+	mutex_lock(&main_bm_inode->i_mutex);
 
 	status = ocfs2_inode_lock(main_bm_inode, &main_bm_bh, 1);
 	if (status < 0) {
@@ -425,11 +434,12 @@ void ocfs2_shutdown_local_alloc(struct ocfs2_super *osb)
 	bh = osb->local_alloc_bh;
 	alloc = (struct ocfs2_dinode *) bh->b_data;
 
-	alloc_copy = kmemdup(alloc, bh->b_size, GFP_NOFS);
+	alloc_copy = kmalloc(bh->b_size, GFP_NOFS);
 	if (!alloc_copy) {
 		status = -ENOMEM;
 		goto out_commit;
 	}
+	memcpy(alloc_copy, alloc, bh->b_size);
 
 	status = ocfs2_journal_access_di(handle, INODE_CACHE(local_alloc_inode),
 					 bh, OCFS2_JOURNAL_ACCESS_WRITE);
@@ -459,11 +469,12 @@ out_unlock:
 	ocfs2_inode_unlock(main_bm_inode, 1);
 
 out_mutex:
-	inode_unlock(main_bm_inode);
+	mutex_unlock(&main_bm_inode->i_mutex);
 	iput(main_bm_inode);
 
 out:
-	iput(local_alloc_inode);
+	if (local_alloc_inode)
+		iput(local_alloc_inode);
 
 	kfree(alloc_copy);
 }
@@ -497,7 +508,7 @@ int ocfs2_begin_local_alloc_recovery(struct ocfs2_super *osb,
 		goto bail;
 	}
 
-	inode_lock(inode);
+	mutex_lock(&inode->i_mutex);
 
 	status = ocfs2_read_inode_block_full(inode, &alloc_bh,
 					     OCFS2_BH_IGNORE_CACHE);
@@ -530,7 +541,7 @@ bail:
 	brelse(alloc_bh);
 
 	if (inode) {
-		inode_unlock(inode);
+		mutex_unlock(&inode->i_mutex);
 		iput(inode);
 	}
 
@@ -562,7 +573,7 @@ int ocfs2_complete_local_alloc_recovery(struct ocfs2_super *osb,
 		goto out;
 	}
 
-	inode_lock(main_bm_inode);
+	mutex_lock(&main_bm_inode->i_mutex);
 
 	status = ocfs2_inode_lock(main_bm_inode, &main_bm_bh, 1);
 	if (status < 0) {
@@ -592,7 +603,7 @@ out_unlock:
 	ocfs2_inode_unlock(main_bm_inode, 1);
 
 out_mutex:
-	inode_unlock(main_bm_inode);
+	mutex_unlock(&main_bm_inode->i_mutex);
 
 	brelse(main_bm_bh);
 
@@ -634,7 +645,7 @@ int ocfs2_reserve_local_alloc_bits(struct ocfs2_super *osb,
 		goto bail;
 	}
 
-	inode_lock(local_alloc_inode);
+	mutex_lock(&local_alloc_inode->i_mutex);
 
 	/*
 	 * We must double check state and allocator bits because
@@ -654,10 +665,11 @@ int ocfs2_reserve_local_alloc_bits(struct ocfs2_super *osb,
 #ifdef CONFIG_OCFS2_DEBUG_FS
 	if (le32_to_cpu(alloc->id1.bitmap1.i_used) !=
 	    ocfs2_local_alloc_count_bits(alloc)) {
-		status = ocfs2_error(osb->sb, "local alloc inode %llu says it has %u used bits, but a count shows %u\n",
-				(unsigned long long)le64_to_cpu(alloc->i_blkno),
-				le32_to_cpu(alloc->id1.bitmap1.i_used),
-				ocfs2_local_alloc_count_bits(alloc));
+		ocfs2_error(osb->sb, "local alloc inode %llu says it has %u used bits, but a count shows %u\n",
+			    (unsigned long long)le64_to_cpu(alloc->i_blkno),
+			    le32_to_cpu(alloc->id1.bitmap1.i_used),
+			    ocfs2_local_alloc_count_bits(alloc));
+		status = -EIO;
 		goto bail;
 	}
 #endif
@@ -699,7 +711,7 @@ int ocfs2_reserve_local_alloc_bits(struct ocfs2_super *osb,
 	status = 0;
 bail:
 	if (status < 0 && local_alloc_inode) {
-		inode_unlock(local_alloc_inode);
+		mutex_unlock(&local_alloc_inode->i_mutex);
 		iput(local_alloc_inode);
 	}
 
@@ -826,7 +838,7 @@ static int ocfs2_local_alloc_find_clear_bits(struct ocfs2_super *osb,
 				     u32 *numbits,
 				     struct ocfs2_alloc_reservation *resv)
 {
-	int numfound = 0, bitoff, left, startoff;
+	int numfound = 0, bitoff, left, startoff, lastzero;
 	int local_resv = 0;
 	struct ocfs2_alloc_reservation r;
 	void *bitmap = NULL;
@@ -864,6 +876,7 @@ static int ocfs2_local_alloc_find_clear_bits(struct ocfs2_super *osb,
 	bitmap = OCFS2_LOCAL_ALLOC(alloc)->la_bitmap;
 
 	numfound = bitoff = startoff = 0;
+	lastzero = -1;
 	left = le32_to_cpu(alloc->id1.bitmap1.i_total);
 	while ((bitoff = ocfs2_find_next_zero_bit(bitmap, left, startoff)) != -1) {
 		if (bitoff == left) {
@@ -1074,7 +1087,7 @@ static int ocfs2_recalc_la_window(struct ocfs2_super *osb,
 		} else {
 			osb->local_alloc_state = OCFS2_LA_DISABLED;
 		}
-		queue_delayed_work(osb->ocfs2_wq, &osb->la_enable_wq,
+		queue_delayed_work(ocfs2_wq, &osb->la_enable_wq,
 				   OCFS2_LA_ENABLE_INTERVAL);
 		goto out_unlock;
 	}
@@ -1272,12 +1285,13 @@ static int ocfs2_local_alloc_slide_window(struct ocfs2_super *osb,
 	 * local alloc shutdown won't try to double free main bitmap
 	 * bits. Make a copy so the sync function knows which bits to
 	 * free. */
-	alloc_copy = kmemdup(alloc, osb->local_alloc_bh->b_size, GFP_NOFS);
+	alloc_copy = kmalloc(osb->local_alloc_bh->b_size, GFP_NOFS);
 	if (!alloc_copy) {
 		status = -ENOMEM;
 		mlog_errno(status);
 		goto bail;
 	}
+	memcpy(alloc_copy, alloc, osb->local_alloc_bh->b_size);
 
 	status = ocfs2_journal_access_di(handle,
 					 INODE_CACHE(local_alloc_inode),
@@ -1313,7 +1327,9 @@ bail:
 
 	brelse(main_bm_bh);
 
-	iput(main_bm_inode);
+	if (main_bm_inode)
+		iput(main_bm_inode);
+
 	kfree(alloc_copy);
 
 	if (ac)

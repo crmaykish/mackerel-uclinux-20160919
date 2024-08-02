@@ -1,6 +1,19 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (C) 2011 Tobias Klauser <tklauser@distanz.ch>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
  */
 
 #ifndef _ASM_NIOS2_CPUINFO_H
@@ -12,12 +25,10 @@ struct cpuinfo {
 	/* Core CPU configuration */
 	char cpu_impl[12];
 	u32 cpu_clock_freq;
-	bool mmu;
-	bool has_div;
-	bool has_mul;
-	bool has_mulx;
-	bool has_bmx;
-	bool has_cdx;
+	u32 mmu;
+	u32 has_div;
+	u32 has_mul;
+	u32 has_mulx;
 
 	/* CPU caches */
 	u32 icache_line_size;

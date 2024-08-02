@@ -1,6 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * Vineetg: Oct 2009
  *  No need for ARC specific thread_info allocator (kmalloc/free). This is
@@ -59,6 +62,9 @@ struct thread_info {
 	.addr_limit = KERNEL_DS,		\
 }
 
+#define init_thread_info    (init_thread_union.thread_info)
+#define init_stack          (init_thread_union.stack)
+
 static inline __attribute_const__ struct thread_info *current_thread_info(void)
 {
 	register unsigned long sp asm("sp");
@@ -97,7 +103,7 @@ static inline __attribute_const__ struct thread_info *current_thread_info(void)
 
 /*
  * _TIF_ALLWORK_MASK includes SYSCALL_TRACE, but we don't need it.
- * SYSCALL_TRACE is anyway seperately/unconditionally tested right after a
+ * SYSCALL_TRACE is anways seperately/unconditionally tested right after a
  * syscall, so all that reamins to be tested is _TIF_WORK_MASK
  */
 

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * STK1160 driver
  *
@@ -8,6 +7,17 @@
  * Based on Easycap driver by R.M. Thomas
  *	Copyright (C) 2010 R.M. Thomas
  *	<rmthomas--a.t--sciolus.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -28,10 +38,10 @@ static inline void print_err_status(struct stk1160 *dev,
 
 	switch (status) {
 	case -ENOENT:
-		errmsg = "unlinked synchronously";
+		errmsg = "unlinked synchronuously";
 		break;
 	case -ECONNRESET:
-		errmsg = "unlinked asynchronously";
+		errmsg = "unlinked asynchronuously";
 		break;
 	case -ENOSR:
 		errmsg = "Buffer error (overrun)";
@@ -88,7 +98,8 @@ void stk1160_buffer_done(struct stk1160 *dev)
 
 	buf->vb.sequence = dev->sequence++;
 	buf->vb.field = V4L2_FIELD_INTERLACED;
-	buf->vb.vb2_buf.timestamp = ktime_get_ns();
+	buf->vb.vb2_buf.planes[0].bytesused = buf->bytesused;
+	v4l2_get_timestamp(&buf->vb.timestamp);
 
 	vb2_set_plane_payload(&buf->vb.vb2_buf, 0, buf->bytesused);
 	vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_DONE);
@@ -99,7 +110,7 @@ void stk1160_buffer_done(struct stk1160 *dev)
 static inline
 void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 {
-	int linesdone, lineoff, lencopy, offset;
+	int linesdone, lineoff, lencopy;
 	int bytesperline = dev->width * 2;
 	struct stk1160_buffer *buf = dev->isoc_ctl.buf;
 	u8 *dst = buf->mem;
@@ -107,7 +118,8 @@ void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 
 	/*
 	 * TODO: These stk1160_dbg are very spammy!
-	 * We should check why we are getting them.
+	 * We should 1) check why we are getting them
+	 * and 2) add ratelimit.
 	 *
 	 * UPDATE: One of the reasons (the only one?) for getting these
 	 * is incorrect standard (mismatch between expected and configured).
@@ -139,13 +151,8 @@ void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 	 * Check if we have enough space left in the buffer.
 	 * In that case, we force loop exit after copy.
 	 */
-	offset = dst - (u8 *)buf->mem;
-	if (offset > buf->length) {
-		dev_warn_ratelimited(dev->dev, "out of bounds offset\n");
-		return;
-	}
-	if (lencopy > buf->length - offset) {
-		lencopy = buf->length - offset;
+	if (lencopy > buf->bytesused - buf->length) {
+		lencopy = buf->bytesused - buf->length;
 		remain = lencopy;
 	}
 
@@ -155,7 +162,7 @@ void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 
 	/* Let the bug hunt begin! sanity checks! */
 	if (lencopy < 0) {
-		printk_ratelimited(KERN_DEBUG "copy skipped: negative lencopy\n");
+		stk1160_dbg("copy skipped: negative lencopy\n");
 		return;
 	}
 
@@ -187,13 +194,8 @@ void stk1160_copy_video(struct stk1160 *dev, u8 *src, int len)
 		 * Check if we have enough space left in the buffer.
 		 * In that case, we force loop exit after copy.
 		 */
-		offset = dst - (u8 *)buf->mem;
-		if (offset > buf->length) {
-			dev_warn_ratelimited(dev->dev, "offset out of bounds\n");
-			return;
-		}
-		if (lencopy > buf->length - offset) {
-			lencopy = buf->length - offset;
+		if (lencopy > buf->bytesused - buf->length) {
+			lencopy = buf->bytesused - buf->length;
 			remain = lencopy;
 		}
 
@@ -438,14 +440,14 @@ int stk1160_alloc_isoc(struct stk1160 *dev)
 
 	dev->isoc_ctl.buf = NULL;
 	dev->isoc_ctl.max_pkt_size = dev->max_pkt_size;
-	dev->isoc_ctl.urb = kcalloc(num_bufs, sizeof(void *), GFP_KERNEL);
+	dev->isoc_ctl.urb = kzalloc(sizeof(void *)*num_bufs, GFP_KERNEL);
 	if (!dev->isoc_ctl.urb) {
 		stk1160_err("out of memory for urb array\n");
 		return -ENOMEM;
 	}
 
-	dev->isoc_ctl.transfer_buffer = kcalloc(num_bufs, sizeof(void *),
-						GFP_KERNEL);
+	dev->isoc_ctl.transfer_buffer = kzalloc(sizeof(void *)*num_bufs,
+					      GFP_KERNEL);
 	if (!dev->isoc_ctl.transfer_buffer) {
 		stk1160_err("out of memory for usb transfers\n");
 		kfree(dev->isoc_ctl.urb);
@@ -456,8 +458,10 @@ int stk1160_alloc_isoc(struct stk1160 *dev)
 	for (i = 0; i < num_bufs; i++) {
 
 		urb = usb_alloc_urb(max_packets, GFP_KERNEL);
-		if (!urb)
+		if (!urb) {
+			stk1160_err("cannot alloc urb[%d]\n", i);
 			goto free_i_bufs;
+		}
 		dev->isoc_ctl.urb[i] = urb;
 
 #ifndef CONFIG_DMA_NONCOHERENT

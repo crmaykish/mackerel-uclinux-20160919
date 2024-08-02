@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * arch/powerpc/platforms/83xx/mpc832x_rdb.c
  *
@@ -8,6 +7,11 @@
  * MPC832x RDB board specific routines.
  * This file is based on mpc832x_mds.c and mpc8313_rdb.c
  * Author: Michael Barkowski <michael.barkowski@freescale.com>
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #include <linux/pci.h>
@@ -21,8 +25,8 @@
 #include <asm/time.h>
 #include <asm/ipic.h>
 #include <asm/udbg.h>
-#include <soc/fsl/qe/qe.h>
-#include <soc/fsl/qe/qe_ic.h>
+#include <asm/qe.h>
+#include <asm/qe_ic.h>
 #include <sysdev/fsl_soc.h>
 #include <sysdev/fsl_pci.h>
 
@@ -85,7 +89,7 @@ static int __init of_fsl_spi_probe(char *type, char *compatible, u32 sysclk,
 			goto err;
 
 		ret = of_irq_to_resource(np, 0, &res[1]);
-		if (ret <= 0)
+		if (ret == NO_IRQ)
 			goto err;
 
 		pdev = platform_device_alloc("mpc83xx_spi", i);
@@ -107,9 +111,9 @@ static int __init of_fsl_spi_probe(char *type, char *compatible, u32 sysclk,
 
 		goto next;
 unreg:
-		platform_device_put(pdev);
+		platform_device_del(pdev);
 err:
-		pr_err("%pOF: registration failed\n", np);
+		pr_err("%s: registration failed\n", np->full_name);
 next:
 		i++;
 	}
@@ -193,14 +197,19 @@ static void __init mpc832x_rdb_setup_arch(void)
 	struct device_node *np;
 #endif
 
-	mpc83xx_setup_arch();
+	if (ppc_md.progress)
+		ppc_md.progress("mpc832x_rdb_setup_arch()", 0);
+
+	mpc83xx_setup_pci();
 
 #ifdef CONFIG_QUICC_ENGINE
+	qe_reset();
+
 	if ((np = of_find_node_by_name(NULL, "par_io")) != NULL) {
 		par_io_init(np);
 		of_node_put(np);
 
-		for_each_node_by_name(np, "ucc")
+		for (np = NULL; (np = of_find_node_by_name(np, "ucc")) != NULL;)
 			par_io_of_config(np);
 	}
 #endif				/* CONFIG_QUICC_ENGINE */
@@ -213,7 +222,9 @@ machine_device_initcall(mpc832x_rdb, mpc83xx_declare_of_platform_devices);
  */
 static int __init mpc832x_rdb_probe(void)
 {
-	return of_machine_is_compatible("MPC832xRDB");
+	unsigned long root = of_get_flat_dt_root();
+
+	return of_flat_dt_is_compatible(root, "MPC832xRDB");
 }
 
 define_machine(mpc832x_rdb) {

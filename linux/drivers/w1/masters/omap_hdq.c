@@ -19,7 +19,8 @@
 #include <linux/pm_runtime.h>
 #include <linux/of.h>
 
-#include <linux/w1.h>
+#include "../w1.h"
+#include "../w1_int.h"
 
 #define	MOD_NAME	"OMAP_HDQ:"
 
@@ -52,10 +53,7 @@
 #define OMAP_HDQ_MAX_USER			4
 
 static DECLARE_WAIT_QUEUE_HEAD(hdq_wait_queue);
-
 static int w1_id;
-module_param(w1_id, int, S_IRUSR);
-MODULE_PARM_DESC(w1_id, "1-wire id for the slave detection in HDQ mode");
 
 struct hdq_data {
 	struct device		*dev;
@@ -76,6 +74,36 @@ struct hdq_data {
 	/* mode: 0-HDQ 1-W1 */
 	int                     mode;
 
+};
+
+static int omap_hdq_probe(struct platform_device *pdev);
+static int omap_hdq_remove(struct platform_device *pdev);
+
+static const struct of_device_id omap_hdq_dt_ids[] = {
+	{ .compatible = "ti,omap3-1w" },
+	{ .compatible = "ti,am4372-hdq" },
+	{}
+};
+MODULE_DEVICE_TABLE(of, omap_hdq_dt_ids);
+
+static struct platform_driver omap_hdq_driver = {
+	.probe =	omap_hdq_probe,
+	.remove =	omap_hdq_remove,
+	.driver =	{
+		.name =	"omap_hdq",
+		.of_match_table = omap_hdq_dt_ids,
+	},
+};
+
+static u8 omap_w1_read_byte(void *_hdq);
+static void omap_w1_write_byte(void *_hdq, u8 byte);
+static u8 omap_w1_reset_bus(void *_hdq);
+
+
+static struct w1_bus_master omap_w1_master = {
+	.read_byte	= omap_w1_read_byte,
+	.write_byte	= omap_w1_write_byte,
+	.reset_bus	= omap_w1_reset_bus,
 };
 
 /* HDQ register I/O routines */
@@ -176,7 +204,7 @@ static int hdq_write_byte(struct hdq_data *hdq_data, u8 val, u8 *status)
 	/* check irqstatus */
 	if (!(*status & OMAP_HDQ_INT_STATUS_TXCOMPLETE)) {
 		dev_dbg(hdq_data->dev, "timeout waiting for"
-			" TXCOMPLETE/RXCOMPLETE, %x\n", *status);
+			" TXCOMPLETE/RXCOMPLETE, %x", *status);
 		ret = -ETIMEDOUT;
 		goto out;
 	}
@@ -187,7 +215,7 @@ static int hdq_write_byte(struct hdq_data *hdq_data, u8 val, u8 *status)
 			OMAP_HDQ_FLAG_CLEAR, &tmp_status);
 	if (ret) {
 		dev_dbg(hdq_data->dev, "timeout waiting GO bit"
-			" return to zero, %x\n", tmp_status);
+			" return to zero, %x", tmp_status);
 	}
 
 out:
@@ -203,7 +231,7 @@ static irqreturn_t hdq_isr(int irq, void *_hdq)
 	spin_lock_irqsave(&hdq_data->hdq_spinlock, irqflags);
 	hdq_data->hdq_irqstatus = hdq_reg_in(hdq_data, OMAP_HDQ_INT_STATUS);
 	spin_unlock_irqrestore(&hdq_data->hdq_spinlock, irqflags);
-	dev_dbg(hdq_data->dev, "hdq_isr: %x\n", hdq_data->hdq_irqstatus);
+	dev_dbg(hdq_data->dev, "hdq_isr: %x", hdq_data->hdq_irqstatus);
 
 	if (hdq_data->hdq_irqstatus &
 		(OMAP_HDQ_INT_STATUS_TXCOMPLETE | OMAP_HDQ_INT_STATUS_RXCOMPLETE
@@ -311,7 +339,7 @@ static int omap_hdq_break(struct hdq_data *hdq_data)
 	tmp_status = hdq_data->hdq_irqstatus;
 	/* check irqstatus */
 	if (!(tmp_status & OMAP_HDQ_INT_STATUS_TIMEOUT)) {
-		dev_dbg(hdq_data->dev, "timeout waiting for TIMEOUT, %x\n",
+		dev_dbg(hdq_data->dev, "timeout waiting for TIMEOUT, %x",
 				tmp_status);
 		ret = -ETIMEDOUT;
 		goto out;
@@ -338,7 +366,7 @@ static int omap_hdq_break(struct hdq_data *hdq_data)
 			&tmp_status);
 	if (ret)
 		dev_dbg(hdq_data->dev, "timeout waiting INIT&GO bits"
-			" return to zero, %x\n", tmp_status);
+			" return to zero, %x", tmp_status);
 
 out:
 	mutex_unlock(&hdq_data->hdq_mutex);
@@ -361,6 +389,8 @@ static int hdq_read_byte(struct hdq_data *hdq_data, u8 *val)
 		ret = -EINVAL;
 		goto out;
 	}
+
+	hdq_data->hdq_irqstatus = 0;
 
 	if (!(hdq_data->hdq_irqstatus & OMAP_HDQ_INT_STATUS_RXCOMPLETE)) {
 		hdq_reg_merge(hdq_data, OMAP_HDQ_CTRL_STATUS,
@@ -588,6 +618,7 @@ static u8 omap_w1_read_byte(void *_hdq)
 
 	hdq_disable_interrupt(hdq_data, OMAP_HDQ_CTRL_STATUS,
 			      ~OMAP_HDQ_CTRL_STATUS_INTERRUPTMASK);
+	hdq_data->hdq_usecount = 0;
 
 	/* Write followed by a read, release the module */
 	if (hdq_data->init_trans) {
@@ -650,16 +681,11 @@ static void omap_w1_write_byte(void *_hdq, u8 byte)
 	}
 }
 
-static struct w1_bus_master omap_w1_master = {
-	.read_byte	= omap_w1_read_byte,
-	.write_byte	= omap_w1_write_byte,
-	.reset_bus	= omap_w1_reset_bus,
-};
-
 static int omap_hdq_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct hdq_data *hdq_data;
+	struct resource *res;
 	int ret, irq;
 	u8 rev;
 	const char *mode;
@@ -673,7 +699,8 @@ static int omap_hdq_probe(struct platform_device *pdev)
 	hdq_data->dev = dev;
 	platform_set_drvdata(pdev, hdq_data);
 
-	hdq_data->hdq_base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	hdq_data->hdq_base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(hdq_data->hdq_base))
 		return PTR_ERR(hdq_data->hdq_base);
 
@@ -691,7 +718,7 @@ static int omap_hdq_probe(struct platform_device *pdev)
 	ret = _omap_hdq_reset(hdq_data);
 	if (ret) {
 		dev_dbg(&pdev->dev, "reset failed\n");
-		goto err_irq;
+		return -EINVAL;
 	}
 
 	rev = hdq_reg_in(hdq_data, OMAP_HDQ_REVISION);
@@ -702,8 +729,7 @@ static int omap_hdq_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq	< 0) {
-		dev_dbg(&pdev->dev, "Failed to get IRQ: %d\n", irq);
-		ret = irq;
+		ret = -ENXIO;
 		goto err_irq;
 	}
 
@@ -761,27 +787,13 @@ static int omap_hdq_remove(struct platform_device *pdev)
 	/* remove module dependency */
 	pm_runtime_disable(&pdev->dev);
 
-	w1_remove_master_device(&omap_w1_master);
-
 	return 0;
 }
 
-static const struct of_device_id omap_hdq_dt_ids[] = {
-	{ .compatible = "ti,omap3-1w" },
-	{ .compatible = "ti,am4372-hdq" },
-	{}
-};
-MODULE_DEVICE_TABLE(of, omap_hdq_dt_ids);
-
-static struct platform_driver omap_hdq_driver = {
-	.probe = omap_hdq_probe,
-	.remove = omap_hdq_remove,
-	.driver = {
-		.name =	"omap_hdq",
-		.of_match_table = omap_hdq_dt_ids,
-	},
-};
 module_platform_driver(omap_hdq_driver);
+
+module_param(w1_id, int, S_IRUSR);
+MODULE_PARM_DESC(w1_id, "1-wire id for the slave detection in HDQ mode");
 
 MODULE_AUTHOR("Texas Instruments");
 MODULE_DESCRIPTION("HDQ-1W driver Library");

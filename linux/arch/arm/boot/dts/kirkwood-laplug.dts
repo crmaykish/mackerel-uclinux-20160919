@@ -1,7 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2013 Maxime Hadjinlian <maxime.hadjinlian@gmail.com>
  *
+ * This file is licensed under the terms of the GNU General Public
+ * License version 2. This program is licensed "as is" without any
+ * warranty of any kind, whether express or implied.
  */
 
 /dts-v1/;
@@ -23,6 +25,15 @@
 	chosen {
 		bootargs = "console=ttyS0,115200n8 earlyprintk";
 		stdout-path = &uart0;
+	};
+
+	mbus {
+		pcie-controller {
+			status = "okay";
+			pcie@1,0 {
+				status = "okay";
+			};
+		};
 	};
 
 	ocp@f1000000 {
@@ -51,7 +62,7 @@
 	gpio_keys {
 		compatible = "gpio-keys";
 
-		power {
+		button@1{
 			label = "Power push button";
 			linux,code = <KEY_POWER>;
 			gpios = <&gpio1 0 GPIO_ACTIVE_HIGH>;
@@ -157,12 +168,4 @@
 	ethernet0-port@0 {
 		phy-handle = <&ethphy0>;
 	};
-};
-
-&pciec {
-        status = "okay";
-};
-
-&pcie0 {
-	status = "okay";
 };

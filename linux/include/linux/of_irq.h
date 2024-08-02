@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __OF_IRQ_H
 #define __OF_IRQ_H
 
@@ -52,10 +51,9 @@ extern struct irq_domain *of_msi_get_domain(struct device *dev,
 					    struct device_node *np,
 					    enum irq_domain_bus_token token);
 extern struct irq_domain *of_msi_map_get_device_domain(struct device *dev,
-							u32 id,
-							u32 bus_token);
+						       u32 rid);
 extern void of_msi_configure(struct device *dev, struct device_node *np);
-u32 of_msi_map_id(struct device *dev, struct device_node *msi_np, u32 id_in);
+u32 of_msi_map_rid(struct device *dev, struct device_node *msi_np, u32 rid_in);
 #else
 static inline int of_irq_count(struct device_node *dev)
 {
@@ -86,17 +84,17 @@ static inline struct irq_domain *of_msi_get_domain(struct device *dev,
 	return NULL;
 }
 static inline struct irq_domain *of_msi_map_get_device_domain(struct device *dev,
-						u32 id, u32 bus_token)
+							      u32 rid)
 {
 	return NULL;
 }
 static inline void of_msi_configure(struct device *dev, struct device_node *np)
 {
 }
-static inline u32 of_msi_map_id(struct device *dev,
-				 struct device_node *msi_np, u32 id_in)
+static inline u32 of_msi_map_rid(struct device *dev,
+				 struct device_node *msi_np, u32 rid_in)
 {
-	return id_in;
+	return rid_in;
 }
 #endif
 

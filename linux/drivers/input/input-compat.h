@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef _INPUT_COMPAT_H
 #define _INPUT_COMPAT_H
 
@@ -6,6 +5,10 @@
  * 32bit compatibility wrappers for the input subsystem.
  *
  * Very heavily based on evdev.c - Copyright (c) 1999-2002 Vojtech Pavlik
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
  */
 
 #include <linux/compiler.h>
@@ -14,9 +17,20 @@
 
 #ifdef CONFIG_COMPAT
 
+/* Note to the author of this code: did it ever occur to
+   you why the ifdefs are needed? Think about it again. -AK */
+#if defined(CONFIG_X86_64) || defined(CONFIG_TILE)
+#  define INPUT_COMPAT_TEST is_compat_task()
+#elif defined(CONFIG_S390)
+#  define INPUT_COMPAT_TEST test_thread_flag(TIF_31BIT)
+#elif defined(CONFIG_MIPS)
+#  define INPUT_COMPAT_TEST test_thread_flag(TIF_32BIT_ADDR)
+#else
+#  define INPUT_COMPAT_TEST test_thread_flag(TIF_32BIT)
+#endif
+
 struct input_event_compat {
-	compat_ulong_t sec;
-	compat_ulong_t usec;
+	struct compat_timeval time;
 	__u16 type;
 	__u16 code;
 	__s32 value;
@@ -53,7 +67,7 @@ struct ff_effect_compat {
 
 static inline size_t input_event_size(void)
 {
-	return (in_compat_syscall() && !COMPAT_USE_64BIT_TIME) ?
+	return (INPUT_COMPAT_TEST && !COMPAT_USE_64BIT_TIME) ?
 		sizeof(struct input_event_compat) : sizeof(struct input_event);
 }
 

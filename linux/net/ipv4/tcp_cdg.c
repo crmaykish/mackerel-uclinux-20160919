@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * CAIA Delay-Gradient (CDG) congestion control
  *
@@ -28,8 +27,6 @@
 #include <linux/kernel.h>
 #include <linux/random.h>
 #include <linux/module.h>
-#include <linux/sched/clock.h>
-
 #include <net/tcp.h>
 
 #define HYSTART_ACK_TRAIN	1
@@ -59,7 +56,7 @@ MODULE_PARM_DESC(use_shadow, "use shadow window heuristic");
 module_param(use_tolerance, bool, 0644);
 MODULE_PARM_DESC(use_tolerance, "use loss tolerance heuristic");
 
-struct cdg_minmax {
+struct minmax {
 	union {
 		struct {
 			s32 min;
@@ -77,15 +74,16 @@ enum cdg_state {
 };
 
 struct cdg {
-	struct cdg_minmax rtt;
-	struct cdg_minmax rtt_prev;
-	struct cdg_minmax *gradients;
-	struct cdg_minmax gsum;
+	struct minmax rtt;
+	struct minmax rtt_prev;
+	struct minmax *gradients;
+	struct minmax gsum;
 	bool gfilled;
 	u8  tail;
 	u8  state;
 	u8  delack;
 	u32 rtt_seq;
+	u32 undo_cwnd;
 	u32 shadow_wnd;
 	u16 backoff_cnt;
 	u16 sample_cnt;
@@ -147,7 +145,7 @@ static void tcp_cdg_hystart_update(struct sock *sk)
 		return;
 
 	if (hystart_detect & HYSTART_ACK_TRAIN) {
-		u32 now_us = tp->tcp_mstamp;
+		u32 now_us = div_u64(local_clock(), NSEC_PER_USEC);
 
 		if (ca->last_ack == 0 || !tcp_is_cwnd_limited(sk)) {
 			ca->last_ack = now_us;
@@ -157,11 +155,11 @@ static void tcp_cdg_hystart_update(struct sock *sk)
 
 			ca->last_ack = now_us;
 			if (after(now_us, ca->round_start + base_owd)) {
-				NET_INC_STATS(sock_net(sk),
-					      LINUX_MIB_TCPHYSTARTTRAINDETECT);
-				NET_ADD_STATS(sock_net(sk),
-					      LINUX_MIB_TCPHYSTARTTRAINCWND,
-					      tp->snd_cwnd);
+				NET_INC_STATS_BH(sock_net(sk),
+						 LINUX_MIB_TCPHYSTARTTRAINDETECT);
+				NET_ADD_STATS_BH(sock_net(sk),
+						 LINUX_MIB_TCPHYSTARTTRAINCWND,
+						 tp->snd_cwnd);
 				tp->snd_ssthresh = tp->snd_cwnd;
 				return;
 			}
@@ -176,11 +174,11 @@ static void tcp_cdg_hystart_update(struct sock *sk)
 					 125U);
 
 			if (ca->rtt.min > thresh) {
-				NET_INC_STATS(sock_net(sk),
-					      LINUX_MIB_TCPHYSTARTDELAYDETECT);
-				NET_ADD_STATS(sock_net(sk),
-					      LINUX_MIB_TCPHYSTARTDELAYCWND,
-					      tp->snd_cwnd);
+				NET_INC_STATS_BH(sock_net(sk),
+						 LINUX_MIB_TCPHYSTARTDELAYDETECT);
+				NET_ADD_STATS_BH(sock_net(sk),
+						 LINUX_MIB_TCPHYSTARTDELAYCWND,
+						 tp->snd_cwnd);
 				tp->snd_ssthresh = tp->snd_cwnd;
 			}
 		}
@@ -296,12 +294,12 @@ static void tcp_cdg_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 	ca->shadow_wnd = max(ca->shadow_wnd, ca->shadow_wnd + incr);
 }
 
-static void tcp_cdg_acked(struct sock *sk, const struct ack_sample *sample)
+static void tcp_cdg_acked(struct sock *sk, u32 num_acked, s32 rtt_us)
 {
 	struct cdg *ca = inet_csk_ca(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
-	if (sample->rtt_us <= 0)
+	if (rtt_us <= 0)
 		return;
 
 	/* A heuristic for filtering delayed ACKs, adapted from:
@@ -309,26 +307,28 @@ static void tcp_cdg_acked(struct sock *sk, const struct ack_sample *sample)
 	 * delay and rate based TCP mechanisms." TR 100219A. CAIA, 2010.
 	 */
 	if (tp->sacked_out == 0) {
-		if (sample->pkts_acked == 1 && ca->delack) {
+		if (num_acked == 1 && ca->delack) {
 			/* A delayed ACK is only used for the minimum if it is
 			 * provenly lower than an existing non-zero minimum.
 			 */
-			ca->rtt.min = min(ca->rtt.min, sample->rtt_us);
+			ca->rtt.min = min(ca->rtt.min, rtt_us);
 			ca->delack--;
 			return;
-		} else if (sample->pkts_acked > 1 && ca->delack < 5) {
+		} else if (num_acked > 1 && ca->delack < 5) {
 			ca->delack++;
 		}
 	}
 
-	ca->rtt.min = min_not_zero(ca->rtt.min, sample->rtt_us);
-	ca->rtt.max = max(ca->rtt.max, sample->rtt_us);
+	ca->rtt.min = min_not_zero(ca->rtt.min, rtt_us);
+	ca->rtt.max = max(ca->rtt.max, rtt_us);
 }
 
 static u32 tcp_cdg_ssthresh(struct sock *sk)
 {
 	struct cdg *ca = inet_csk_ca(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
+
+	ca->undo_cwnd = tp->snd_cwnd;
 
 	if (ca->state == CDG_BACKOFF)
 		return max(2U, (tp->snd_cwnd * min(1024U, backoff_beta)) >> 10);
@@ -342,11 +342,18 @@ static u32 tcp_cdg_ssthresh(struct sock *sk)
 	return max(2U, tp->snd_cwnd >> 1);
 }
 
+static u32 tcp_cdg_undo_cwnd(struct sock *sk)
+{
+	struct cdg *ca = inet_csk_ca(sk);
+
+	return max(tcp_sk(sk)->snd_cwnd, ca->undo_cwnd);
+}
+
 static void tcp_cdg_cwnd_event(struct sock *sk, const enum tcp_ca_event ev)
 {
 	struct cdg *ca = inet_csk_ca(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
-	struct cdg_minmax *gradients;
+	struct minmax *gradients;
 
 	switch (ev) {
 	case CA_EVENT_CWND_RESTART:
@@ -375,7 +382,6 @@ static void tcp_cdg_init(struct sock *sk)
 	struct cdg *ca = inet_csk_ca(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
-	ca->gradients = NULL;
 	/* We silently fall back to window = 1 if allocation fails. */
 	if (window > 1)
 		ca->gradients = kcalloc(window, sizeof(ca->gradients[0]),
@@ -389,14 +395,13 @@ static void tcp_cdg_release(struct sock *sk)
 	struct cdg *ca = inet_csk_ca(sk);
 
 	kfree(ca->gradients);
-	ca->gradients = NULL;
 }
 
-static struct tcp_congestion_ops tcp_cdg __read_mostly = {
+struct tcp_congestion_ops tcp_cdg __read_mostly = {
 	.cong_avoid = tcp_cdg_cong_avoid,
 	.cwnd_event = tcp_cdg_cwnd_event,
 	.pkts_acked = tcp_cdg_acked,
-	.undo_cwnd = tcp_reno_undo_cwnd,
+	.undo_cwnd = tcp_cdg_undo_cwnd,
 	.ssthresh = tcp_cdg_ssthresh,
 	.release = tcp_cdg_release,
 	.init = tcp_cdg_init,

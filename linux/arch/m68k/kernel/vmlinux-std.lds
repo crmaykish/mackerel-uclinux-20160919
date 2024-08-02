@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /* ld script to make m68k Linux kernel */
 
 #include <asm-generic/vmlinux.lds.h>
@@ -16,10 +15,7 @@ SECTIONS
   .text : {
 	HEAD_TEXT
 	TEXT_TEXT
-	IRQENTRY_TEXT
-	SOFTIRQENTRY_TEXT
 	SCHED_TEXT
-	CPUIDLE_TEXT
 	LOCK_TEXT
 	*(.fixup)
 	*(.gnu.warning)

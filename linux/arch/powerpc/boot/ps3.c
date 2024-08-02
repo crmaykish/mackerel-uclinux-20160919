@@ -1,9 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  PS3 bootwrapper support.
  *
  *  Copyright (C) 2007 Sony Computer Entertainment Inc.
  *  Copyright 2007 Sony Corp.
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; version 2 of the License.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <stdarg.h>
@@ -107,12 +119,13 @@ void ps3_copy_vectors(void)
 	flush_cache((void *)0x100, 512);
 }
 
-void platform_init(void)
+void platform_init(unsigned long null_check)
 {
 	const u32 heapsize = 0x1000000 - (u32)_end; /* 16MiB */
 	void *chosen;
 	unsigned long ft_addr;
 	u64 rm_size;
+	unsigned long val;
 
 	console_ops.write = ps3_console_write;
 	platform_ops.exit = ps3_exit;
@@ -139,6 +152,11 @@ void platform_init(void)
 	ps3_copy_vectors();
 
 	printf(" flat tree at 0x%lx\n\r", ft_addr);
+
+	val = *(unsigned long *)0;
+
+	if (val != null_check)
+		printf("null check failed: %lx != %lx\n\r", val, null_check);
 
 	((kernel_entry_t)0)(ft_addr, 0, NULL);
 

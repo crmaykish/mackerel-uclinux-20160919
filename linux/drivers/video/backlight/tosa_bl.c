@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  LCD / Backlight control code for Sharp SL-6000x (tosa)
  *
  *  Copyright (c) 2005		Dirk Opfer
  *  Copyright (c) 2007,2008	Dmitry Baryshkov
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License version 2 as
+ *  published by the Free Software Foundation.
+ *
  */
 
 #include <linux/kernel.h>
@@ -159,6 +163,7 @@ MODULE_DEVICE_TABLE(i2c, tosa_bl_id);
 static struct i2c_driver tosa_bl_driver = {
 	.driver = {
 		.name		= "tosa-bl",
+		.owner		= THIS_MODULE,
 		.pm		= &tosa_bl_pm_ops,
 	},
 	.probe		= tosa_bl_probe,

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Roccat Pyra driver for Linux
  *
@@ -6,6 +5,10 @@
  */
 
 /*
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
  */
 
 /*
@@ -87,7 +90,8 @@ static ssize_t pyra_sysfs_read(struct file *fp, struct kobject *kobj,
 		char *buf, loff_t off, size_t count,
 		size_t real_size, uint command)
 {
-	struct device *dev = kobj_to_dev(kobj)->parent->parent;
+	struct device *dev =
+			container_of(kobj, struct device, kobj)->parent->parent;
 	struct pyra_device *pyra = hid_get_drvdata(dev_get_drvdata(dev));
 	struct usb_device *usb_dev = interface_to_usbdev(to_usb_interface(dev));
 	int retval;
@@ -112,7 +116,8 @@ static ssize_t pyra_sysfs_write(struct file *fp, struct kobject *kobj,
 		void const *buf, loff_t off, size_t count,
 		size_t real_size, uint command)
 {
-	struct device *dev = kobj_to_dev(kobj)->parent->parent;
+	struct device *dev =
+			container_of(kobj, struct device, kobj)->parent->parent;
 	struct pyra_device *pyra = hid_get_drvdata(dev_get_drvdata(dev));
 	struct usb_device *usb_dev = interface_to_usbdev(to_usb_interface(dev));
 	int retval;
@@ -186,7 +191,8 @@ static ssize_t pyra_sysfs_read_profilex_settings(struct file *fp,
 		struct kobject *kobj, struct bin_attribute *attr, char *buf,
 		loff_t off, size_t count)
 {
-	struct device *dev = kobj_to_dev(kobj)->parent->parent;
+	struct device *dev =
+			container_of(kobj, struct device, kobj)->parent->parent;
 	struct usb_device *usb_dev = interface_to_usbdev(to_usb_interface(dev));
 	ssize_t retval;
 
@@ -204,7 +210,8 @@ static ssize_t pyra_sysfs_read_profilex_buttons(struct file *fp,
 		struct kobject *kobj, struct bin_attribute *attr, char *buf,
 		loff_t off, size_t count)
 {
-	struct device *dev = kobj_to_dev(kobj)->parent->parent;
+	struct device *dev =
+			container_of(kobj, struct device, kobj)->parent->parent;
 	struct usb_device *usb_dev = interface_to_usbdev(to_usb_interface(dev));
 	ssize_t retval;
 
@@ -241,7 +248,8 @@ static ssize_t pyra_sysfs_write_settings(struct file *fp,
 		struct kobject *kobj, struct bin_attribute *attr, char *buf,
 		loff_t off, size_t count)
 {
-	struct device *dev = kobj_to_dev(kobj)->parent->parent;
+	struct device *dev =
+			container_of(kobj, struct device, kobj)->parent->parent;
 	struct pyra_device *pyra = hid_get_drvdata(dev_get_drvdata(dev));
 	struct usb_device *usb_dev = interface_to_usbdev(to_usb_interface(dev));
 	int retval = 0;
@@ -448,9 +456,6 @@ static void pyra_remove_specials(struct hid_device *hdev)
 static int pyra_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
 	int retval;
-
-	if (!hid_is_usb(hdev))
-		return -EINVAL;
 
 	retval = hid_parse(hdev);
 	if (retval) {

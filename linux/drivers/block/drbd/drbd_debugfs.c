@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 #define pr_fmt(fmt) "drbd debugfs: " fmt
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -237,9 +236,15 @@ static void seq_print_peer_request_flags(struct seq_file *m, struct drbd_peer_re
 	seq_print_rq_state_bit(m, f & EE_CALL_AL_COMPLETE_IO, &sep, "in-AL");
 	seq_print_rq_state_bit(m, f & EE_SEND_WRITE_ACK, &sep, "C");
 	seq_print_rq_state_bit(m, f & EE_MAY_SET_IN_SYNC, &sep, "set-in-sync");
-	seq_print_rq_state_bit(m, f & EE_TRIM, &sep, "trim");
-	seq_print_rq_state_bit(m, f & EE_ZEROOUT, &sep, "zero-out");
-	seq_print_rq_state_bit(m, f & EE_WRITE_SAME, &sep, "write-same");
+
+	if (f & EE_IS_TRIM) {
+		seq_putc(m, sep);
+		sep = '|';
+		if (f & EE_IS_TRIM_USE_ZEROOUT)
+			seq_puts(m, "zero-out");
+		else
+			seq_puts(m, "trim");
+	}
 	seq_putc(m, '\n');
 }
 
@@ -425,18 +430,22 @@ static int drbd_single_open(struct file *file, int (*show)(struct seq_file *, vo
 	/* Are we still linked,
 	 * or has debugfs_remove() already been called? */
 	parent = file->f_path.dentry->d_parent;
+	/* not sure if this can happen: */
+	if (!parent || d_really_is_negative(parent))
+		goto out;
 	/* serialize with d_delete() */
-	inode_lock(d_inode(parent));
+	mutex_lock(&d_inode(parent)->i_mutex);
 	/* Make sure the object is still alive */
 	if (simple_positive(file->f_path.dentry)
 	&& kref_get_unless_zero(kref))
 		ret = 0;
-	inode_unlock(d_inode(parent));
+	mutex_unlock(&d_inode(parent)->i_mutex);
 	if (!ret) {
 		ret = single_open(file, show, data);
 		if (ret)
 			kref_put(kref, release);
 	}
+out:
 	return ret;
 }
 
@@ -465,20 +474,35 @@ static const struct file_operations in_flight_summary_fops = {
 void drbd_debugfs_resource_add(struct drbd_resource *resource)
 {
 	struct dentry *dentry;
+	if (!drbd_debugfs_resources)
+		return;
 
 	dentry = debugfs_create_dir(resource->name, drbd_debugfs_resources);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	resource->debugfs_res = dentry;
 
 	dentry = debugfs_create_dir("volumes", resource->debugfs_res);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	resource->debugfs_res_volumes = dentry;
 
 	dentry = debugfs_create_dir("connections", resource->debugfs_res);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	resource->debugfs_res_connections = dentry;
 
-	dentry = debugfs_create_file("in_flight_summary", 0440,
-				     resource->debugfs_res, resource,
-				     &in_flight_summary_fops);
+	dentry = debugfs_create_file("in_flight_summary", S_IRUSR|S_IRGRP,
+			resource->debugfs_res, resource,
+			&in_flight_summary_fops);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	resource->debugfs_res_in_flight_summary = dentry;
+	return;
+
+fail:
+	drbd_debugfs_resource_cleanup(resource);
+	drbd_err(resource, "failed to create debugfs dentry\n");
 }
 
 static void drbd_debugfs_remove(struct dentry **dp)
@@ -621,22 +645,35 @@ void drbd_debugfs_connection_add(struct drbd_connection *connection)
 {
 	struct dentry *conns_dir = connection->resource->debugfs_res_connections;
 	struct dentry *dentry;
+	if (!conns_dir)
+		return;
 
 	/* Once we enable mutliple peers,
 	 * these connections will have descriptive names.
 	 * For now, it is just the one connection to the (only) "peer". */
 	dentry = debugfs_create_dir("peer", conns_dir);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	connection->debugfs_conn = dentry;
 
-	dentry = debugfs_create_file("callback_history", 0440,
-				     connection->debugfs_conn, connection,
-				     &connection_callback_history_fops);
+	dentry = debugfs_create_file("callback_history", S_IRUSR|S_IRGRP,
+			connection->debugfs_conn, connection,
+			&connection_callback_history_fops);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	connection->debugfs_conn_callback_history = dentry;
 
-	dentry = debugfs_create_file("oldest_requests", 0440,
-				     connection->debugfs_conn, connection,
-				     &connection_oldest_requests_fops);
+	dentry = debugfs_create_file("oldest_requests", S_IRUSR|S_IRGRP,
+			connection->debugfs_conn, connection,
+			&connection_oldest_requests_fops);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	connection->debugfs_conn_oldest_requests = dentry;
+	return;
+
+fail:
+	drbd_debugfs_connection_cleanup(connection);
+	drbd_err(connection, "failed to create debugfs dentry\n");
 }
 
 void drbd_debugfs_connection_cleanup(struct drbd_connection *connection)
@@ -734,13 +771,6 @@ static int device_data_gen_id_show(struct seq_file *m, void *ignored)
 	return 0;
 }
 
-static int device_ed_gen_id_show(struct seq_file *m, void *ignored)
-{
-	struct drbd_device *device = m->private;
-	seq_printf(m, "0x%016llX\n", (unsigned long long)device->ed_uuid);
-	return 0;
-}
-
 #define drbd_debugfs_device_attr(name)						\
 static int device_ ## name ## _open(struct inode *inode, struct file *file)	\
 {										\
@@ -766,7 +796,6 @@ drbd_debugfs_device_attr(oldest_requests)
 drbd_debugfs_device_attr(act_log_extents)
 drbd_debugfs_device_attr(resync_extents)
 drbd_debugfs_device_attr(data_gen_id)
-drbd_debugfs_device_attr(ed_gen_id)
 
 void drbd_debugfs_device_add(struct drbd_device *device)
 {
@@ -781,6 +810,8 @@ void drbd_debugfs_device_add(struct drbd_device *device)
 
 	snprintf(vnr_buf, sizeof(vnr_buf), "%u", device->vnr);
 	dentry = debugfs_create_dir(vnr_buf, vols_dir);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	device->debugfs_vol = dentry;
 
 	snprintf(minor_buf, sizeof(minor_buf), "%u", device->minor);
@@ -789,14 +820,18 @@ void drbd_debugfs_device_add(struct drbd_device *device)
 	if (!slink_name)
 		goto fail;
 	dentry = debugfs_create_symlink(minor_buf, drbd_debugfs_minors, slink_name);
-	device->debugfs_minor = dentry;
 	kfree(slink_name);
 	slink_name = NULL;
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
+	device->debugfs_minor = dentry;
 
 #define DCF(name)	do {					\
-	dentry = debugfs_create_file(#name, 0440,	\
+	dentry = debugfs_create_file(#name, S_IRUSR|S_IRGRP,	\
 			device->debugfs_vol, device,		\
 			&device_ ## name ## _fops);		\
+	if (IS_ERR_OR_NULL(dentry))				\
+		goto fail;					\
 	device->debugfs_vol_ ## name = dentry;			\
 	} while (0)
 
@@ -804,7 +839,6 @@ void drbd_debugfs_device_add(struct drbd_device *device)
 	DCF(act_log_extents);
 	DCF(resync_extents);
 	DCF(data_gen_id);
-	DCF(ed_gen_id);
 #undef DCF
 	return;
 
@@ -820,7 +854,6 @@ void drbd_debugfs_device_cleanup(struct drbd_device *device)
 	drbd_debugfs_remove(&device->debugfs_vol_act_log_extents);
 	drbd_debugfs_remove(&device->debugfs_vol_resync_extents);
 	drbd_debugfs_remove(&device->debugfs_vol_data_gen_id);
-	drbd_debugfs_remove(&device->debugfs_vol_ed_gen_id);
 	drbd_debugfs_remove(&device->debugfs_vol);
 }
 
@@ -830,9 +863,19 @@ void drbd_debugfs_peer_device_add(struct drbd_peer_device *peer_device)
 	struct dentry *dentry;
 	char vnr_buf[8];
 
+	if (!conn_dir)
+		return;
+
 	snprintf(vnr_buf, sizeof(vnr_buf), "%u", peer_device->device->vnr);
 	dentry = debugfs_create_dir(vnr_buf, conn_dir);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	peer_device->debugfs_peer_dev = dentry;
+	return;
+
+fail:
+	drbd_debugfs_peer_device_cleanup(peer_device);
+	drbd_err(peer_device, "failed to create debugfs entries\n");
 }
 
 void drbd_debugfs_peer_device_cleanup(struct drbd_peer_device *peer_device)
@@ -855,7 +898,7 @@ static int drbd_version_open(struct inode *inode, struct file *file)
 	return single_open(file, drbd_version_show, NULL);
 }
 
-static const struct file_operations drbd_version_fops = {
+static struct file_operations drbd_version_fops = {
 	.owner = THIS_MODULE,
 	.open = drbd_version_open,
 	.llseek = seq_lseek,
@@ -873,19 +916,35 @@ void drbd_debugfs_cleanup(void)
 	drbd_debugfs_remove(&drbd_debugfs_root);
 }
 
-void __init drbd_debugfs_init(void)
+int __init drbd_debugfs_init(void)
 {
 	struct dentry *dentry;
 
 	dentry = debugfs_create_dir("drbd", NULL);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	drbd_debugfs_root = dentry;
 
 	dentry = debugfs_create_file("version", 0444, drbd_debugfs_root, NULL, &drbd_version_fops);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	drbd_debugfs_version = dentry;
 
 	dentry = debugfs_create_dir("resources", drbd_debugfs_root);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	drbd_debugfs_resources = dentry;
 
 	dentry = debugfs_create_dir("minors", drbd_debugfs_root);
+	if (IS_ERR_OR_NULL(dentry))
+		goto fail;
 	drbd_debugfs_minors = dentry;
+	return 0;
+
+fail:
+	drbd_debugfs_cleanup();
+	if (dentry)
+		return PTR_ERR(dentry);
+	else
+		return -EINVAL;
 }

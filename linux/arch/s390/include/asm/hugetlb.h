@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  IBM System z Huge TLB Page Support for Kernel.
  *
@@ -12,21 +11,16 @@
 #include <asm/page.h>
 #include <asm/pgtable.h>
 
+
+#define is_hugepage_only_range(mm, addr, len)	0
 #define hugetlb_free_pgd_range			free_pgd_range
-#define hugepages_supported()			(MACHINE_HAS_EDAT1)
+#define hugepages_supported()			(MACHINE_HAS_HPAGE)
 
 void set_huge_pte_at(struct mm_struct *mm, unsigned long addr,
 		     pte_t *ptep, pte_t pte);
 pte_t huge_ptep_get(pte_t *ptep);
 pte_t huge_ptep_get_and_clear(struct mm_struct *mm,
 			      unsigned long addr, pte_t *ptep);
-
-static inline bool is_hugepage_only_range(struct mm_struct *mm,
-					  unsigned long addr,
-					  unsigned long len)
-{
-	return false;
-}
 
 /*
  * If the arch doesn't supply something else, assume that hugepage
@@ -35,27 +29,19 @@ static inline bool is_hugepage_only_range(struct mm_struct *mm,
 static inline int prepare_hugepage_range(struct file *file,
 			unsigned long addr, unsigned long len)
 {
-	struct hstate *h = hstate_file(file);
-
-	if (len & ~huge_page_mask(h))
+	if (len & ~HPAGE_MASK)
 		return -EINVAL;
-	if (addr & ~huge_page_mask(h))
+	if (addr & ~HPAGE_MASK)
 		return -EINVAL;
 	return 0;
 }
 
-static inline void arch_clear_hugepage_flags(struct page *page)
-{
-	clear_bit(PG_arch_1, &page->flags);
-}
+#define arch_clear_hugepage_flags(page)		do { } while (0)
 
 static inline void huge_pte_clear(struct mm_struct *mm, unsigned long addr,
-				  pte_t *ptep, unsigned long sz)
+				  pte_t *ptep)
 {
-	if ((pte_val(*ptep) & _REGION_ENTRY_TYPE_MASK) == _REGION_ENTRY_TYPE_R3)
-		pte_val(*ptep) = _REGION3_ENTRY_EMPTY;
-	else
-		pte_val(*ptep) = _SEGMENT_ENTRY_EMPTY;
+	pte_val(*ptep) = _SEGMENT_ENTRY_EMPTY;
 }
 
 static inline void huge_ptep_clear_flush(struct vm_area_struct *vma,
@@ -121,11 +107,6 @@ static inline pte_t huge_pte_wrprotect(pte_t pte)
 static inline pte_t huge_pte_modify(pte_t pte, pgprot_t newprot)
 {
 	return pte_modify(pte, newprot);
-}
-
-static inline bool gigantic_page_runtime_supported(void)
-{
-	return true;
 }
 
 #endif /* _ASM_S390_HUGETLB_H */

@@ -25,7 +25,7 @@
 #include <subdev/bios/bit.h>
 #include <subdev/bios/dp.h>
 
-u16
+static u16
 nvbios_dp_table(struct nvkm_bios *bios, u8 *ver, u8 *hdr, u8 *cnt, u8 *len)
 {
 	struct bit_entry d;
@@ -36,12 +36,10 @@ nvbios_dp_table(struct nvkm_bios *bios, u8 *ver, u8 *hdr, u8 *cnt, u8 *len)
 			if (data) {
 				*ver = nvbios_rd08(bios, data + 0x00);
 				switch (*ver) {
-				case 0x20:
 				case 0x21:
 				case 0x30:
 				case 0x40:
 				case 0x41:
-				case 0x42:
 					*hdr = nvbios_rd08(bios, data + 0x01);
 					*len = nvbios_rd08(bios, data + 0x02);
 					*cnt = nvbios_rd08(bios, data + 0x03);
@@ -64,7 +62,6 @@ nvbios_dpout_entry(struct nvkm_bios *bios, u8 idx,
 	if (data && idx < *cnt) {
 		u16 outp = nvbios_rd16(bios, data + *hdr + idx * *len);
 		switch (*ver * !!outp) {
-		case 0x20:
 		case 0x21:
 		case 0x30:
 			*hdr = nvbios_rd08(bios, data + 0x04);
@@ -73,7 +70,6 @@ nvbios_dpout_entry(struct nvkm_bios *bios, u8 idx,
 			break;
 		case 0x40:
 		case 0x41:
-		case 0x42:
 			*hdr = nvbios_rd08(bios, data + 0x04);
 			*cnt = 0;
 			*len = 0;
@@ -98,16 +94,12 @@ nvbios_dpout_parse(struct nvkm_bios *bios, u8 idx,
 		info->type = nvbios_rd16(bios, data + 0x00);
 		info->mask = nvbios_rd16(bios, data + 0x02);
 		switch (*ver) {
-		case 0x20:
-			info->mask |= 0x00c0; /* match any link */
-			/* fall-through */
 		case 0x21:
 		case 0x30:
 			info->flags     = nvbios_rd08(bios, data + 0x05);
 			info->script[0] = nvbios_rd16(bios, data + 0x06);
 			info->script[1] = nvbios_rd16(bios, data + 0x08);
-			if (*len >= 0x0c)
-				info->lnkcmp    = nvbios_rd16(bios, data + 0x0a);
+			info->lnkcmp    = nvbios_rd16(bios, data + 0x0a);
 			if (*len >= 0x0f) {
 				info->script[2] = nvbios_rd16(bios, data + 0x0c);
 				info->script[3] = nvbios_rd16(bios, data + 0x0e);
@@ -117,7 +109,6 @@ nvbios_dpout_parse(struct nvkm_bios *bios, u8 idx,
 			break;
 		case 0x40:
 		case 0x41:
-		case 0x42:
 			info->flags     = nvbios_rd08(bios, data + 0x04);
 			info->script[0] = nvbios_rd16(bios, data + 0x05);
 			info->script[1] = nvbios_rd16(bios, data + 0x07);
@@ -176,7 +167,6 @@ nvbios_dpcfg_parse(struct nvkm_bios *bios, u16 outp, u8 idx,
 	memset(info, 0x00, sizeof(*info));
 	if (data) {
 		switch (*ver) {
-		case 0x20:
 		case 0x21:
 			info->dc    = nvbios_rd08(bios, data + 0x02);
 			info->pe    = nvbios_rd08(bios, data + 0x03);
@@ -189,11 +179,6 @@ nvbios_dpcfg_parse(struct nvkm_bios *bios, u16 outp, u8 idx,
 			info->dc    = nvbios_rd08(bios, data + 0x01);
 			info->pe    = nvbios_rd08(bios, data + 0x02);
 			info->tx_pu = nvbios_rd08(bios, data + 0x03);
-			break;
-		case 0x42:
-			info->dc    = nvbios_rd08(bios, data + 0x00);
-			info->pe    = nvbios_rd08(bios, data + 0x01);
-			info->tx_pu = nvbios_rd08(bios, data + 0x02);
 			break;
 		default:
 			data = 0x0000;
@@ -212,13 +197,10 @@ nvbios_dpcfg_match(struct nvkm_bios *bios, u16 outp, u8 pc, u8 vs, u8 pe,
 	u16 data;
 
 	if (*ver >= 0x30) {
-		static const u8 vsoff[] = { 0, 4, 7, 9 };
+		const u8 vsoff[] = { 0, 4, 7, 9 };
 		idx = (pc * 10) + vsoff[vs] + pe;
-		if (*ver >= 0x40 && *ver <= 0x41 && *hdr >= 0x12)
+		if (*ver >= 0x40 && *hdr >= 0x12)
 			idx += nvbios_rd08(bios, outp + 0x11) * 40;
-		else
-		if (*ver >= 0x42)
-			idx += nvbios_rd08(bios, outp + 0x11) * 10;
 	} else {
 		while ((data = nvbios_dpcfg_entry(bios, outp, ++idx,
 						  ver, hdr, cnt, len))) {

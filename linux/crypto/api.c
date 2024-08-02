@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Scatterlist Cryptographic API.
  *
@@ -8,6 +7,12 @@
  *
  * Portions derived from Cryptoapi, by Alexander Kjeldaas <astor@fast.no>
  * and Nettle, by Niels Möller.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option)
+ * any later version.
+ *
  */
 
 #include <linux/err.h>
@@ -16,10 +21,9 @@
 #include <linux/kmod.h>
 #include <linux/module.h>
 #include <linux/param.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <linux/completion.h>
 #include "internal.h"
 
 LIST_HEAD(crypto_alg_list);
@@ -97,7 +101,7 @@ static void crypto_larval_destroy(struct crypto_alg *alg)
 	struct crypto_larval *larval = (void *)alg;
 
 	BUG_ON(!crypto_is_larval(alg));
-	if (!IS_ERR_OR_NULL(larval->adult))
+	if (larval->adult)
 		crypto_mod_put(larval->adult);
 	kfree(larval);
 }
@@ -132,7 +136,7 @@ static struct crypto_alg *crypto_larval_add(const char *name, u32 type,
 	if (IS_ERR(larval))
 		return ERR_CAST(larval);
 
-	refcount_set(&larval->alg.cra_refcnt, 2);
+	atomic_set(&larval->alg.cra_refcnt, 2);
 
 	down_write(&crypto_alg_sem);
 	alg = __crypto_alg_lookup(name, type, mask);
@@ -178,8 +182,6 @@ static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg)
 		alg = ERR_PTR(-ETIMEDOUT);
 	else if (!alg)
 		alg = ERR_PTR(-ENOENT);
-	else if (IS_ERR(alg))
-		;
 	else if (crypto_is_test_larval(larval) &&
 		 !(alg->cra_flags & CRYPTO_ALG_TESTED))
 		alg = ERR_PTR(-EAGAIN);
@@ -190,43 +192,30 @@ static struct crypto_alg *crypto_larval_wait(struct crypto_alg *alg)
 	return alg;
 }
 
-static struct crypto_alg *crypto_alg_lookup(const char *name, u32 type,
-					    u32 mask)
+struct crypto_alg *crypto_alg_lookup(const char *name, u32 type, u32 mask)
 {
 	struct crypto_alg *alg;
-	u32 test = 0;
-
-	if (!((type | mask) & CRYPTO_ALG_TESTED))
-		test |= CRYPTO_ALG_TESTED;
 
 	down_read(&crypto_alg_sem);
-	alg = __crypto_alg_lookup(name, type | test, mask | test);
-	if (!alg && test) {
-		alg = __crypto_alg_lookup(name, type, mask);
-		if (alg && !crypto_is_larval(alg)) {
-			/* Test failed */
-			crypto_mod_put(alg);
-			alg = ERR_PTR(-ELIBBAD);
-		}
-	}
+	alg = __crypto_alg_lookup(name, type, mask);
 	up_read(&crypto_alg_sem);
 
 	return alg;
 }
+EXPORT_SYMBOL_GPL(crypto_alg_lookup);
 
-static struct crypto_alg *crypto_larval_lookup(const char *name, u32 type,
-					       u32 mask)
+struct crypto_alg *crypto_larval_lookup(const char *name, u32 type, u32 mask)
 {
 	struct crypto_alg *alg;
 
 	if (!name)
 		return ERR_PTR(-ENOENT);
 
-	type &= ~(CRYPTO_ALG_LARVAL | CRYPTO_ALG_DEAD);
 	mask &= ~(CRYPTO_ALG_LARVAL | CRYPTO_ALG_DEAD);
+	type &= mask;
 
 	alg = crypto_alg_lookup(name, type, mask);
-	if (!alg && !(mask & CRYPTO_NOLOAD)) {
+	if (!alg) {
 		request_module("crypto-%s", name);
 
 		if (!((type ^ CRYPTO_ALG_NEED_FALLBACK) & mask &
@@ -236,13 +225,12 @@ static struct crypto_alg *crypto_larval_lookup(const char *name, u32 type,
 		alg = crypto_alg_lookup(name, type, mask);
 	}
 
-	if (!IS_ERR_OR_NULL(alg) && crypto_is_larval(alg))
-		alg = crypto_larval_wait(alg);
-	else if (!alg)
-		alg = crypto_larval_add(name, type, mask);
+	if (alg)
+		return crypto_is_larval(alg) ? crypto_larval_wait(alg) : alg;
 
-	return alg;
+	return crypto_larval_add(name, type, mask);
 }
+EXPORT_SYMBOL_GPL(crypto_larval_lookup);
 
 int crypto_probing_notify(unsigned long val, void *v)
 {
@@ -263,6 +251,11 @@ struct crypto_alg *crypto_alg_mod_lookup(const char *name, u32 type, u32 mask)
 	struct crypto_alg *alg;
 	struct crypto_alg *larval;
 	int ok;
+
+	if (!((type | mask) & CRYPTO_ALG_TESTED)) {
+		type |= CRYPTO_ALG_TESTED;
+		mask |= CRYPTO_ALG_TESTED;
+	}
 
 	/*
 	 * If the internal flag is set for a cipher, require a caller to
@@ -317,8 +310,24 @@ static void crypto_exit_ops(struct crypto_tfm *tfm)
 {
 	const struct crypto_type *type = tfm->__crt_alg->cra_type;
 
-	if (type && tfm->exit)
-		tfm->exit(tfm);
+	if (type) {
+		if (tfm->exit)
+			tfm->exit(tfm);
+		return;
+	}
+
+	switch (crypto_tfm_alg_type(tfm)) {
+	case CRYPTO_ALG_TYPE_CIPHER:
+		crypto_exit_cipher_ops(tfm);
+		break;
+
+	case CRYPTO_ALG_TYPE_COMPRESS:
+		crypto_exit_compress_ops(tfm);
+		break;
+
+	default:
+		BUG();
+	}
 }
 
 static unsigned int crypto_ctxsize(struct crypto_alg *alg, u32 type, u32 mask)
@@ -346,12 +355,13 @@ static unsigned int crypto_ctxsize(struct crypto_alg *alg, u32 type, u32 mask)
 	return len;
 }
 
-static void crypto_shoot_alg(struct crypto_alg *alg)
+void crypto_shoot_alg(struct crypto_alg *alg)
 {
 	down_write(&crypto_alg_sem);
 	alg->cra_flags |= CRYPTO_ALG_DYING;
 	up_write(&crypto_alg_sem);
 }
+EXPORT_SYMBOL_GPL(crypto_shoot_alg);
 
 struct crypto_tfm *__crypto_alloc_tfm(struct crypto_alg *alg, u32 type,
 				      u32 mask)
@@ -490,14 +500,20 @@ struct crypto_alg *crypto_find_alg(const char *alg_name,
 				   const struct crypto_type *frontend,
 				   u32 type, u32 mask)
 {
+	struct crypto_alg *(*lookup)(const char *name, u32 type, u32 mask) =
+		crypto_alg_mod_lookup;
+
 	if (frontend) {
 		type &= frontend->maskclear;
 		mask &= frontend->maskclear;
 		type |= frontend->type;
 		mask |= frontend->maskset;
+
+		if (frontend->lookup)
+			lookup = frontend->lookup;
 	}
 
-	return crypto_alg_mod_lookup(alg_name, type, mask);
+	return lookup(alg_name, type, mask);
 }
 EXPORT_SYMBOL_GPL(crypto_find_alg);
 
@@ -568,7 +584,7 @@ void crypto_destroy_tfm(void *mem, struct crypto_tfm *tfm)
 {
 	struct crypto_alg *alg;
 
-	if (IS_ERR_OR_NULL(mem))
+	if (unlikely(!mem))
 		return;
 
 	alg = tfm->__crt_alg;
@@ -594,18 +610,6 @@ int crypto_has_alg(const char *name, u32 type, u32 mask)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(crypto_has_alg);
-
-void crypto_req_done(struct crypto_async_request *req, int err)
-{
-	struct crypto_wait *wait = req->data;
-
-	if (err == -EINPROGRESS)
-		return;
-
-	wait->err = err;
-	complete(&wait->completion);
-}
-EXPORT_SYMBOL_GPL(crypto_req_done);
 
 MODULE_DESCRIPTION("Cryptographic core API");
 MODULE_LICENSE("GPL");

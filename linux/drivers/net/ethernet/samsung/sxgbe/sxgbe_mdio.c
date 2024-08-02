@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* 10G controller driver for Samsung SoCs
  *
  * Copyright (C) 2013 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
  *
  * Author: Siva Reddy Kallam <siva.kallam@samsung.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -177,7 +180,7 @@ int sxgbe_mdio_register(struct net_device *ndev)
 	}
 
 	for (phy_addr = 0; phy_addr < PHY_MAX_ADDR; phy_addr++) {
-		struct phy_device *phy = mdiobus_get_phy(mdio_bus, phy_addr);
+		struct phy_device *phy = mdio_bus->phy_map[phy_addr];
 
 		if (phy) {
 			char irq_num[4];
@@ -213,7 +216,7 @@ int sxgbe_mdio_register(struct net_device *ndev)
 			}
 			netdev_info(ndev, "PHY ID %08x at %d IRQ %s (%s)%s\n",
 				    phy->phy_id, phy_addr, irq_str,
-				    phydev_name(phy), act ? " active" : "");
+				    dev_name(&phy->dev), act ? " active" : "");
 			phy_found = true;
 		}
 	}

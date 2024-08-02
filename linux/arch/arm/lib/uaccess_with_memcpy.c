@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/lib/uaccess_with_memcpy.c
  *
  *  Written by: Lennert Buytenhek and Nicolas Pitre
  *  Copyright (C) 2009 Marvell Semiconductor
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -49,13 +52,14 @@ pin_page_for_write(const void __user *_addr, pte_t **ptep, spinlock_t **ptlp)
 	 *
 	 * Lock the page table for the destination and check
 	 * to see that it's still huge and whether or not we will
-	 * need to fault on write.
+	 * need to fault on write, or if we have a splitting THP.
 	 */
 	if (unlikely(pmd_thp_or_huge(*pmd))) {
 		ptl = &current->mm->page_table_lock;
 		spin_lock(ptl);
 		if (unlikely(!pmd_thp_or_huge(*pmd)
-			|| pmd_hugewillfault(*pmd))) {
+			|| pmd_hugewillfault(*pmd)
+			|| pmd_trans_splitting(*pmd))) {
 			spin_unlock(ptl);
 			return 0;
 		}
@@ -87,7 +91,7 @@ __copy_to_user_memcpy(void __user *to, const void *from, unsigned long n)
 	unsigned long ua_flags;
 	int atomic;
 
-	if (uaccess_kernel()) {
+	if (unlikely(segment_eq(get_fs(), KERNEL_DS))) {
 		memcpy((void *)to, from, n);
 		return 0;
 	}
@@ -149,8 +153,7 @@ arm_copy_to_user(void __user *to, const void *from, unsigned long n)
 		n = __copy_to_user_std(to, from, n);
 		uaccess_restore(ua_flags);
 	} else {
-		n = __copy_to_user_memcpy(uaccess_mask_range_ptr(to, n),
-					  from, n);
+		n = __copy_to_user_memcpy(to, from, n);
 	}
 	return n;
 }
@@ -160,7 +163,7 @@ __clear_user_memset(void __user *addr, unsigned long n)
 {
 	unsigned long ua_flags;
 
-	if (uaccess_kernel()) {
+	if (unlikely(segment_eq(get_fs(), KERNEL_DS))) {
 		memset((void *)addr, 0, n);
 		return 0;
 	}

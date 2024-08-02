@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Implement the default iomap interfaces
  *
@@ -8,10 +7,8 @@
  *     written by Ralf Baechle <ralf@linux-mips.org>
  */
 #include <linux/pci.h>
-#include <linux/export.h>
+#include <linux/module.h>
 #include <asm/io.h>
-
-#ifdef CONFIG_PCI_DRIVERS_LEGACY
 
 void __iomem *__pci_ioport_map(struct pci_dev *dev,
 			       unsigned long port, unsigned int nr)
@@ -43,4 +40,9 @@ void __iomem *__pci_ioport_map(struct pci_dev *dev,
 	return (void __iomem *) (ctrl->io_map_base + port);
 }
 
-#endif /* CONFIG_PCI_DRIVERS_LEGACY */
+void pci_iounmap(struct pci_dev *dev, void __iomem * addr)
+{
+	iounmap(addr);
+}
+
+EXPORT_SYMBOL(pci_iounmap);

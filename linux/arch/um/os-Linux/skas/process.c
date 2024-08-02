@@ -1,11 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2015 Thomas Meyer (thomas@m3y3r.de)
  * Copyright (C) 2002- 2007 Jeff Dike (jdike@{addtoit,linux.intel}.com)
+ * Licensed under the GPL
  */
 
 #include <stdlib.h>
-#include <stdbool.h>
 #include <unistd.h>
 #include <sched.h>
 #include <errno.h>
@@ -22,7 +21,6 @@
 #include <registers.h>
 #include <skas.h>
 #include <sysdep/stub.h>
-#include <linux/threads.h>
 
 int is_skas_winch(int pid, int fd, void *data)
 {
@@ -89,11 +87,12 @@ bad_wait:
 
 extern unsigned long current_stub_stack(void);
 
-static void get_skas_faultinfo(int pid, struct faultinfo *fi, unsigned long *aux_fp_regs)
+static void get_skas_faultinfo(int pid, struct faultinfo *fi)
 {
 	int err;
+	unsigned long fpregs[FP_SIZE];
 
-	err = get_fp_registers(pid, aux_fp_regs);
+	err = get_fp_registers(pid, fpregs);
 	if (err < 0) {
 		printk(UM_KERN_ERR "save_fp_registers returned %d\n",
 		       err);
@@ -108,12 +107,12 @@ static void get_skas_faultinfo(int pid, struct faultinfo *fi, unsigned long *aux
 	wait_stub_done(pid);
 
 	/*
-	 * faultinfo is prepared by the stub_segv_handler at start of
+	 * faultinfo is prepared by the stub-segv-handler at start of
 	 * the stub stack page. We just have to copy it.
 	 */
 	memcpy(fi, (void *)current_stub_stack(), sizeof(*fi));
 
-	err = put_fp_registers(pid, aux_fp_regs);
+	err = put_fp_registers(pid, fpregs);
 	if (err < 0) {
 		printk(UM_KERN_ERR "put_fp_registers returned %d\n",
 		       err);
@@ -121,9 +120,9 @@ static void get_skas_faultinfo(int pid, struct faultinfo *fi, unsigned long *aux
 	}
 }
 
-static void handle_segv(int pid, struct uml_pt_regs *regs, unsigned long *aux_fp_regs)
+static void handle_segv(int pid, struct uml_pt_regs * regs)
 {
-	get_skas_faultinfo(pid, &regs->faultinfo, aux_fp_regs);
+	get_skas_faultinfo(pid, &regs->faultinfo);
 	segv(regs->faultinfo, 0, 1, NULL);
 }
 
@@ -173,23 +172,15 @@ static void handle_trap(int pid, struct uml_pt_regs *regs,
 	handle_syscall(regs);
 }
 
+int get_syscall(struct uml_pt_regs *regs)
+{
+	UPT_SYSCALL_NR(regs) = PT_SYSCALL_NR(regs->gp);
+
+	return UPT_SYSCALL_NR(regs);
+}
+
 extern char __syscall_stub_start[];
 
-/**
- * userspace_tramp() - userspace trampoline
- * @stack:	pointer to the new userspace stack page, can be NULL, if? FIXME:
- *
- * The userspace trampoline is used to setup a new userspace process in start_userspace() after it was clone()'ed.
- * This function will run on a temporary stack page.
- * It ptrace()'es itself, then
- * Two pages are mapped into the userspace address space:
- * - STUB_CODE (with EXEC), which contains the skas stub code
- * - STUB_DATA (with R/W), which contains a data page that is used to transfer certain data between the UML userspace process and the UML kernel.
- * Also for the userspace process a SIGSEGV handler is installed to catch pagefaults in the userspace process.
- * And last the process stops itself to give control to the UML kernel for this userspace process.
- *
- * Return: Always zero, otherwise the current userspace process is ended with non null exit() call
- */
 static int userspace_tramp(void *stack)
 {
 	void *addr;
@@ -249,26 +240,17 @@ static int userspace_tramp(void *stack)
 	return 0;
 }
 
+/* Each element set once, and only accessed by a single processor anyway */
+#undef NR_CPUS
+#define NR_CPUS 1
 int userspace_pid[NR_CPUS];
 
-/**
- * start_userspace() - prepare a new userspace process
- * @stub_stack:	pointer to the stub stack. Can be NULL, if? FIXME:
- *
- * Setups a new temporary stack page that is used while userspace_tramp() runs
- * Clones the kernel process into a new userspace process, with FDs only.
- *
- * Return: When positive: the process id of the new userspace process,
- *         when negative: an error number.
- * FIXME: can PIDs become negative?!
- */
 int start_userspace(unsigned long stub_stack)
 {
 	void *stack;
 	unsigned long sp;
 	int pid, status, n, flags, err;
 
-	/* setup a temporary stack page */
 	stack = mmap(NULL, UM_KERN_PAGE_SIZE,
 		     PROT_READ | PROT_WRITE | PROT_EXEC,
 		     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -279,12 +261,10 @@ int start_userspace(unsigned long stub_stack)
 		return err;
 	}
 
-	/* set stack pointer to the end of the stack page, so it can grow downwards */
 	sp = (unsigned long) stack + UM_KERN_PAGE_SIZE - sizeof(void *);
 
 	flags = CLONE_FILES | SIGCHLD;
 
-	/* clone into new userspace process */
 	pid = clone(userspace_tramp, (void *) sp, flags, (void *) stub_stack);
 	if (pid < 0) {
 		err = -errno;
@@ -332,7 +312,7 @@ int start_userspace(unsigned long stub_stack)
 	return err;
 }
 
-void userspace(struct uml_pt_regs *regs, unsigned long *aux_fp_regs)
+void userspace(struct uml_pt_regs *regs)
 {
 	int err, status, op, pid = userspace_pid[0];
 	/* To prevent races if using_sysemu changes under us.*/
@@ -352,17 +332,11 @@ void userspace(struct uml_pt_regs *regs, unsigned long *aux_fp_regs)
 		 * fail.  In this case, there is nothing to do but
 		 * just kill the process.
 		 */
-		if (ptrace(PTRACE_SETREGS, pid, 0, regs->gp)) {
-			printk(UM_KERN_ERR "userspace - ptrace set regs "
-			       "failed, errno = %d\n", errno);
+		if (ptrace(PTRACE_SETREGS, pid, 0, regs->gp))
 			fatal_sigsegv();
-		}
 
-		if (put_fp_registers(pid, regs->fp)) {
-			printk(UM_KERN_ERR "userspace - ptrace set fp regs "
-			       "failed, errno = %d\n", errno);
+		if (put_fp_registers(pid, regs->fp))
 			fatal_sigsegv();
-		}
 
 		/* Now we set local_using_sysemu to be used for one loop */
 		local_using_sysemu = get_using_sysemu();
@@ -407,11 +381,11 @@ void userspace(struct uml_pt_regs *regs, unsigned long *aux_fp_regs)
 			case SIGSEGV:
 				if (PTRACE_FULL_FAULTINFO) {
 					get_skas_faultinfo(pid,
-							   &regs->faultinfo, aux_fp_regs);
+							   &regs->faultinfo);
 					(*sig_info[SIGSEGV])(SIGSEGV, (struct siginfo *)&si,
 							     regs);
 				}
-				else handle_segv(pid, regs, aux_fp_regs);
+				else handle_segv(pid, regs);
 				break;
 			case SIGTRAP + 0x80:
 			        handle_trap(pid, regs, local_using_sysemu);
@@ -426,9 +400,9 @@ void userspace(struct uml_pt_regs *regs, unsigned long *aux_fp_regs)
 			case SIGBUS:
 			case SIGFPE:
 			case SIGWINCH:
-				block_signals_trace();
+				block_signals();
 				(*sig_info[sig])(sig, (struct siginfo *)&si, regs);
-				unblock_signals_trace();
+				unblock_signals();
 				break;
 			default:
 				printk(UM_KERN_ERR "userspace - child stopped "
@@ -611,11 +585,6 @@ int start_idle_thread(void *stack, jmp_buf *switch_buf)
 		fatal_sigsegv();
 	}
 	longjmp(*switch_buf, 1);
-
-	/* unreachable */
-	printk(UM_KERN_ERR "impossible long jump!");
-	fatal_sigsegv();
-	return 0;
 }
 
 void initial_thread_cb_skas(void (*proc)(void *), void *arg)
@@ -626,10 +595,10 @@ void initial_thread_cb_skas(void (*proc)(void *), void *arg)
 	cb_arg = arg;
 	cb_back = &here;
 
-	block_signals_trace();
+	block_signals();
 	if (UML_SETJMP(&here) == 0)
 		UML_LONGJMP(&initial_jmpbuf, INIT_JMP_CALLBACK);
-	unblock_signals_trace();
+	unblock_signals();
 
 	cb_proc = NULL;
 	cb_arg = NULL;
@@ -638,28 +607,14 @@ void initial_thread_cb_skas(void (*proc)(void *), void *arg)
 
 void halt_skas(void)
 {
-	block_signals_trace();
+	block_signals();
 	UML_LONGJMP(&initial_jmpbuf, INIT_JMP_HALT);
 }
 
-static bool noreboot;
-
-static int __init noreboot_cmd_param(char *str, int *add)
-{
-	noreboot = true;
-	return 0;
-}
-
-__uml_setup("noreboot", noreboot_cmd_param,
-"noreboot\n"
-"    Rather than rebooting, exit always, akin to QEMU's -no-reboot option.\n"
-"    This is useful if you're using CONFIG_PANIC_TIMEOUT in order to catch\n"
-"    crashes in CI\n");
-
 void reboot_skas(void)
 {
-	block_signals_trace();
-	UML_LONGJMP(&initial_jmpbuf, noreboot ? INIT_JMP_HALT : INIT_JMP_REBOOT);
+	block_signals();
+	UML_LONGJMP(&initial_jmpbuf, INIT_JMP_REBOOT);
 }
 
 void __switch_mm(struct mm_id *mm_idp)

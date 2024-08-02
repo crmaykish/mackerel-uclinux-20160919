@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * g_ffs.c -- user mode file system API for USB composite function controllers
  *
  * Copyright (C) 2010 Samsung Electronics
  * Author: Michal Nazarewicz <mina86@mina86.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #define pr_fmt(fmt) "g_ffs: " fmt
@@ -65,7 +69,7 @@ static struct usb_device_descriptor gfs_dev_desc = {
 	.bLength		= sizeof gfs_dev_desc,
 	.bDescriptorType	= USB_DT_DEVICE,
 
-	/* .bcdUSB = DYNAMIC */
+	.bcdUSB			= cpu_to_le16(0x0200),
 	.bDeviceClass		= USB_CLASS_PER_INTERFACE,
 
 	.idVendor		= cpu_to_le16(GFS_VENDOR_ID),
@@ -149,7 +153,7 @@ static struct usb_composite_driver gfs_driver = {
 	.name		= DRIVER_NAME,
 	.dev		= &gfs_dev_desc,
 	.strings	= gfs_dev_strings,
-	.max_speed	= USB_SPEED_SUPER,
+	.max_speed	= USB_SPEED_HIGH,
 	.bind		= gfs_bind,
 	.unbind		= gfs_unbind,
 };
@@ -261,7 +265,7 @@ static void *functionfs_acquire_dev(struct ffs_dev *dev)
 {
 	if (!try_module_get(THIS_MODULE))
 		return ERR_PTR(-ENOENT);
-
+	
 	return NULL;
 }
 
@@ -271,7 +275,7 @@ static void functionfs_release_dev(struct ffs_dev *dev)
 }
 
 /*
- * The caller of this function takes ffs_lock
+ * The caller of this function takes ffs_lock 
  */
 static int functionfs_ready_callback(struct ffs_data *ffs)
 {
@@ -290,12 +294,12 @@ static int functionfs_ready_callback(struct ffs_data *ffs)
 		++missing_funcs;
 		gfs_registered = false;
 	}
-
+	
 	return ret;
 }
 
 /*
- * The caller of this function takes ffs_lock
+ * The caller of this function takes ffs_lock 
  */
 static void functionfs_closed_callback(struct ffs_data *ffs)
 {
@@ -343,14 +347,17 @@ static int gfs_bind(struct usb_composite_dev *cdev)
 
 #ifdef CONFIG_USB_FUNCTIONFS_RNDIS
 	{
+		struct f_rndis_opts *rndis_opts;
+
 		fi_rndis = usb_get_function_instance("rndis");
 		if (IS_ERR(fi_rndis)) {
 			ret = PTR_ERR(fi_rndis);
 			goto error;
 		}
+		rndis_opts = container_of(fi_rndis, struct f_rndis_opts,
+					  func_inst);
 #ifndef CONFIG_USB_FUNCTIONFS_ETH
-		net = container_of(fi_rndis, struct f_rndis_opts,
-				   func_inst)->net;
+		net = rndis_opts->net;
 #endif
 	}
 #endif

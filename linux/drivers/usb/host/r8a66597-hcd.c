@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * R8A66597 HCD (Host Controller Driver)
  *
@@ -8,6 +7,20 @@
  * Portions Copyright (C) 1999 Roman Weissgaerber
  *
  * Author : Yoshihiro Shimoda <yoshihiro.shimoda.uh@renesas.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; version 2 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
 #include <linux/module.h>
@@ -1256,11 +1269,11 @@ static void set_td_timer(struct r8a66597 *r8a66597, struct r8a66597_td *td)
 			time = 30;
 			break;
 		default:
-			time = 50;
+			time = 300;
 			break;
 		}
 
-		mod_timer(&r8a66597->timers[td->pipenum].td,
+		mod_timer(&r8a66597->td_timer[td->pipenum],
 			  jiffies + msecs_to_jiffies(time));
 	}
 }
@@ -1720,10 +1733,9 @@ static void r8a66597_root_hub_control(struct r8a66597 *r8a66597, int port)
 	}
 }
 
-static void r8a66597_interval_timer(struct timer_list *t)
+static void r8a66597_interval_timer(unsigned long _r8a66597)
 {
-	struct r8a66597_timers *timers = from_timer(timers, t, interval);
-	struct r8a66597 *r8a66597 = timers->r8a66597;
+	struct r8a66597 *r8a66597 = (struct r8a66597 *)_r8a66597;
 	unsigned long flags;
 	u16 pipenum;
 	struct r8a66597_td *td;
@@ -1733,7 +1745,7 @@ static void r8a66597_interval_timer(struct timer_list *t)
 	for (pipenum = 0; pipenum < R8A66597_MAX_NUM_PIPE; pipenum++) {
 		if (!(r8a66597->interval_map & (1 << pipenum)))
 			continue;
-		if (timer_pending(&r8a66597->timers[pipenum].interval))
+		if (timer_pending(&r8a66597->interval_timer[pipenum]))
 			continue;
 
 		td = r8a66597_get_td(r8a66597, pipenum);
@@ -1744,10 +1756,9 @@ static void r8a66597_interval_timer(struct timer_list *t)
 	spin_unlock_irqrestore(&r8a66597->lock, flags);
 }
 
-static void r8a66597_td_timer(struct timer_list *t)
+static void r8a66597_td_timer(unsigned long _r8a66597)
 {
-	struct r8a66597_timers *timers = from_timer(timers, t, td);
-	struct r8a66597 *r8a66597 = timers->r8a66597;
+	struct r8a66597 *r8a66597 = (struct r8a66597 *)_r8a66597;
 	unsigned long flags;
 	u16 pipenum;
 	struct r8a66597_td *td, *new_td = NULL;
@@ -1757,7 +1768,7 @@ static void r8a66597_td_timer(struct timer_list *t)
 	for (pipenum = 0; pipenum < R8A66597_MAX_NUM_PIPE; pipenum++) {
 		if (!(r8a66597->timeout_map & (1 << pipenum)))
 			continue;
-		if (timer_pending(&r8a66597->timers[pipenum].td))
+		if (timer_pending(&r8a66597->td_timer[pipenum]))
 			continue;
 
 		td = r8a66597_get_td(r8a66597, pipenum);
@@ -1774,7 +1785,6 @@ static void r8a66597_td_timer(struct timer_list *t)
 		pipe = td->pipe;
 		pipe_stop(r8a66597, pipe);
 
-		/* Select a different address or endpoint */
 		new_td = td;
 		do {
 			list_move_tail(&new_td->queue,
@@ -1784,8 +1794,7 @@ static void r8a66597_td_timer(struct timer_list *t)
 				new_td = td;
 				break;
 			}
-		} while (td != new_td && td->address == new_td->address &&
-			td->pipe->info.epnum == new_td->pipe->info.epnum);
+		} while (td != new_td && td->address == new_td->address);
 
 		start_transfer(r8a66597, new_td);
 
@@ -1798,9 +1807,9 @@ static void r8a66597_td_timer(struct timer_list *t)
 	spin_unlock_irqrestore(&r8a66597->lock, flags);
 }
 
-static void r8a66597_timer(struct timer_list *t)
+static void r8a66597_timer(unsigned long _r8a66597)
 {
-	struct r8a66597 *r8a66597 = from_timer(r8a66597, t, rh_timer);
+	struct r8a66597 *r8a66597 = (struct r8a66597 *)_r8a66597;
 	unsigned long flags;
 	int port;
 
@@ -1931,7 +1940,7 @@ static int r8a66597_urb_enqueue(struct usb_hcd *hcd,
 	if (request) {
 		if (td->pipe->info.timer_interval) {
 			r8a66597->interval_map |= 1 << td->pipenum;
-			mod_timer(&r8a66597->timers[td->pipenum].interval,
+			mod_timer(&r8a66597->interval_timer[td->pipenum],
 				  jiffies + msecs_to_jiffies(
 					td->pipe->info.timer_interval));
 		} else {
@@ -1979,8 +1988,6 @@ static int r8a66597_urb_dequeue(struct usb_hcd *hcd, struct urb *urb,
 
 static void r8a66597_endpoint_disable(struct usb_hcd *hcd,
 				      struct usb_host_endpoint *hep)
-__acquires(r8a66597->lock)
-__releases(r8a66597->lock)
 {
 	struct r8a66597 *r8a66597 = hcd_to_r8a66597(hcd);
 	struct r8a66597_pipe *pipe = (struct r8a66597_pipe *)hep->hcpriv;
@@ -1993,14 +2000,13 @@ __releases(r8a66597->lock)
 		return;
 	pipenum = pipe->info.pipenum;
 
-	spin_lock_irqsave(&r8a66597->lock, flags);
 	if (pipenum == 0) {
 		kfree(hep->hcpriv);
 		hep->hcpriv = NULL;
-		spin_unlock_irqrestore(&r8a66597->lock, flags);
 		return;
 	}
 
+	spin_lock_irqsave(&r8a66597->lock, flags);
 	pipe_stop(r8a66597, pipe);
 	pipe_irq_disable(r8a66597, pipenum);
 	disable_irq_empty(r8a66597, pipenum);
@@ -2093,13 +2099,16 @@ static void r8a66597_check_detect_child(struct r8a66597 *r8a66597,
 
 	memset(now_map, 0, sizeof(now_map));
 
-	mutex_lock(&usb_bus_idr_lock);
-	bus = idr_find(&usb_bus_idr, hcd->self.busnum);
-	if (bus && bus->root_hub) {
+	list_for_each_entry(bus, &usb_bus_list, bus_list) {
+		if (!bus->root_hub)
+			continue;
+
+		if (bus->busnum != hcd->self.busnum)
+			continue;
+
 		collect_usb_address_map(bus->root_hub, now_map);
 		update_usb_address_map(r8a66597, bus->root_hub, now_map);
 	}
-	mutex_unlock(&usb_bus_idr_lock);
 }
 
 static int r8a66597_hub_status_data(struct usb_hcd *hcd, char *buf)
@@ -2304,7 +2313,7 @@ static int r8a66597_bus_resume(struct usb_hcd *hcd)
 #define	r8a66597_bus_resume	NULL
 #endif
 
-static const struct hc_driver r8a66597_hc_driver = {
+static struct hc_driver r8a66597_hc_driver = {
 	.description =		hcd_name,
 	.hcd_priv_size =	sizeof(struct r8a66597),
 	.irq =			r8a66597_irq,
@@ -2411,6 +2420,12 @@ static int r8a66597_probe(struct platform_device *pdev)
 	if (usb_disabled())
 		return -ENODEV;
 
+	if (pdev->dev.dma_mask) {
+		ret = -EINVAL;
+		dev_err(&pdev->dev, "dma not supported\n");
+		goto clean_up;
+	}
+
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
 		ret = -ENODEV;
@@ -2469,7 +2484,8 @@ static int r8a66597_probe(struct platform_device *pdev)
 		r8a66597->max_root_hub = 2;
 
 	spin_lock_init(&r8a66597->lock);
-	timer_setup(&r8a66597->rh_timer, r8a66597_timer, 0);
+	setup_timer(&r8a66597->rh_timer, r8a66597_timer,
+		    (unsigned long)r8a66597);
 	r8a66597->reg = reg;
 
 	/* make sure no interrupts are pending */
@@ -2480,10 +2496,11 @@ static int r8a66597_probe(struct platform_device *pdev)
 
 	for (i = 0; i < R8A66597_MAX_NUM_PIPE; i++) {
 		INIT_LIST_HEAD(&r8a66597->pipe_queue[i]);
-		r8a66597->timers[i].r8a66597 = r8a66597;
-		timer_setup(&r8a66597->timers[i].td, r8a66597_td_timer, 0);
-		timer_setup(&r8a66597->timers[i].interval,
-			    r8a66597_interval_timer, 0);
+		setup_timer(&r8a66597->td_timer[i], r8a66597_td_timer,
+			    (unsigned long)r8a66597);
+		setup_timer(&r8a66597->interval_timer[i],
+				r8a66597_interval_timer,
+				(unsigned long)r8a66597);
 	}
 	INIT_LIST_HEAD(&r8a66597->child_device);
 

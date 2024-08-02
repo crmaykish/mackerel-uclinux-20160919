@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /****************************************************************************/
 
 /*
@@ -14,6 +13,9 @@
 #include <linux/init.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
+#include <linux/major.h>
+#include <linux/fs.h>
+#include <linux/root_dev.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/map.h>
 #include <linux/mtd/partitions.h>
@@ -108,7 +110,7 @@ static struct map_info nettel_amd_map = {
 	.bankwidth = AMD_BUSWIDTH,
 };
 
-static const struct mtd_partition nettel_amd_partitions[] = {
+static struct mtd_partition nettel_amd_partitions[] = {
 	{
 		.name = "SnapGear BIOS config",
 		.offset = 0x000e0000,

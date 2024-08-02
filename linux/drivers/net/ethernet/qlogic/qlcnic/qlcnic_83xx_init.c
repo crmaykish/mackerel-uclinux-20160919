@@ -1020,6 +1020,7 @@ static int qlcnic_83xx_idc_check_state_validity(struct qlcnic_adapter *adapter,
 	return 0;
 }
 
+#ifdef CONFIG_QLCNIC_VXLAN
 #define QLC_83XX_ENCAP_TYPE_VXLAN	BIT_1
 #define QLC_83XX_MATCH_ENCAP_ID		BIT_2
 #define QLC_83XX_SET_VXLAN_UDP_DPORT	BIT_3
@@ -1088,12 +1089,14 @@ static int qlcnic_set_vxlan_parsing(struct qlcnic_adapter *adapter,
 
 	return ret;
 }
+#endif
 
 static void qlcnic_83xx_periodic_tasks(struct qlcnic_adapter *adapter)
 {
 	if (adapter->fhash.fnum)
 		qlcnic_prune_lb_filters(adapter);
 
+#ifdef CONFIG_QLCNIC_VXLAN
 	if (adapter->flags & QLCNIC_ADD_VXLAN_PORT) {
 		if (qlcnic_set_vxlan_port(adapter))
 			return;
@@ -1109,6 +1112,7 @@ static void qlcnic_83xx_periodic_tasks(struct qlcnic_adapter *adapter)
 		adapter->ahw->vxlan_port = 0;
 		adapter->flags &= ~QLCNIC_DEL_VXLAN_PORT;
 	}
+#endif
 }
 
 /**
@@ -1720,7 +1724,7 @@ static int qlcnic_83xx_get_reset_instruction_template(struct qlcnic_adapter *p_d
 
 	ahw->reset.seq_error = 0;
 	ahw->reset.buff = kzalloc(QLC_83XX_RESTART_TEMPLATE_SIZE, GFP_KERNEL);
-	if (ahw->reset.buff == NULL)
+	if (p_dev->ahw->reset.buff == NULL)
 		return -ENOMEM;
 
 	p_buff = p_dev->ahw->reset.buff;
@@ -2043,7 +2047,6 @@ static void qlcnic_83xx_exec_template_cmd(struct qlcnic_adapter *p_dev,
 			break;
 		}
 		entry += p_hdr->size;
-		cond_resched();
 	}
 	p_dev->ahw->reset.seq_index = index;
 }
@@ -2251,8 +2254,7 @@ static int qlcnic_83xx_restart_hw(struct qlcnic_adapter *adapter)
 
 	/* Boot either flash image or firmware image from host file system */
 	if (qlcnic_load_fw_file == 1) {
-		err = qlcnic_83xx_load_fw_image_from_host(adapter);
-		if (err)
+		if (qlcnic_83xx_load_fw_image_from_host(adapter))
 			return err;
 	} else {
 		QLC_SHARED_REG_WR32(adapter, QLCNIC_FW_IMG_VALID,
@@ -2525,13 +2527,7 @@ int qlcnic_83xx_init(struct qlcnic_adapter *adapter, int pci_using_dac)
 		goto disable_mbx_intr;
 
 	qlcnic_83xx_clear_function_resources(adapter);
-
-	err = qlcnic_dcb_enable(adapter->dcb);
-	if (err) {
-		qlcnic_dcb_free(adapter->dcb);
-		goto disable_mbx_intr;
-	}
-
+	qlcnic_dcb_enable(adapter->dcb);
 	qlcnic_83xx_initialize_nic(adapter, 1);
 	qlcnic_dcb_get_info(adapter->dcb);
 

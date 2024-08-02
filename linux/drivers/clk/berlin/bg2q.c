@@ -1,14 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2014 Marvell Technology Group Ltd.
  *
  * Alexandre Belloni <alexandre.belloni@free-electrons.com>
  * Sebastian Hesselbarth <sebastian.hesselbarth@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
-#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -36,7 +46,8 @@
 #define REG_SDIO1XIN_CLKCTL	0x015c
 
 #define	MAX_CLKS 28
-static struct clk_hw_onecell_data *clk_data;
+static struct clk *clks[MAX_CLKS];
+static struct clk_onecell_data clk_data;
 static DEFINE_SPINLOCK(lock);
 static void __iomem *gbase;
 static void __iomem *cpupll_base;
@@ -282,29 +293,18 @@ static void __init berlin2q_clock_setup(struct device_node *np)
 	struct device_node *parent_np = of_get_parent(np);
 	const char *parent_names[9];
 	struct clk *clk;
-	struct clk_hw **hws;
-	int n, ret;
-
-	clk_data = kzalloc(struct_size(clk_data, hws, MAX_CLKS), GFP_KERNEL);
-	if (!clk_data) {
-		of_node_put(parent_np);
-		return;
-	}
-	clk_data->num = MAX_CLKS;
-	hws = clk_data->hws;
+	int n;
 
 	gbase = of_iomap(parent_np, 0);
 	if (!gbase) {
-		of_node_put(parent_np);
-		pr_err("%pOF: Unable to map global base\n", np);
+		pr_err("%s: Unable to map global base\n", np->full_name);
 		return;
 	}
 
 	/* BG2Q CPU PLL is not part of global registers */
 	cpupll_base = of_iomap(parent_np, 1);
-	of_node_put(parent_np);
 	if (!cpupll_base) {
-		pr_err("%pOF: Unable to map cpupll base\n", np);
+		pr_err("%s: Unable to map cpupll base\n", np->full_name);
 		iounmap(gbase);
 		return;
 	}
@@ -317,14 +317,14 @@ static void __init berlin2q_clock_setup(struct device_node *np)
 	}
 
 	/* simple register PLLs */
-	ret = berlin2_pll_register(&bg2q_pll_map, gbase + REG_SYSPLLCTL0,
+	clk = berlin2_pll_register(&bg2q_pll_map, gbase + REG_SYSPLLCTL0,
 				   clk_names[SYSPLL], clk_names[REFCLK], 0);
-	if (ret)
+	if (IS_ERR(clk))
 		goto bg2q_fail;
 
-	ret = berlin2_pll_register(&bg2q_pll_map, cpupll_base,
+	clk = berlin2_pll_register(&bg2q_pll_map, cpupll_base,
 				   clk_names[CPUPLL], clk_names[REFCLK], 0);
-	if (ret)
+	if (IS_ERR(clk))
 		goto bg2q_fail;
 
 	/* TODO: add BG2Q AVPLL */
@@ -342,7 +342,7 @@ static void __init berlin2q_clock_setup(struct device_node *np)
 		for (k = 0; k < dd->num_parents; k++)
 			parent_names[k] = clk_names[dd->parent_ids[k]];
 
-		hws[CLKID_SYS + n] = berlin2_div_register(&dd->map, gbase,
+		clks[CLKID_SYS + n] = berlin2_div_register(&dd->map, gbase,
 				dd->name, dd->div_flags, parent_names,
 				dd->num_parents, dd->flags, &lock);
 	}
@@ -351,30 +351,33 @@ static void __init berlin2q_clock_setup(struct device_node *np)
 	for (n = 0; n < ARRAY_SIZE(bg2q_gates); n++) {
 		const struct berlin2_gate_data *gd = &bg2q_gates[n];
 
-		hws[CLKID_GFX2DAXI + n] = clk_hw_register_gate(NULL, gd->name,
+		clks[CLKID_GFX2DAXI + n] = clk_register_gate(NULL, gd->name,
 			    gd->parent_name, gd->flags, gbase + REG_CLKENABLE,
 			    gd->bit_idx, 0, &lock);
 	}
 
 	/* cpuclk divider is fixed to 1 */
-	hws[CLKID_CPU] =
-		clk_hw_register_fixed_factor(NULL, "cpu", clk_names[CPUPLL],
+	clks[CLKID_CPU] =
+		clk_register_fixed_factor(NULL, "cpu", clk_names[CPUPLL],
 					  0, 1, 1);
 	/* twdclk is derived from cpu/3 */
-	hws[CLKID_TWD] =
-		clk_hw_register_fixed_factor(NULL, "twd", "cpu", 0, 1, 3);
+	clks[CLKID_TWD] =
+		clk_register_fixed_factor(NULL, "twd", "cpu", 0, 1, 3);
 
 	/* check for errors on leaf clocks */
 	for (n = 0; n < MAX_CLKS; n++) {
-		if (!IS_ERR(hws[n]))
+		if (!IS_ERR(clks[n]))
 			continue;
 
-		pr_err("%pOF: Unable to register leaf clock %d\n", np, n);
+		pr_err("%s: Unable to register leaf clock %d\n",
+		       np->full_name, n);
 		goto bg2q_fail;
 	}
 
 	/* register clk-provider */
-	of_clk_add_hw_provider(np, of_clk_hw_onecell_get, clk_data);
+	clk_data.clks = clks;
+	clk_data.clk_num = MAX_CLKS;
+	of_clk_add_provider(np, of_clk_src_onecell_get, &clk_data);
 
 	return;
 

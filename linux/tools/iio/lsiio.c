@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Industrial I/O utilities - lsiio.c
  *
  * Copyright (c) 2010 Manuel Stahl <manuel.stahl@iis.fraunhofer.de>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
  */
 
 #include <string.h>
@@ -48,8 +51,7 @@ static int dump_channels(const char *dev_dir_name)
 
 	while (ent = readdir(dp), ent)
 		if (check_prefix(ent->d_name, "in_") &&
-		   (check_postfix(ent->d_name, "_raw") ||
-		    check_postfix(ent->d_name, "_input")))
+		    check_postfix(ent->d_name, "_raw"))
 			printf("   %-10s\n", ent->d_name);
 
 	return (closedir(dp) == -1) ? -errno : 0;

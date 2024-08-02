@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/module.h>
 #include <linux/sock_diag.h>
 #include <linux/net.h>
@@ -23,9 +22,9 @@ static int pdiag_put_info(const struct packet_sock *po, struct sk_buff *nlskb)
 	pinfo.pdi_flags = 0;
 	if (po->running)
 		pinfo.pdi_flags |= PDI_RUNNING;
-	if (packet_sock_flag(po, PACKET_SOCK_AUXDATA))
+	if (po->auxdata)
 		pinfo.pdi_flags |= PDI_AUXDATA;
-	if (packet_sock_flag(po, PACKET_SOCK_ORIGDEV))
+	if (po->origdev)
 		pinfo.pdi_flags |= PDI_ORIGDEV;
 	if (po->has_vnet_hdr)
 		pinfo.pdi_flags |= PDI_VNETHDR;
@@ -40,7 +39,7 @@ static int pdiag_put_mclist(const struct packet_sock *po, struct sk_buff *nlskb)
 	struct nlattr *mca;
 	struct packet_mclist *ml;
 
-	mca = nla_nest_start_noflag(nlskb, PACKET_DIAG_MCLIST);
+	mca = nla_nest_start(nlskb, PACKET_DIAG_MCLIST);
 	if (!mca)
 		return -EMSGSIZE;
 
@@ -74,7 +73,8 @@ static int pdiag_put_ring(struct packet_ring_buffer *ring, int ver, int nl_type,
 {
 	struct packet_diag_ring pdr;
 
-	if (!ring->pg_vec)
+	if (!ring->pg_vec || ((ver > TPACKET_V2) &&
+				(nl_type == PACKET_DIAG_TX_RING)))
 		return 0;
 
 	pdr.pdr_block_size = ring->pg_vec_pages << PAGE_SHIFT;
@@ -143,7 +143,7 @@ static int sk_diag_fill(struct sock *sk, struct sk_buff *skb,
 	rp = nlmsg_data(nlh);
 	rp->pdiag_family = AF_PACKET;
 	rp->pdiag_type = sk->sk_type;
-	rp->pdiag_num = ntohs(READ_ONCE(po->num));
+	rp->pdiag_num = ntohs(po->num);
 	rp->pdiag_ino = sk_ino;
 	sock_diag_save_cookie(sk, rp->pdiag_cookie);
 

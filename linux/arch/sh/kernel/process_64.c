@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * arch/sh/kernel/process_64.c
  *
@@ -13,6 +12,10 @@
  *
  *   In turn started from i386 version:
  *     Copyright (C) 1995  Linus Torvalds
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
  */
 #include <linux/mm.h>
 #include <linux/fs.h>
@@ -22,11 +25,8 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/io.h>
-#include <linux/sched/debug.h>
-#include <linux/sched/task.h>
-#include <linux/sched/task_stack.h>
 #include <asm/syscalls.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
 #include <asm/fpu.h>
@@ -288,7 +288,7 @@ void show_regs(struct pt_regs *regs)
 /*
  * Free current thread data structures etc..
  */
-void exit_thread(struct task_struct *tsk)
+void exit_thread(void)
 {
 	/*
 	 * See arch/sparc/kernel/process.c for the precedent for doing
@@ -307,8 +307,9 @@ void exit_thread(struct task_struct *tsk)
 	 * which it would get safely nulled.
 	 */
 #ifdef CONFIG_SH_FPU
-	if (last_task_used_math == tsk)
+	if (last_task_used_math == current) {
 		last_task_used_math = NULL;
+	}
 #endif
 }
 

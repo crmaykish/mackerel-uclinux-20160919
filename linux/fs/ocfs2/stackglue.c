@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* -*- mode: c; c-basic-offset: 8; -*-
  * vim: noexpandtab sw=8 ts=8 sts=0:
  *
@@ -8,6 +7,15 @@
  * cluster stacks.
  *
  * Copyright (C) 2007, 2009 Oracle.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public
+ * License as published by the Free Software Foundation, version 2.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
  */
 
 #include <linux/list.h>
@@ -502,7 +510,11 @@ static ssize_t ocfs2_loaded_cluster_plugins_show(struct kobject *kobj,
 	list_for_each_entry(p, &ocfs2_stack_list, sp_list) {
 		ret = snprintf(buf, remain, "%s\n",
 			       p->sp_name);
-		if (ret >= remain) {
+		if (ret < 0) {
+			total = ret;
+			break;
+		}
+		if (ret == remain) {
 			/* snprintf() didn't fit */
 			total = -E2BIG;
 			break;
@@ -529,7 +541,7 @@ static ssize_t ocfs2_active_cluster_plugin_show(struct kobject *kobj,
 	if (active_stack) {
 		ret = snprintf(buf, PAGE_SIZE, "%s\n",
 			       active_stack->sp_name);
-		if (ret >= PAGE_SIZE)
+		if (ret == PAGE_SIZE)
 			ret = -E2BIG;
 	}
 	spin_unlock(&ocfs2_stack_lock);
@@ -613,12 +625,11 @@ static struct attribute *ocfs2_attrs[] = {
 	NULL,
 };
 
-static const struct attribute_group ocfs2_attr_group = {
+static struct attribute_group ocfs2_attr_group = {
 	.attrs = ocfs2_attrs,
 };
 
-struct kset *ocfs2_kset;
-EXPORT_SYMBOL_GPL(ocfs2_kset);
+static struct kset *ocfs2_kset;
 
 static void ocfs2_sysfs_exit(void)
 {
@@ -707,8 +718,6 @@ static struct ctl_table_header *ocfs2_table_header;
 
 static int __init ocfs2_stack_glue_init(void)
 {
-	int ret;
-
 	strcpy(cluster_stack_name, OCFS2_STACK_PLUGIN_O2CB);
 
 	ocfs2_table_header = register_sysctl_table(ocfs2_root_table);
@@ -718,17 +727,15 @@ static int __init ocfs2_stack_glue_init(void)
 		return -ENOMEM; /* or something. */
 	}
 
-	ret = ocfs2_sysfs_init();
-	if (ret)
-		unregister_sysctl_table(ocfs2_table_header);
-
-	return ret;
+	return ocfs2_sysfs_init();
 }
 
 static void __exit ocfs2_stack_glue_exit(void)
 {
 	memset(&locking_max_version, 0,
 	       sizeof(struct ocfs2_protocol_version));
+	locking_max_version.pv_major = 0;
+	locking_max_version.pv_minor = 0;
 	ocfs2_sysfs_exit();
 	if (ocfs2_table_header)
 		unregister_sysctl_table(ocfs2_table_header);

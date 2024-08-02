@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * PowerNV OPAL in-memory console interface
  *
  * Copyright 2014 IBM Corp.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 #include <asm/io.h>
@@ -27,10 +31,11 @@ struct memcons {
 	__be32 in_cons;
 };
 
-static struct memcons *opal_memcons = NULL;
-
-ssize_t memcons_copy(struct memcons *mc, char *to, loff_t pos, size_t count)
+static ssize_t opal_msglog_read(struct file *file, struct kobject *kobj,
+				struct bin_attribute *bin_attr, char *to,
+				loff_t pos, size_t count)
 {
+	struct memcons *mc = bin_attr->private;
 	const char *conbuf;
 	ssize_t ret;
 	size_t first_read = 0;
@@ -39,7 +44,7 @@ ssize_t memcons_copy(struct memcons *mc, char *to, loff_t pos, size_t count)
 	if (!mc)
 		return -ENODEV;
 
-	out_pos = be32_to_cpu(READ_ONCE(mc->out_pos));
+	out_pos = be32_to_cpu(ACCESS_ONCE(mc->out_pos));
 
 	/* Now we've read out_pos, put a barrier in before reading the new
 	 * data it points to in conbuf. */
@@ -86,73 +91,33 @@ out:
 	return ret;
 }
 
-ssize_t opal_msglog_copy(char *to, loff_t pos, size_t count)
-{
-	return memcons_copy(opal_memcons, to, pos, count);
-}
-
-static ssize_t opal_msglog_read(struct file *file, struct kobject *kobj,
-				struct bin_attribute *bin_attr, char *to,
-				loff_t pos, size_t count)
-{
-	return opal_msglog_copy(to, pos, count);
-}
-
 static struct bin_attribute opal_msglog_attr = {
-	.attr = {.name = "msglog", .mode = 0400},
+	.attr = {.name = "msglog", .mode = 0444},
 	.read = opal_msglog_read
 };
 
-struct memcons *memcons_init(struct device_node *node, const char *mc_prop_name)
+void __init opal_msglog_init(void)
 {
 	u64 mcaddr;
 	struct memcons *mc;
 
-	if (of_property_read_u64(node, mc_prop_name, &mcaddr)) {
-		pr_warn("%s property not found, no message log\n",
-			mc_prop_name);
-		goto out_err;
+	if (of_property_read_u64(opal_node, "ibm,opal-memcons", &mcaddr)) {
+		pr_warn("OPAL: Property ibm,opal-memcons not found, no message log\n");
+		return;
 	}
 
 	mc = phys_to_virt(mcaddr);
 	if (!mc) {
-		pr_warn("memory console address is invalid\n");
-		goto out_err;
+		pr_warn("OPAL: memory console address is invalid\n");
+		return;
 	}
 
 	if (be64_to_cpu(mc->magic) != MEMCONS_MAGIC) {
-		pr_warn("memory console version is invalid\n");
-		goto out_err;
-	}
-
-	return mc;
-
-out_err:
-	return NULL;
-}
-
-u32 memcons_get_size(struct memcons *mc)
-{
-	return be32_to_cpu(mc->ibuf_size) + be32_to_cpu(mc->obuf_size);
-}
-
-void __init opal_msglog_init(void)
-{
-	opal_memcons = memcons_init(opal_node, "ibm,opal-memcons");
-	if (!opal_memcons) {
-		pr_warn("OPAL: memcons failed to load from ibm,opal-memcons\n");
+		pr_warn("OPAL: memory console version is invalid\n");
 		return;
 	}
 
-	opal_msglog_attr.size = memcons_get_size(opal_memcons);
-}
-
-void __init opal_msglog_sysfs_init(void)
-{
-	if (!opal_memcons) {
-		pr_warn("OPAL: message log initialisation failed, not creating sysfs entry\n");
-		return;
-	}
+	opal_msglog_attr.private = mc;
 
 	if (sysfs_create_bin_file(opal_kobj, &opal_msglog_attr) != 0)
 		pr_warn("OPAL: sysfs file creation failed\n");

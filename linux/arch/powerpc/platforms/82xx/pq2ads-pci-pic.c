@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * PQ2 ADS-style PCI interrupt controller
  *
@@ -7,6 +6,10 @@
  *
  * Loosely based on mpc82xx ADS support by Vitaly Bordug <vbordug@ru.mvista.com>
  * Copyright (c) 2006 MontaVista Software, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation.
  */
 
 #include <linux/init.h>
@@ -128,7 +131,7 @@ int __init pq2ads_pci_init_irq(void)
 	}
 
 	irq = irq_of_parse_and_map(np, 0);
-	if (!irq) {
+	if (irq == NO_IRQ) {
 		printk(KERN_ERR "No interrupt in pci pic node.\n");
 		of_node_put(np);
 		goto out;

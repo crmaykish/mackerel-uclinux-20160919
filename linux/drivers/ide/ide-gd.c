@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/string.h>
@@ -300,9 +299,8 @@ static unsigned int ide_gd_check_events(struct gendisk *disk,
 	/*
 	 * The following is used to force revalidation on the first open on
 	 * removeable devices, and never gets reported to userland as
-	 * DISK_EVENT_FLAG_UEVENT isn't set in genhd->event_flags.
-	 * This is intended as removable ide disk can't really detect
-	 * MEDIA_CHANGE events.
+	 * genhd->events is 0.  This is intended as removeable ide disk
+	 * can't really detect MEDIA_CHANGE events.
 	 */
 	ret = drive->dev_flags & IDE_DFLAG_MEDIA_CHANGED;
 	drive->dev_flags &= ~IDE_DFLAG_MEDIA_CHANGED;
@@ -414,12 +412,12 @@ static int ide_gd_probe(ide_drive_t *drive)
 	set_capacity(g, ide_gd_capacity(drive));
 
 	g->minors = IDE_DISK_MINORS;
+	g->driverfs_dev = &drive->gendev;
 	g->flags |= GENHD_FL_EXT_DEVT;
 	if (drive->dev_flags & IDE_DFLAG_REMOVABLE)
 		g->flags = GENHD_FL_REMOVABLE;
 	g->fops = &ide_gd_ops;
-	g->events = DISK_EVENT_MEDIA_CHANGE;
-	device_add_disk(&drive->gendev, g, NULL);
+	add_disk(g);
 	return 0;
 
 out_free_disk:

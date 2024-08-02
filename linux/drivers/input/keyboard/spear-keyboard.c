@@ -191,8 +191,10 @@ static int spear_kbd_probe(struct platform_device *pdev)
 	int error;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(&pdev->dev, "not able to get irq for the device\n");
 		return irq;
+	}
 
 	kbd = devm_kzalloc(&pdev->dev, sizeof(*kbd), GFP_KERNEL);
 	if (!kbd) {
@@ -281,10 +283,13 @@ static int spear_kbd_remove(struct platform_device *pdev)
 	input_unregister_device(kbd->input);
 	clk_unprepare(kbd->clk);
 
+	device_init_wakeup(&pdev->dev, 0);
+
 	return 0;
 }
 
-static int __maybe_unused spear_kbd_suspend(struct device *dev)
+#ifdef CONFIG_PM
+static int spear_kbd_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct spear_kbd *kbd = platform_get_drvdata(pdev);
@@ -337,7 +342,7 @@ static int __maybe_unused spear_kbd_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused spear_kbd_resume(struct device *dev)
+static int spear_kbd_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct spear_kbd *kbd = platform_get_drvdata(pdev);
@@ -363,6 +368,7 @@ static int __maybe_unused spear_kbd_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
 static SIMPLE_DEV_PM_OPS(spear_kbd_pm_ops, spear_kbd_suspend, spear_kbd_resume);
 

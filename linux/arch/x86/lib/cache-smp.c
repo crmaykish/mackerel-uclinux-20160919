@@ -1,6 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/smp.h>
-#include <linux/export.h>
+#include <linux/module.h>
 
 static void __wbinvd(void *dummy)
 {
@@ -15,7 +14,6 @@ EXPORT_SYMBOL(wbinvd_on_cpu);
 
 int wbinvd_on_all_cpus(void)
 {
-	on_each_cpu(__wbinvd, NULL, 1);
-	return 0;
+	return on_each_cpu(__wbinvd, NULL, 1);
 }
 EXPORT_SYMBOL(wbinvd_on_all_cpus);

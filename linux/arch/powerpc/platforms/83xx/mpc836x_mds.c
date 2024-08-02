@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2006 Freescale Semiconductor, Inc. All rights reserved.
  *
@@ -10,6 +9,11 @@
  *
  * Changelog:
  * Jun 21, 2006	Initial version
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #include <linux/stddef.h>
@@ -40,8 +44,8 @@
 #include <sysdev/fsl_soc.h>
 #include <sysdev/fsl_pci.h>
 #include <sysdev/simple_gpio.h>
-#include <soc/fsl/qe/qe.h>
-#include <soc/fsl/qe/qe_ic.h>
+#include <asm/qe.h>
+#include <asm/qe_ic.h>
 
 #include "mpc83xx.h"
 
@@ -62,7 +66,8 @@ static void __init mpc836x_mds_setup_arch(void)
 	struct device_node *np;
 	u8 __iomem *bcsr_regs = NULL;
 
-	mpc83xx_setup_arch();
+	if (ppc_md.progress)
+		ppc_md.progress("mpc836x_mds_setup_arch()", 0);
 
 	/* Map BCSR area */
 	np = of_find_node_by_name(NULL, "bcsr");
@@ -74,12 +79,16 @@ static void __init mpc836x_mds_setup_arch(void)
 		of_node_put(np);
 	}
 
+	mpc83xx_setup_pci();
+
 #ifdef CONFIG_QUICC_ENGINE
+	qe_reset();
+
 	if ((np = of_find_node_by_name(NULL, "par_io")) != NULL) {
 		par_io_init(np);
 		of_node_put(np);
 
-		for_each_node_by_name(np, "ucc")
+		for (np = NULL; (np = of_find_node_by_name(np, "ucc")) != NULL;)
 			par_io_of_config(np);
 #ifdef CONFIG_QE_USB
 		/* Must fixup Par IO before QE GPIO chips are registered. */
@@ -202,7 +211,9 @@ machine_arch_initcall(mpc836x_mds, mpc836x_usb_cfg);
  */
 static int __init mpc836x_mds_probe(void)
 {
-	return of_machine_is_compatible("MPC836xMDS");
+        unsigned long root = of_get_flat_dt_root();
+
+        return of_flat_dt_is_compatible(root, "MPC836xMDS");
 }
 
 define_machine(mpc836x_mds) {

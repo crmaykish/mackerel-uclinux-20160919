@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * SPI-NOR driver for NXP SPI Flash Interface (SPIFI)
  *
@@ -6,6 +5,11 @@
  *
  * Based on Freescale QuadSPI driver:
  * Copyright (C) 2013 Freescale Semiconductor, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #include <linux/clk.h>
@@ -168,8 +172,8 @@ static int nxp_spifi_write_reg(struct spi_nor *nor, u8 opcode, u8 *buf, int len)
 	return nxp_spifi_wait_for_cmd(spifi);
 }
 
-static ssize_t nxp_spifi_read(struct spi_nor *nor, loff_t from, size_t len,
-			      u_char *buf)
+static int nxp_spifi_read(struct spi_nor *nor, loff_t from, size_t len,
+			  size_t *retlen, u_char *buf)
 {
 	struct nxp_spifi *spifi = nor->priv;
 	int ret;
@@ -179,23 +183,24 @@ static ssize_t nxp_spifi_read(struct spi_nor *nor, loff_t from, size_t len,
 		return ret;
 
 	memcpy_fromio(buf, spifi->flash_base + from, len);
+	*retlen += len;
 
-	return len;
+	return 0;
 }
 
-static ssize_t nxp_spifi_write(struct spi_nor *nor, loff_t to, size_t len,
-			       const u_char *buf)
+static void nxp_spifi_write(struct spi_nor *nor, loff_t to, size_t len,
+			    size_t *retlen, const u_char *buf)
 {
 	struct nxp_spifi *spifi = nor->priv;
 	u32 cmd;
 	int ret;
-	size_t i;
 
 	ret = nxp_spifi_set_memory_mode_off(spifi);
 	if (ret)
-		return ret;
+		return;
 
 	writel(to, spifi->io_base + SPIFI_ADDR);
+	*retlen += len;
 
 	cmd = SPIFI_CMD_DOUT |
 	      SPIFI_CMD_DATALEN(len) |
@@ -204,14 +209,10 @@ static ssize_t nxp_spifi_write(struct spi_nor *nor, loff_t to, size_t len,
 	      SPIFI_CMD_FRAMEFORM(spifi->nor.addr_width + 1);
 	writel(cmd, spifi->io_base + SPIFI_CMD);
 
-	for (i = 0; i < len; i++)
-		writeb(buf[i], spifi->io_base + SPIFI_DATA);
+	while (len--)
+		writeb(*buf++, spifi->io_base + SPIFI_DATA);
 
-	ret = nxp_spifi_wait_for_cmd(spifi);
-	if (ret)
-		return ret;
-
-	return len;
+	nxp_spifi_wait_for_cmd(spifi);
 }
 
 static int nxp_spifi_erase(struct spi_nor *nor, loff_t offs)
@@ -236,12 +237,13 @@ static int nxp_spifi_erase(struct spi_nor *nor, loff_t offs)
 
 static int nxp_spifi_setup_memory_cmd(struct nxp_spifi *spifi)
 {
-	switch (spifi->nor.read_proto) {
-	case SNOR_PROTO_1_1_1:
+	switch (spifi->nor.flash_read) {
+	case SPI_NOR_NORMAL:
+	case SPI_NOR_FAST:
 		spifi->mcmd = SPIFI_CMD_FIELDFORM_ALL_SERIAL;
 		break;
-	case SNOR_PROTO_1_1_2:
-	case SNOR_PROTO_1_1_4:
+	case SPI_NOR_DUAL:
+	case SPI_NOR_QUAD:
 		spifi->mcmd = SPIFI_CMD_FIELDFORM_QUAD_DUAL_DATA;
 		break;
 	default:
@@ -269,11 +271,8 @@ static void nxp_spifi_dummy_id_read(struct spi_nor *nor)
 static int nxp_spifi_setup_flash(struct nxp_spifi *spifi,
 				 struct device_node *np)
 {
-	struct spi_nor_hwcaps hwcaps = {
-		.mask = SNOR_HWCAPS_READ |
-			SNOR_HWCAPS_READ_FAST |
-			SNOR_HWCAPS_PP,
-	};
+	struct mtd_part_parser_data ppdata;
+	enum read_mode flash_read;
 	u32 ctrl, property;
 	u16 mode = 0;
 	int ret;
@@ -307,12 +306,13 @@ static int nxp_spifi_setup_flash(struct nxp_spifi *spifi,
 
 	if (mode & SPI_RX_DUAL) {
 		ctrl |= SPIFI_CTRL_DUAL;
-		hwcaps.mask |= SNOR_HWCAPS_READ_1_1_2;
+		flash_read = SPI_NOR_DUAL;
 	} else if (mode & SPI_RX_QUAD) {
 		ctrl &= ~SPIFI_CTRL_DUAL;
-		hwcaps.mask |= SNOR_HWCAPS_READ_1_1_4;
+		flash_read = SPI_NOR_QUAD;
 	} else {
 		ctrl |= SPIFI_CTRL_DUAL;
+		flash_read = SPI_NOR_NORMAL;
 	}
 
 	switch (mode & (SPI_CPHA | SPI_CPOL)) {
@@ -330,7 +330,7 @@ static int nxp_spifi_setup_flash(struct nxp_spifi *spifi,
 	writel(ctrl, spifi->io_base + SPIFI_CTRL);
 
 	spifi->nor.dev   = spifi->dev;
-	spi_nor_set_flash_node(&spifi->nor, np);
+	spifi->nor.flash_node = np;
 	spifi->nor.priv  = spifi;
 	spifi->nor.read  = nxp_spifi_read;
 	spifi->nor.write = nxp_spifi_write;
@@ -349,7 +349,7 @@ static int nxp_spifi_setup_flash(struct nxp_spifi *spifi,
 	 */
 	nxp_spifi_dummy_id_read(&spifi->nor);
 
-	ret = spi_nor_scan(&spifi->nor, NULL, &hwcaps);
+	ret = spi_nor_scan(&spifi->nor, NULL, flash_read);
 	if (ret) {
 		dev_err(spifi->dev, "device scan failed\n");
 		return ret;
@@ -361,7 +361,8 @@ static int nxp_spifi_setup_flash(struct nxp_spifi *spifi,
 		return ret;
 	}
 
-	ret = mtd_device_register(&spifi->nor.mtd, NULL, 0);
+	ppdata.of_node = np;
+	ret = mtd_device_parse_register(&spifi->nor.mtd, NULL, &ppdata, NULL, 0);
 	if (ret) {
 		dev_err(spifi->dev, "mtd device parse failed\n");
 		return ret;
@@ -432,7 +433,6 @@ static int nxp_spifi_probe(struct platform_device *pdev)
 	}
 
 	ret = nxp_spifi_setup_flash(spifi, flash_np);
-	of_node_put(flash_np);
 	if (ret) {
 		dev_err(&pdev->dev, "unable to setup flash chip\n");
 		goto dis_clks;

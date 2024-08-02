@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2009 Matt Fleming <matt@console-pimps.org>
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
  *
  * This is an implementation of a DWARF unwinder. Its main purpose is
  * for generating stacktrace information. Based on the DWARF 3
@@ -596,7 +599,7 @@ struct dwarf_frame *dwarf_unwind_stack(unsigned long pc,
 	 * time this function makes its first function call.
 	 */
 	if (!pc || !prev)
-		pc = _THIS_IP_;
+		pc = (unsigned long)current_text_addr();
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 	/*
@@ -605,18 +608,17 @@ struct dwarf_frame *dwarf_unwind_stack(unsigned long pc,
 	 * expected to find the real return address.
 	 */
 	if (pc == (unsigned long)&return_to_handler) {
-		struct ftrace_ret_stack *ret_stack;
+		int index = current->curr_ret_stack;
 
-		ret_stack = ftrace_graph_get_ret_stack(current, 0);
-		if (ret_stack)
-			pc = ret_stack->ret;
 		/*
 		 * We currently have no way of tracking how many
 		 * return_to_handler()'s we've seen. If there is more
 		 * than one patched return address on our stack,
 		 * complain loudly.
 		 */
-		WARN_ON(ftrace_graph_get_ret_stack(current, 1));
+		WARN_ON(index > 0);
+
+		pc = current->ret_stack[index].ret;
 	}
 #endif
 
@@ -1007,8 +1009,10 @@ static void __init dwarf_unwinder_cleanup(void)
 	rbtree_postorder_for_each_entry_safe(cie, next_cie, &cie_root, node)
 		kfree(cie);
 
-	mempool_destroy(dwarf_reg_pool);
-	mempool_destroy(dwarf_frame_pool);
+	if (dwarf_reg_pool)
+		mempool_destroy(dwarf_reg_pool);
+	if (dwarf_frame_pool)
+		mempool_destroy(dwarf_frame_pool);
 	kmem_cache_destroy(dwarf_reg_cachep);
 	kmem_cache_destroy(dwarf_frame_cachep);
 }
@@ -1170,11 +1174,11 @@ static int __init dwarf_unwinder_init(void)
 
 	dwarf_frame_cachep = kmem_cache_create("dwarf_frames",
 			sizeof(struct dwarf_frame), 0,
-			SLAB_PANIC | SLAB_HWCACHE_ALIGN, NULL);
+			SLAB_PANIC | SLAB_HWCACHE_ALIGN | SLAB_NOTRACK, NULL);
 
 	dwarf_reg_cachep = kmem_cache_create("dwarf_regs",
 			sizeof(struct dwarf_reg), 0,
-			SLAB_PANIC | SLAB_HWCACHE_ALIGN, NULL);
+			SLAB_PANIC | SLAB_HWCACHE_ALIGN | SLAB_NOTRACK, NULL);
 
 	dwarf_frame_pool = mempool_create_slab_pool(DWARF_FRAME_MIN_REQ,
 						    dwarf_frame_cachep);

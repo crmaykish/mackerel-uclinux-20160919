@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * I/O SAPIC support.
  *
@@ -67,7 +66,10 @@
  *     used as architecture-independent interrupt handling mechanism in Linux.
  *     As an IRQ is a number, we have to have
  *     IA-64 interrupt vector number <-> IRQ number mapping.  On smaller
- *     systems, we use one-to-one mapping between IA-64 vector and IRQ.
+ *     systems, we use one-to-one mapping between IA-64 vector and IRQ.  A
+ *     platform can implement platform_irq_to_vector(irq) and
+ *     platform_local_vector_to_irq(vector) APIs to differentiate the mapping.
+ *     Please see also arch/ia64/include/asm/hw_irq.h for those APIs.
  *
  * To sum up, there are three levels of mappings involved:
  *
@@ -87,12 +89,13 @@
 #include <linux/slab.h>
 #include <linux/smp.h>
 #include <linux/string.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 
 #include <asm/delay.h>
 #include <asm/hw_irq.h>
 #include <asm/io.h>
 #include <asm/iosapic.h>
+#include <asm/machvec.h>
 #include <asm/processor.h>
 #include <asm/ptrace.h>
 
@@ -253,7 +256,7 @@ set_rte (unsigned int gsi, unsigned int irq, unsigned int dest, int mask)
 }
 
 static void
-iosapic_nop (struct irq_data *data)
+nop (struct irq_data *data)
 {
 	/* do nothing... */
 }
@@ -412,7 +415,7 @@ iosapic_unmask_level_irq (struct irq_data *data)
 #define iosapic_shutdown_level_irq	mask_irq
 #define iosapic_enable_level_irq	unmask_irq
 #define iosapic_disable_level_irq	mask_irq
-#define iosapic_ack_level_irq		iosapic_nop
+#define iosapic_ack_level_irq		nop
 
 static struct irq_chip irq_type_iosapic_level = {
 	.name =			"IO-SAPIC-level",
@@ -450,7 +453,7 @@ iosapic_ack_edge_irq (struct irq_data *data)
 }
 
 #define iosapic_enable_edge_irq		unmask_irq
-#define iosapic_disable_edge_irq	iosapic_nop
+#define iosapic_disable_edge_irq	nop
 
 static struct irq_chip irq_type_iosapic_edge = {
 	.name =			"IO-SAPIC-edge",
@@ -642,8 +645,10 @@ get_target_cpu (unsigned int gsi, int irq)
 	if (!cpu_online(smp_processor_id()))
 		return cpu_physical_id(smp_processor_id());
 
+#ifdef CONFIG_ACPI
 	if (cpe_vector > 0 && irq_to_vector(irq) == IA64_CPEP_VECTOR)
 		return get_cpei_target_cpu();
+#endif
 
 #ifdef CONFIG_NUMA
 	{

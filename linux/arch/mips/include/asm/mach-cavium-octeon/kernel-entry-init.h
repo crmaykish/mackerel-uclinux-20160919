@@ -69,6 +69,7 @@
 	sync
 	# Flush dcache after config change
 	cache	9, 0($0)
+#ifndef CONFIG_SG8200
 	# Zero all of CVMSEG to make sure parity is correct
 	dli	v0, CONFIG_CAVIUM_OCTEON_CVMSEG_SIZE
 	dsll	v0, 7
@@ -77,6 +78,7 @@
 	sd	$0, -32768(v0)
 	bnez	v0, 1b
 2:
+#endif
 	mfc0	v0, CP0_PRID_REG
 	bbit0	v0, 15, 1f
 	# OCTEON II or better have bit 15 set.  Clear the error bits.
@@ -99,20 +101,9 @@
 	# to begin
 	#
 
-octeon_spin_wait_boot:
-#ifdef CONFIG_RELOCATABLE
-	PTR_LA	t0, octeon_processor_relocated_kernel_entry
-	LONG_L	t0, (t0)
-	beq	zero, t0, 1f
-	nop
-
-	jr	t0
-	nop
-1:
-#endif /* CONFIG_RELOCATABLE */
-
-	# This is the variable where the next core to boot is stored
+	# This is the variable where the next core to boot os stored
 	PTR_LA	t0, octeon_processor_boot
+octeon_spin_wait_boot:
 	# Get the core id of the next to be booted
 	LONG_L	t1, (t0)
 	# Keep looping if it isn't me
@@ -152,7 +143,7 @@ octeon_main_processor:
 .endm
 
 /*
- * Do SMP slave processor setup necessary before we can safely execute C code.
+ * Do SMP slave processor setup necessary before we can savely execute C code.
  */
 	.macro	smp_slave_setup
 	.endm

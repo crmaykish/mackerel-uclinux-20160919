@@ -9,7 +9,7 @@
 
 #include <linux/init.h>
 #include <linux/bitops.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/clk-provider.h>
 #include <linux/ioport.h>
 #include <linux/kernel.h>
@@ -17,7 +17,6 @@
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/of_platform.h>
-#include <linux/libfdt.h>
 #include <linux/smp.h>
 #include <asm/addrspace.h>
 #include <asm/bmips.h>
@@ -33,8 +32,6 @@
 
 #define REG_BCM6328_OTP		((void __iomem *)CKSEG1ADDR(0x1000062c))
 #define BCM6328_TP1_DISABLED	BIT(9)
-
-extern bool bmips_rac_flush_disable;
 
 static const unsigned long kbase = VMLINUX_LOAD_ADDRESS & 0xfff00000;
 
@@ -98,43 +95,21 @@ static void bcm6328_quirks(void)
 		bcm63xx_fixup_cpu1();
 }
 
-static void bcm6358_quirks(void)
-{
-	/*
-	 * BCM3368/BCM6358 need special handling for their shared TLB, so
-	 * disable SMP for now
-	 */
-	bmips_smp_enabled = 0;
-
-	/*
-	 * RAC flush causes kernel panics on BCM6358 when booting from TP1
-	 * because the bootloader is not initializing it properly.
-	 */
-	bmips_rac_flush_disable = !!(read_c0_brcm_cmt_local() & (1 << 31)) ||
-				  !!BMIPS_GET_CBR();
-}
-
 static void bcm6368_quirks(void)
 {
 	bcm63xx_fixup_cpu1();
 }
 
 static const struct bmips_quirk bmips_quirk_list[] = {
-	{ "brcm,bcm3368",		&bcm6358_quirks			},
 	{ "brcm,bcm3384-viper",		&bcm3384_viper_quirks		},
 	{ "brcm,bcm33843-viper",	&bcm3384_viper_quirks		},
 	{ "brcm,bcm6328",		&bcm6328_quirks			},
-	{ "brcm,bcm6358",		&bcm6358_quirks			},
-	{ "brcm,bcm6362",		&bcm6368_quirks			},
 	{ "brcm,bcm6368",		&bcm6368_quirks			},
-	{ "brcm,bcm63168",		&bcm6368_quirks			},
-	{ "brcm,bcm63268",		&bcm6368_quirks			},
 	{ },
 };
 
 void __init prom_init(void)
 {
-	bmips_cpu_setup();
 	register_bmips_smp_ops();
 }
 
@@ -171,12 +146,12 @@ void __init plat_mem_setup(void)
 	ioport_resource.start = 0;
 	ioport_resource.end = ~0;
 
-	/* intended to somewhat resemble ARM; see Documentation/arm/booting.rst */
+	/* intended to somewhat resemble ARM; see Documentation/arm/Booting */
 	if (fw_arg0 == 0 && fw_arg1 == 0xffffffff)
 		dtb = phys_to_virt(fw_arg2);
-	else if (fw_passed_dtb) /* UHI interface or appended dtb */
-		dtb = (void *)fw_passed_dtb;
-	else if (&__dtb_start != &__dtb_end)
+	else if (fw_arg0 == -2) /* UHI interface */
+		dtb = (void *)fw_arg1;
+	else if (__dtb_start != __dtb_end)
 		dtb = (void *)__dtb_start;
 	else
 		panic("no dtb found");
@@ -203,6 +178,13 @@ void __init device_tree_init(void)
 		bmips_smp_enabled = 0;
 	of_node_put(np);
 }
+
+int __init plat_of_setup(void)
+{
+	return __dt_register_buses("simple-bus", NULL);
+}
+
+arch_initcall(plat_of_setup);
 
 static int __init plat_dev_init(void)
 {

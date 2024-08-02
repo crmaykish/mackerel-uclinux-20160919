@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * VFIO generic eventfd code for IRQFD support.
  * Derived from drivers/vfio/pci/vfio_pci_intrs.c
  *
  * Copyright (C) 2012 Red Hat, Inc.  All rights reserved.
  *     Author: Alex Williamson <alex.williamson@redhat.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/vfio.h>
@@ -40,12 +43,12 @@ static void virqfd_deactivate(struct virqfd *virqfd)
 	queue_work(vfio_irqfd_cleanup_wq, &virqfd->shutdown);
 }
 
-static int virqfd_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync, void *key)
+static int virqfd_wakeup(wait_queue_t *wait, unsigned mode, int sync, void *key)
 {
 	struct virqfd *virqfd = container_of(wait, struct virqfd, wait);
-	__poll_t flags = key_to_poll(key);
+	unsigned long flags = (unsigned long)key;
 
-	if (flags & EPOLLIN) {
+	if (flags & POLLIN) {
 		/* An event has been signaled, call function */
 		if ((!virqfd->handler ||
 		     virqfd->handler(virqfd->opaque, virqfd->data)) &&
@@ -53,7 +56,7 @@ static int virqfd_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync, void
 			schedule_work(&virqfd->inject);
 	}
 
-	if (flags & EPOLLHUP) {
+	if (flags & POLLHUP) {
 		unsigned long flags;
 		spin_lock_irqsave(&virqfd_lock, flags);
 
@@ -101,13 +104,6 @@ static void virqfd_inject(struct work_struct *work)
 		virqfd->thread(virqfd->opaque, virqfd->data);
 }
 
-static void virqfd_flush_inject(struct work_struct *work)
-{
-	struct virqfd *virqfd = container_of(work, struct virqfd, flush_inject);
-
-	flush_work(&virqfd->inject);
-}
-
 int vfio_virqfd_enable(void *opaque,
 		       int (*handler)(void *, void *),
 		       void (*thread)(void *, void *),
@@ -117,7 +113,7 @@ int vfio_virqfd_enable(void *opaque,
 	struct eventfd_ctx *ctx;
 	struct virqfd *virqfd;
 	int ret = 0;
-	__poll_t events;
+	unsigned int events;
 
 	virqfd = kzalloc(sizeof(*virqfd), GFP_KERNEL);
 	if (!virqfd)
@@ -131,7 +127,6 @@ int vfio_virqfd_enable(void *opaque,
 
 	INIT_WORK(&virqfd->shutdown, virqfd_shutdown);
 	INIT_WORK(&virqfd->inject, virqfd_inject);
-	INIT_WORK(&virqfd->flush_inject, virqfd_flush_inject);
 
 	irqfd = fdget(fd);
 	if (!irqfd.file) {
@@ -171,20 +166,20 @@ int vfio_virqfd_enable(void *opaque,
 	init_waitqueue_func_entry(&virqfd->wait, virqfd_wakeup);
 	init_poll_funcptr(&virqfd->pt, virqfd_ptable_queue_proc);
 
-	events = vfs_poll(irqfd.file, &virqfd->pt);
+	events = irqfd.file->f_op->poll(irqfd.file, &virqfd->pt);
 
 	/*
 	 * Check if there was an event already pending on the eventfd
 	 * before we registered and trigger it as if we didn't miss it.
 	 */
-	if (events & EPOLLIN) {
+	if (events & POLLIN) {
 		if ((!handler || handler(opaque, data)) && thread)
 			schedule_work(&virqfd->inject);
 	}
 
 	/*
 	 * Do not drop the file until the irqfd is fully initialized,
-	 * otherwise we might race against the EPOLLHUP.
+	 * otherwise we might race against the POLLHUP.
 	 */
 	fdput(irqfd);
 
@@ -221,19 +216,6 @@ void vfio_virqfd_disable(struct virqfd **pvirqfd)
 	flush_workqueue(vfio_irqfd_cleanup_wq);
 }
 EXPORT_SYMBOL_GPL(vfio_virqfd_disable);
-
-void vfio_virqfd_flush_thread(struct virqfd **pvirqfd)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&virqfd_lock, flags);
-	if (*pvirqfd && (*pvirqfd)->thread)
-		queue_work(vfio_irqfd_cleanup_wq, &(*pvirqfd)->flush_inject);
-	spin_unlock_irqrestore(&virqfd_lock, flags);
-
-	flush_workqueue(vfio_irqfd_cleanup_wq);
-}
-EXPORT_SYMBOL_GPL(vfio_virqfd_flush_thread);
 
 module_init(vfio_virqfd_init);
 module_exit(vfio_virqfd_exit);

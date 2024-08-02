@@ -1,5 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
+ *
  * Copyright (C) 2011 - 2012 Cavium, Inc.
  */
 
@@ -37,10 +40,10 @@ static int bcm87xx_of_reg_init(struct phy_device *phydev)
 	const __be32 *paddr_end;
 	int len, ret;
 
-	if (!phydev->mdio.dev.of_node)
+	if (!phydev->dev.of_node)
 		return 0;
 
-	paddr = of_get_property(phydev->mdio.dev.of_node,
+	paddr = of_get_property(phydev->dev.of_node,
 				"broadcom,c45-reg-init", &len);
 	if (!paddr)
 		return 0;
@@ -81,16 +84,16 @@ static int bcm87xx_of_reg_init(struct phy_device *phydev)
 }
 #endif /* CONFIG_OF_MDIO */
 
-static int bcm87xx_get_features(struct phy_device *phydev)
-{
-	linkmode_set_bit(ETHTOOL_LINK_MODE_10000baseR_FEC_BIT,
-			 phydev->supported);
-	return 0;
-}
-
 static int bcm87xx_config_init(struct phy_device *phydev)
 {
-	return bcm87xx_of_reg_init(phydev);
+	phydev->supported = SUPPORTED_10000baseR_FEC;
+	phydev->advertising = ADVERTISED_10000baseR_FEC;
+	phydev->state = PHY_NOLINK;
+	phydev->autoneg = AUTONEG_DISABLE;
+
+	bcm87xx_of_reg_init(phydev);
+
+	return 0;
 }
 
 static int bcm87xx_config_aneg(struct phy_device *phydev)
@@ -160,9 +163,8 @@ static int bcm87xx_did_interrupt(struct phy_device *phydev)
 	reg = phy_read(phydev, BCM87XX_LASI_STATUS);
 
 	if (reg < 0) {
-		phydev_err(phydev,
-			   "Error: Read of BCM87XX_LASI_STATUS failed: %d\n",
-			   reg);
+		dev_err(&phydev->dev,
+			"Error: Read of BCM87XX_LASI_STATUS failed: %d\n", reg);
 		return 0;
 	}
 	return (reg & 1) != 0;
@@ -190,7 +192,7 @@ static struct phy_driver bcm87xx_driver[] = {
 	.phy_id		= PHY_ID_BCM8706,
 	.phy_id_mask	= 0xffffffff,
 	.name		= "Broadcom BCM8706",
-	.get_features	= bcm87xx_get_features,
+	.flags		= PHY_HAS_INTERRUPT,
 	.config_init	= bcm87xx_config_init,
 	.config_aneg	= bcm87xx_config_aneg,
 	.read_status	= bcm87xx_read_status,
@@ -198,11 +200,12 @@ static struct phy_driver bcm87xx_driver[] = {
 	.config_intr	= bcm87xx_config_intr,
 	.did_interrupt	= bcm87xx_did_interrupt,
 	.match_phy_device = bcm8706_match_phy_device,
+	.driver		= { .owner = THIS_MODULE },
 }, {
 	.phy_id		= PHY_ID_BCM8727,
 	.phy_id_mask	= 0xffffffff,
 	.name		= "Broadcom BCM8727",
-	.get_features	= bcm87xx_get_features,
+	.flags		= PHY_HAS_INTERRUPT,
 	.config_init	= bcm87xx_config_init,
 	.config_aneg	= bcm87xx_config_aneg,
 	.read_status	= bcm87xx_read_status,
@@ -210,8 +213,9 @@ static struct phy_driver bcm87xx_driver[] = {
 	.config_intr	= bcm87xx_config_intr,
 	.did_interrupt	= bcm87xx_did_interrupt,
 	.match_phy_device = bcm8727_match_phy_device,
+	.driver		= { .owner = THIS_MODULE },
 } };
 
 module_phy_driver(bcm87xx_driver);
 
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

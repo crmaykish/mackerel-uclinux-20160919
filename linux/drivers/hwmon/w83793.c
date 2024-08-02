@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * w83793.c - Linux kernel driver for hardware monitoring
  * Copyright (C) 2006 Winbond Electronics Corp.
@@ -8,6 +7,20 @@
  *		Watchdog driver part
  *		(Based partially on fschmd driver,
  *		 Copyright 2007-2008 by Hans de Goede)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation - version 2.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301 USA.
  */
 
 /*
@@ -202,6 +215,7 @@ static inline s8 TEMP_TO_REG(long val, s8 min, s8 max)
 }
 
 struct w83793_data {
+	struct i2c_client *lm75[2];
 	struct device *hwmon_dev;
 	struct mutex update_lock;
 	char valid;			/* !=0 if following fields are valid */
@@ -310,7 +324,7 @@ static struct i2c_driver w83793_driver = {
 };
 
 static ssize_t
-vrm_show(struct device *dev, struct device_attribute *attr, char *buf)
+show_vrm(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct w83793_data *data = dev_get_drvdata(dev);
 	return sprintf(buf, "%d\n", data->vrm);
@@ -328,7 +342,7 @@ show_vid(struct device *dev, struct device_attribute *attr, char *buf)
 }
 
 static ssize_t
-vrm_store(struct device *dev, struct device_attribute *attr,
+store_vrm(struct device *dev, struct device_attribute *attr,
 	  const char *buf, size_t count)
 {
 	struct w83793_data *data = dev_get_drvdata(dev);
@@ -1155,7 +1169,7 @@ static struct sensor_device_attribute_2 w83793_vid[] = {
 	SENSOR_ATTR_2(cpu0_vid, S_IRUGO, show_vid, NULL, NOT_USED, 0),
 	SENSOR_ATTR_2(cpu1_vid, S_IRUGO, show_vid, NULL, NOT_USED, 1),
 };
-static DEVICE_ATTR_RW(vrm);
+static DEVICE_ATTR(vrm, S_IWUSR | S_IRUGO, show_vrm, store_vrm);
 
 static struct sensor_device_attribute_2 sda_single_files[] = {
 	SENSOR_ATTR_2(intrusion0_alarm, S_IWUSR | S_IRUGO, show_alarm_beep,
@@ -1327,7 +1341,7 @@ static int watchdog_open(struct inode *inode, struct file *filp)
 	/* Store pointer to data into filp's private data */
 	filp->private_data = data;
 
-	return stream_open(inode, filp);
+	return nonseekable_open(inode, filp);
 }
 
 static int watchdog_close(struct inode *inode, struct file *filp)
@@ -1550,6 +1564,11 @@ static int w83793_remove(struct i2c_client *client)
 	for (i = 0; i < ARRAY_SIZE(w83793_temp); i++)
 		device_remove_file(dev, &w83793_temp[i].dev_attr);
 
+	if (data->lm75[0] != NULL)
+		i2c_unregister_device(data->lm75[0]);
+	if (data->lm75[1] != NULL)
+		i2c_unregister_device(data->lm75[1]);
+
 	/* Decrease data reference counter */
 	mutex_lock(&watchdog_data_mutex);
 	kref_put(&data->kref, w83793_release_resources);
@@ -1561,10 +1580,11 @@ static int w83793_remove(struct i2c_client *client)
 static int
 w83793_detect_subclients(struct i2c_client *client)
 {
-	int i, id;
+	int i, id, err;
 	int address = client->addr;
 	u8 tmp;
 	struct i2c_adapter *adapter = client->adapter;
+	struct w83793_data *data = i2c_get_clientdata(client);
 
 	id = i2c_adapter_id(adapter);
 	if (force_subclients[0] == id && force_subclients[1] == address) {
@@ -1575,7 +1595,8 @@ w83793_detect_subclients(struct i2c_client *client)
 					"invalid subclient "
 					"address %d; must be 0x48-0x4f\n",
 					force_subclients[i]);
-				return -EINVAL;
+				err = -EINVAL;
+				goto ERROR_SC_0;
 			}
 		}
 		w83793_write_value(client, W83793_REG_I2C_SUBADDR,
@@ -1584,20 +1605,30 @@ w83793_detect_subclients(struct i2c_client *client)
 	}
 
 	tmp = w83793_read_value(client, W83793_REG_I2C_SUBADDR);
-
-	if (!(tmp & 0x88) && (tmp & 0x7) == ((tmp >> 4) & 0x7)) {
-		dev_err(&client->dev,
-			"duplicate addresses 0x%x, use force_subclient\n", 0x48 + (tmp & 0x7));
-		return -ENODEV;
+	if (!(tmp & 0x08))
+		data->lm75[0] = i2c_new_dummy(adapter, 0x48 + (tmp & 0x7));
+	if (!(tmp & 0x80)) {
+		if ((data->lm75[0] != NULL)
+		    && ((tmp & 0x7) == ((tmp >> 4) & 0x7))) {
+			dev_err(&client->dev,
+				"duplicate addresses 0x%x, "
+				"use force_subclients\n", data->lm75[0]->addr);
+			err = -ENODEV;
+			goto ERROR_SC_1;
+		}
+		data->lm75[1] = i2c_new_dummy(adapter,
+					      0x48 + ((tmp >> 4) & 0x7));
 	}
 
-	if (!(tmp & 0x08))
-		devm_i2c_new_dummy_device(&client->dev, adapter, 0x48 + (tmp & 0x7));
-
-	if (!(tmp & 0x80))
-		devm_i2c_new_dummy_device(&client->dev, adapter, 0x48 + ((tmp >> 4) & 0x7));
-
 	return 0;
+
+	/* Undo inits in case of errors */
+
+ERROR_SC_1:
+	if (data->lm75[0] != NULL)
+		i2c_unregister_device(data->lm75[0]);
+ERROR_SC_0:
+	return err;
 }
 
 /* Return 0 if detection is successful, -ENODEV otherwise */
@@ -1645,9 +1676,7 @@ static int w83793_probe(struct i2c_client *client,
 			const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
-	static const int watchdog_minors[] = {
-		WATCHDOG_MINOR, 212, 213, 214, 215
-	};
+	const int watchdog_minors[] = { WATCHDOG_MINOR, 212, 213, 214, 215 };
 	struct w83793_data *data;
 	int i, tmp, val, err;
 	int files_fan = ARRAY_SIZE(w83793_left_fan) / 7;
@@ -1930,6 +1959,11 @@ exit_remove:
 
 	for (i = 0; i < ARRAY_SIZE(w83793_temp); i++)
 		device_remove_file(dev, &w83793_temp[i].dev_attr);
+
+	if (data->lm75[0] != NULL)
+		i2c_unregister_device(data->lm75[0]);
+	if (data->lm75[1] != NULL)
+		i2c_unregister_device(data->lm75[1]);
 free_mem:
 	kfree(data);
 exit:

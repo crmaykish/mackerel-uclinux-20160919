@@ -1,9 +1,25 @@
-// SPDX-License-Identifier: GPL-2.0+
-//
-//  Copyright (C) 2000-2001 Deep Blue Solutions
-//  Copyright (C) 2002 Shane Nay (shane@minirl.com)
-//  Copyright (C) 2006-2007 Pavel Pisa (ppisa@pikron.com)
-//  Copyright (C) 2008 Juergen Beisert (kernel@pengutronix.de)
+/*
+ *  linux/arch/arm/plat-mxc/time.c
+ *
+ *  Copyright (C) 2000-2001 Deep Blue Solutions
+ *  Copyright (C) 2002 Shane Nay (shane@minirl.com)
+ *  Copyright (C) 2006-2007 Pavel Pisa (ppisa@pikron.com)
+ *  Copyright (C) 2008 Juergen Beisert (kernel@pengutronix.de)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+ * MA 02110-1301, USA.
+ */
 
 #include <linux/interrupt.h>
 #include <linux/irq.h>
@@ -141,25 +157,21 @@ static u64 notrace mxc_read_sched_clock(void)
 	return sched_clock_reg ? readl_relaxed(sched_clock_reg) : 0;
 }
 
-#if defined(CONFIG_ARM)
 static struct delay_timer imx_delay_timer;
 
 static unsigned long imx_read_current_timer(void)
 {
 	return readl_relaxed(sched_clock_reg);
 }
-#endif
 
 static int __init mxc_clocksource_init(struct imx_timer *imxtm)
 {
 	unsigned int c = clk_get_rate(imxtm->clk_per);
 	void __iomem *reg = imxtm->base + imxtm->gpt->reg_tcn;
 
-#if defined(CONFIG_ARM)
 	imx_delay_timer.read_current_timer = &imx_read_current_timer;
 	imx_delay_timer.freq = c;
 	register_current_timer_delay(&imx_delay_timer);
-#endif
 
 	sched_clock_reg = reg;
 
@@ -202,7 +214,14 @@ static int v2_set_next_event(unsigned long evt,
 static int mxc_shutdown(struct clock_event_device *ced)
 {
 	struct imx_timer *imxtm = to_imx_timer(ced);
+	unsigned long flags;
 	u32 tcn;
+
+	/*
+	 * The timer interrupt generation is disabled at least
+	 * for enough time to call mxc_set_next_event()
+	 */
+	local_irq_save(flags);
 
 	/* Disable interrupt in GPT module */
 	imxtm->gpt->gpt_irq_disable(imxtm);
@@ -218,12 +237,21 @@ static int mxc_shutdown(struct clock_event_device *ced)
 	printk(KERN_INFO "%s: changing mode\n", __func__);
 #endif /* DEBUG */
 
+	local_irq_restore(flags);
+
 	return 0;
 }
 
 static int mxc_set_oneshot(struct clock_event_device *ced)
 {
 	struct imx_timer *imxtm = to_imx_timer(ced);
+	unsigned long flags;
+
+	/*
+	 * The timer interrupt generation is disabled at least
+	 * for enough time to call mxc_set_next_event()
+	 */
+	local_irq_save(flags);
 
 	/* Disable interrupt in GPT module */
 	imxtm->gpt->gpt_irq_disable(imxtm);
@@ -248,6 +276,7 @@ static int mxc_set_oneshot(struct clock_event_device *ced)
 	 * mode switching
 	 */
 	imxtm->gpt->gpt_irq_enable(imxtm);
+	local_irq_restore(flags);
 
 	return 0;
 }
@@ -378,10 +407,8 @@ static const struct imx_gpt_data imx6dl_gpt_data = {
 	.set_next_event = v2_set_next_event,
 };
 
-static int __init _mxc_timer_init(struct imx_timer *imxtm)
+static void __init _mxc_timer_init(struct imx_timer *imxtm)
 {
-	int ret;
-
 	switch (imxtm->type) {
 	case GPT_TYPE_IMX1:
 		imxtm->gpt = &imx1_gpt_data;
@@ -396,12 +423,12 @@ static int __init _mxc_timer_init(struct imx_timer *imxtm)
 		imxtm->gpt = &imx6dl_gpt_data;
 		break;
 	default:
-		return -EINVAL;
+		BUG();
 	}
 
 	if (IS_ERR(imxtm->clk_per)) {
 		pr_err("i.MX timer: unable to get clk\n");
-		return PTR_ERR(imxtm->clk_per);
+		return;
 	}
 
 	if (!IS_ERR(imxtm->clk_ipg))
@@ -419,11 +446,8 @@ static int __init _mxc_timer_init(struct imx_timer *imxtm)
 	imxtm->gpt->gpt_setup_tctl(imxtm);
 
 	/* init and register the timer to the framework */
-	ret = mxc_clocksource_init(imxtm);
-	if (ret)
-		return ret;
-
-	return mxc_clockevent_init(imxtm);
+	mxc_clocksource_init(imxtm);
+	mxc_clockevent_init(imxtm);
 }
 
 void __init mxc_timer_init(unsigned long pbase, int irq, enum imx_gpt_type type)
@@ -445,31 +469,21 @@ void __init mxc_timer_init(unsigned long pbase, int irq, enum imx_gpt_type type)
 	_mxc_timer_init(imxtm);
 }
 
-static int __init mxc_timer_init_dt(struct device_node *np,  enum imx_gpt_type type)
+static void __init mxc_timer_init_dt(struct device_node *np,  enum imx_gpt_type type)
 {
 	struct imx_timer *imxtm;
 	static int initialized;
-	int ret;
 
 	/* Support one instance only */
 	if (initialized)
-		return 0;
+		return;
 
 	imxtm = kzalloc(sizeof(*imxtm), GFP_KERNEL);
-	if (!imxtm)
-		return -ENOMEM;
+	BUG_ON(!imxtm);
 
 	imxtm->base = of_iomap(np, 0);
-	if (!imxtm->base) {
-		ret = -ENXIO;
-		goto err_kfree;
-	}
-
+	WARN_ON(!imxtm->base);
 	imxtm->irq = irq_of_parse_and_map(np, 0);
-	if (imxtm->irq <= 0) {
-		ret = -EINVAL;
-		goto err_kfree;
-	}
 
 	imxtm->clk_ipg = of_clk_get_by_name(np, "ipg");
 
@@ -480,30 +494,22 @@ static int __init mxc_timer_init_dt(struct device_node *np,  enum imx_gpt_type t
 
 	imxtm->type = type;
 
-	ret = _mxc_timer_init(imxtm);
-	if (ret)
-		goto err_kfree;
+	_mxc_timer_init(imxtm);
 
 	initialized = 1;
-
-	return 0;
-
-err_kfree:
-	kfree(imxtm);
-	return ret;
 }
 
-static int __init imx1_timer_init_dt(struct device_node *np)
+static void __init imx1_timer_init_dt(struct device_node *np)
 {
-	return mxc_timer_init_dt(np, GPT_TYPE_IMX1);
+	mxc_timer_init_dt(np, GPT_TYPE_IMX1);
 }
 
-static int __init imx21_timer_init_dt(struct device_node *np)
+static void __init imx21_timer_init_dt(struct device_node *np)
 {
-	return mxc_timer_init_dt(np, GPT_TYPE_IMX21);
+	mxc_timer_init_dt(np, GPT_TYPE_IMX21);
 }
 
-static int __init imx31_timer_init_dt(struct device_node *np)
+static void __init imx31_timer_init_dt(struct device_node *np)
 {
 	enum imx_gpt_type type = GPT_TYPE_IMX31;
 
@@ -516,23 +522,23 @@ static int __init imx31_timer_init_dt(struct device_node *np)
 	if (of_machine_is_compatible("fsl,imx6dl"))
 		type = GPT_TYPE_IMX6DL;
 
-	return mxc_timer_init_dt(np, type);
+	mxc_timer_init_dt(np, type);
 }
 
-static int __init imx6dl_timer_init_dt(struct device_node *np)
+static void __init imx6dl_timer_init_dt(struct device_node *np)
 {
-	return mxc_timer_init_dt(np, GPT_TYPE_IMX6DL);
+	mxc_timer_init_dt(np, GPT_TYPE_IMX6DL);
 }
 
-TIMER_OF_DECLARE(imx1_timer, "fsl,imx1-gpt", imx1_timer_init_dt);
-TIMER_OF_DECLARE(imx21_timer, "fsl,imx21-gpt", imx21_timer_init_dt);
-TIMER_OF_DECLARE(imx27_timer, "fsl,imx27-gpt", imx21_timer_init_dt);
-TIMER_OF_DECLARE(imx31_timer, "fsl,imx31-gpt", imx31_timer_init_dt);
-TIMER_OF_DECLARE(imx25_timer, "fsl,imx25-gpt", imx31_timer_init_dt);
-TIMER_OF_DECLARE(imx50_timer, "fsl,imx50-gpt", imx31_timer_init_dt);
-TIMER_OF_DECLARE(imx51_timer, "fsl,imx51-gpt", imx31_timer_init_dt);
-TIMER_OF_DECLARE(imx53_timer, "fsl,imx53-gpt", imx31_timer_init_dt);
-TIMER_OF_DECLARE(imx6q_timer, "fsl,imx6q-gpt", imx31_timer_init_dt);
-TIMER_OF_DECLARE(imx6dl_timer, "fsl,imx6dl-gpt", imx6dl_timer_init_dt);
-TIMER_OF_DECLARE(imx6sl_timer, "fsl,imx6sl-gpt", imx6dl_timer_init_dt);
-TIMER_OF_DECLARE(imx6sx_timer, "fsl,imx6sx-gpt", imx6dl_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx1_timer, "fsl,imx1-gpt", imx1_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx21_timer, "fsl,imx21-gpt", imx21_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx27_timer, "fsl,imx27-gpt", imx21_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx31_timer, "fsl,imx31-gpt", imx31_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx25_timer, "fsl,imx25-gpt", imx31_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx50_timer, "fsl,imx50-gpt", imx31_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx51_timer, "fsl,imx51-gpt", imx31_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx53_timer, "fsl,imx53-gpt", imx31_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx6q_timer, "fsl,imx6q-gpt", imx31_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx6dl_timer, "fsl,imx6dl-gpt", imx6dl_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx6sl_timer, "fsl,imx6sl-gpt", imx6dl_timer_init_dt);
+CLOCKSOURCE_OF_DECLARE(imx6sx_timer, "fsl,imx6sx-gpt", imx6dl_timer_init_dt);

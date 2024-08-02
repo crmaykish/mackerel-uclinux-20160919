@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  Machine specific APM BIOS functions for generic.
  *  Split out from apm.c by Osamu Tomita <tomita@cinet.co.jp>
@@ -46,11 +45,11 @@ static inline void apm_bios_call_asm(u32 func, u32 ebx_in, u32 ecx_in,
 		: "memory", "cc");
 }
 
-static inline bool apm_bios_call_simple_asm(u32 func, u32 ebx_in,
-					    u32 ecx_in, u32 *eax)
+static inline u8 apm_bios_call_simple_asm(u32 func, u32 ebx_in,
+						u32 ecx_in, u32 *eax)
 {
 	int	cx, dx, si;
-	bool	error;
+	u8	error;
 
 	/*
 	 * N.B. We do NOT need a cld after the BIOS call

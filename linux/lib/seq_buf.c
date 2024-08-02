@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * seq_buf.c
  *
@@ -140,17 +139,13 @@ int seq_buf_bprintf(struct seq_buf *s, const char *fmt, const u32 *binary)
  */
 int seq_buf_puts(struct seq_buf *s, const char *str)
 {
-	size_t len = strlen(str);
+	unsigned int len = strlen(str);
 
 	WARN_ON(s->size == 0);
 
-	/* Add 1 to len for the trailing null byte which must be there */
-	len += 1;
-
 	if (seq_buf_can_fit(s, len)) {
 		memcpy(s->buffer + s->len, str, len);
-		/* Don't count the trailing null byte against the capacity */
-		s->len += len - 1;
+		s->len += len;
 		return 0;
 	}
 	seq_buf_set_overflow(s);
@@ -228,10 +223,8 @@ int seq_buf_putmem_hex(struct seq_buf *s, const void *mem,
 
 	WARN_ON(s->size == 0);
 
-	BUILD_BUG_ON(MAX_MEMHEX_BYTES * 2 >= HEX_CHARS);
-
 	while (len) {
-		start_len = min(len, MAX_MEMHEX_BYTES);
+		start_len = min(len, HEX_CHARS - 1);
 #ifdef __BIG_ENDIAN
 		for (i = 0, j = 0; i < start_len; i++) {
 #else
@@ -244,14 +237,12 @@ int seq_buf_putmem_hex(struct seq_buf *s, const void *mem,
 			break;
 
 		/* j increments twice per loop */
+		len -= j / 2;
 		hex[j++] = ' ';
 
 		seq_buf_putmem(s, hex, j);
 		if (seq_buf_has_overflowed(s))
 			return -1;
-
-		len -= start_len;
-		data += start_len;
 	}
 	return 0;
 }
@@ -315,12 +306,10 @@ int seq_buf_to_user(struct seq_buf *s, char __user *ubuf, int cnt)
 	if (!cnt)
 		return 0;
 
-	len = seq_buf_used(s);
-
-	if (len <= s->readpos)
+	if (s->len <= s->readpos)
 		return -EBUSY;
 
-	len -= s->readpos;
+	len = seq_buf_used(s) - s->readpos;
 	if (cnt > len)
 		cnt = len;
 	ret = copy_to_user(ubuf, s->buffer + s->readpos, cnt);

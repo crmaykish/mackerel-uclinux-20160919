@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __UML_LONGJMP_H
 #define __UML_LONGJMP_H
 
@@ -18,7 +17,7 @@ extern void longjmp(jmp_buf, int);
 	enable = get_signals(); \
 	n = setjmp(*buf); \
 	if(n != 0) \
-		set_signals_trace(enable); \
+		set_signals(enable); \
 	n; })
 
 #endif

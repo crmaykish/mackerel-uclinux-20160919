@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 1999 - 2003 ARM Limited
  * Copyright 2000 Deep Blue Solutions Ltd
  * Copyright 2008 Cavium Networks
+ *
+ * This file is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License, Version 2, as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/init.h>
@@ -87,7 +90,7 @@ void __init cns3xxx_map_io(void)
 /* used by entry-macro.S */
 void __init cns3xxx_init_irq(void)
 {
-	gic_init(IOMEM(CNS3XXX_TC11MP_GIC_DIST_BASE_VIRT),
+	gic_init(0, 29, IOMEM(CNS3XXX_TC11MP_GIC_DIST_BASE_VIRT),
 		 IOMEM(CNS3XXX_TC11MP_GIC_CPU_BASE_VIRT));
 }
 
@@ -343,7 +346,7 @@ static struct usb_ohci_pdata cns3xxx_usb_ohci_pdata = {
 	.power_off	= csn3xxx_usb_power_off,
 };
 
-static const struct of_dev_auxdata cns3xxx_auxdata[] __initconst = {
+static const struct of_dev_auxdata const cns3xxx_auxdata[] __initconst = {
 	{ "intel,usb-ehci", CNS3XXX_USB_BASE, "ehci-platform", &cns3xxx_usb_ehci_pdata },
 	{ "intel,usb-ohci", CNS3XXX_USB_OHCI_BASE, "ohci-platform", &cns3xxx_usb_ohci_pdata },
 	{ "cavium,cns3420-ahci", CNS3XXX_SATA2_BASE, "ahci", NULL },
@@ -376,7 +379,6 @@ static void __init cns3xxx_init(void)
 		/* De-Asscer SATA Reset */
 		cns3xxx_pwr_soft_rst(CNS3XXX_PWR_SOFTWARE_RST(SATA));
 	}
-	of_node_put(dn);
 
 	dn = of_find_compatible_node(NULL, NULL, "cavium,cns3420-sdhci");
 	if (of_device_is_available(dn)) {
@@ -390,11 +392,11 @@ static void __init cns3xxx_init(void)
 		cns3xxx_pwr_clk_en(CNS3XXX_PWR_CLK_EN(SDIO));
 		cns3xxx_pwr_soft_rst(CNS3XXX_PWR_SOFTWARE_RST(SDIO));
 	}
-	of_node_put(dn);
 
 	pm_power_off = cns3xxx_power_off;
 
-	of_platform_default_populate(NULL, cns3xxx_auxdata, NULL);
+	of_platform_populate(NULL, of_default_bus_match_table,
+                        cns3xxx_auxdata, NULL);
 }
 
 static const char *const cns3xxx_dt_compat[] __initconst = {

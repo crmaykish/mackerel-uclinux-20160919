@@ -1,12 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/io.h>
 #include <linux/delay.h>
-#include <linux/usb/otg.h>
-#include "phy-am335x-control.h"
+#include "am35x-phy-control.h"
 
 struct am335x_control_usb {
 	struct device *dev;
@@ -60,8 +58,7 @@ static void am335x_phy_wkup(struct  phy_control *phy_ctrl, u32 id, bool on)
 	spin_unlock(&usb_ctrl->lock);
 }
 
-static void am335x_phy_power(struct phy_control *phy_ctrl, u32 id,
-				enum usb_dr_mode dr_mode, bool on)
+static void am335x_phy_power(struct phy_control *phy_ctrl, u32 id, bool on)
 {
 	struct am335x_control_usb *usb_ctrl;
 	u32 val;
@@ -83,14 +80,8 @@ static void am335x_phy_power(struct phy_control *phy_ctrl, u32 id,
 
 	val = readl(usb_ctrl->phy_reg + reg);
 	if (on) {
-		if (dr_mode == USB_DR_MODE_HOST) {
-			val &= ~(USBPHY_CM_PWRDN | USBPHY_OTG_PWRDN |
-					USBPHY_OTGVDET_EN);
-			val |= USBPHY_OTGSESSEND_EN;
-		} else {
-			val &= ~(USBPHY_CM_PWRDN | USBPHY_OTG_PWRDN);
-			val |= USBPHY_OTGVDET_EN | USBPHY_OTGSESSEND_EN;
-		}
+		val &= ~(USBPHY_CM_PWRDN | USBPHY_OTG_PWRDN);
+		val |= USBPHY_OTGVDET_EN | USBPHY_OTGSESSEND_EN;
 	} else {
 		val |= USBPHY_CM_PWRDN | USBPHY_OTG_PWRDN;
 	}
@@ -118,9 +109,9 @@ static const struct of_device_id omap_control_usb_id_table[] = {
 MODULE_DEVICE_TABLE(of, omap_control_usb_id_table);
 
 static struct platform_driver am335x_control_driver;
-static int match(struct device *dev, const void *data)
+static int match(struct device *dev, void *data)
 {
-	const struct device_node *node = (const struct device_node *)data;
+	struct device_node *node = (struct device_node *)data;
 	return dev->of_node == node &&
 		dev->driver == &am335x_control_driver.driver;
 }
@@ -135,12 +126,10 @@ struct phy_control *am335x_get_phy_control(struct device *dev)
 		return NULL;
 
 	dev = bus_find_device(&platform_bus_type, NULL, node, match);
-	of_node_put(node);
 	if (!dev)
 		return NULL;
 
 	ctrl_usb = dev_get_drvdata(dev);
-	put_device(dev);
 	if (!ctrl_usb)
 		return NULL;
 	return &ctrl_usb->phy_ctrl;

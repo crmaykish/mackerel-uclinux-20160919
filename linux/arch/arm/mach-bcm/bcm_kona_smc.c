@@ -33,7 +33,7 @@ struct bcm_kona_smc_data {
 	unsigned result;
 };
 
-static const struct of_device_id bcm_kona_smc_ids[] __initconst = {
+static const struct of_device_id const bcm_kona_smc_ids[] __initconst = {
 	{.compatible = "brcm,kona-smc"},
 	{.compatible = "bcm,kona-smc"}, /* deprecated name */
 	{},
@@ -54,7 +54,6 @@ int __init bcm_kona_smc_init(void)
 		return -ENODEV;
 
 	prop_val = of_get_address(node, 0, &prop_size, NULL);
-	of_node_put(node);
 	if (!prop_val)
 		return -EINVAL;
 
@@ -126,7 +125,9 @@ static int bcm_kona_do_smc(u32 service_id, u32 buffer_phys)
 		__asmeq("%2", "r4")
 		__asmeq("%3", "r5")
 		__asmeq("%4", "r6")
+#ifdef REQUIRES_SEC
 		".arch_extension sec\n"
+#endif
 		"	smc    #0\n"
 		: "=r" (ip), "=r" (r0)
 		: "r" (r4), "r" (r5), "r" (r6)

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 #ifndef __SPARC_STAT_H
 #define __SPARC_STAT_H
 
@@ -7,13 +6,13 @@
 #if defined(__sparc__) && defined(__arch64__)
 /* 64 bit sparc */
 struct stat {
-	unsigned int st_dev;
+	unsigned   st_dev;
 	ino_t   st_ino;
 	mode_t  st_mode;
 	short   st_nlink;
 	uid_t   st_uid;
 	gid_t   st_gid;
-	unsigned int st_rdev;
+	unsigned   st_rdev;
 	off_t   st_size;
 	time_t  st_atime;
 	time_t  st_mtime;

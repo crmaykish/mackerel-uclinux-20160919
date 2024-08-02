@@ -9,13 +9,10 @@ nanosleep
 nsleep-lat
 posix_timers
 raw_skew
-rtcpie
+rtctest
 set-2038
 set-tai
 set-timer-lat
 skew_consistency
 threadtest
 valid-adjtimex
-adjtick
-set-tz
-freq-step

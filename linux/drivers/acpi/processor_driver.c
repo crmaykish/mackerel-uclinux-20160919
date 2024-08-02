@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * processor_driver.c - ACPI Processor Driver
  *
@@ -9,6 +8,20 @@
  *  			- Added processor hotplug support
  *  Copyright (C) 2013, Intel Corporation
  *                      Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or (at
+ *  your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful, but
+ *  WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  General Public License for more details.
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
 #include <linux/kernel.h>
@@ -77,7 +90,7 @@ static void acpi_processor_notify(acpi_handle handle, u32 event, void *data)
 						  pr->performance_platform_limit);
 		break;
 	case ACPI_PROCESSOR_NOTIFY_POWER:
-		acpi_processor_power_state_has_changed(pr);
+		acpi_processor_cst_has_changed(pr);
 		acpi_bus_generate_netlink_event(device->pnp.device_class,
 						  dev_name(&device->dev), event, 0);
 		break;
@@ -97,46 +110,54 @@ static void acpi_processor_notify(acpi_handle handle, u32 event, void *data)
 
 static int __acpi_processor_start(struct acpi_device *device);
 
-static int acpi_soft_cpu_online(unsigned int cpu)
+static int acpi_cpu_soft_notify(struct notifier_block *nfb,
+					  unsigned long action, void *hcpu)
 {
+	unsigned int cpu = (unsigned long)hcpu;
 	struct acpi_processor *pr = per_cpu(processors, cpu);
 	struct acpi_device *device;
+	action &= ~CPU_TASKS_FROZEN;
 
-	if (!pr || acpi_bus_get_device(pr->handle, &device))
-		return 0;
 	/*
-	 * CPU got physically hotplugged and onlined for the first time:
-	 * Initialize missing things.
+	 * CPU_STARTING and CPU_DYING must not sleep. Return here since
+	 * acpi_bus_get_device() may sleep.
 	 */
-	if (pr->flags.need_hotplug_init) {
-		int ret;
-
-		pr_info("Will online and init hotplugged CPU: %d\n",
-			pr->id);
-		pr->flags.need_hotplug_init = 0;
-		ret = __acpi_processor_start(device);
-		WARN(ret, "Failed to start CPU: %d\n", pr->id);
-	} else {
-		/* Normal CPU soft online event. */
-		acpi_processor_ppc_has_changed(pr, 0);
-		acpi_processor_hotplug(pr);
-		acpi_processor_reevaluate_tstate(pr, false);
-		acpi_processor_tstate_has_changed(pr);
-	}
-	return 0;
-}
-
-static int acpi_soft_cpu_dead(unsigned int cpu)
-{
-	struct acpi_processor *pr = per_cpu(processors, cpu);
-	struct acpi_device *device;
+	if (action == CPU_STARTING || action == CPU_DYING)
+		return NOTIFY_DONE;
 
 	if (!pr || acpi_bus_get_device(pr->handle, &device))
-		return 0;
+		return NOTIFY_DONE;
 
-	acpi_processor_reevaluate_tstate(pr, true);
-	return 0;
+	if (action == CPU_ONLINE) {
+		/*
+		 * CPU got physically hotplugged and onlined for the first time:
+		 * Initialize missing things.
+		 */
+		if (pr->flags.need_hotplug_init) {
+			int ret;
+
+			pr_info("Will online and init hotplugged CPU: %d\n",
+				pr->id);
+			pr->flags.need_hotplug_init = 0;
+			ret = __acpi_processor_start(device);
+			WARN(ret, "Failed to start CPU: %d\n", pr->id);
+		} else {
+			/* Normal CPU soft online event. */
+			acpi_processor_ppc_has_changed(pr, 0);
+			acpi_processor_hotplug(pr);
+			acpi_processor_reevaluate_tstate(pr, action);
+			acpi_processor_tstate_has_changed(pr);
+		}
+	} else if (action == CPU_DEAD) {
+		/* Invalidate flag.throttling after the CPU is offline. */
+		acpi_processor_reevaluate_tstate(pr, action);
+	}
+	return NOTIFY_OK;
 }
+
+static struct notifier_block acpi_cpu_notifier = {
+	    .notifier_call = acpi_cpu_soft_notify,
+};
 
 #ifdef CONFIG_ACPI_CPU_FREQ_PSS
 static int acpi_pss_perf_init(struct acpi_processor *pr,
@@ -223,8 +244,8 @@ static int __acpi_processor_start(struct acpi_device *device)
 		return 0;
 
 	result = acpi_cppc_processor_probe(pr);
-	if (result && !IS_ENABLED(CONFIG_ACPI_CPU_FREQ_PSS))
-		dev_dbg(&device->dev, "CPPC data invalid or not present\n");
+	if (result)
+		return -ENODEV;
 
 	if (!cpuidle_get_driver() || cpuidle_get_driver() == &acpi_idle_driver)
 		acpi_processor_power_init(pr);
@@ -238,9 +259,6 @@ static int __acpi_processor_start(struct acpi_device *device)
 	if (ACPI_SUCCESS(status))
 		return 0;
 
-	result = -ENODEV;
-	acpi_pss_perf_exit(pr, device);
-
 err_power_exit:
 	acpi_processor_power_exit(pr);
 	return result;
@@ -249,16 +267,11 @@ err_power_exit:
 static int acpi_processor_start(struct device *dev)
 {
 	struct acpi_device *device = ACPI_COMPANION(dev);
-	int ret;
 
 	if (!device)
 		return -ENODEV;
 
-	/* Protect against concurrent CPU hotplug operations */
-	cpu_hotplug_disable();
-	ret = __acpi_processor_start(device);
-	cpu_hotplug_enable();
-	return ret;
+	return __acpi_processor_start(device);
 }
 
 static int acpi_processor_stop(struct device *dev)
@@ -284,34 +297,12 @@ static int acpi_processor_stop(struct device *dev)
 	return 0;
 }
 
-bool acpi_processor_cpufreq_init;
-
-static int acpi_processor_notifier(struct notifier_block *nb,
-				   unsigned long event, void *data)
-{
-	struct cpufreq_policy *policy = data;
-
-	if (event == CPUFREQ_CREATE_POLICY) {
-		acpi_thermal_cpufreq_init(policy);
-		acpi_processor_ppc_init(policy);
-	} else if (event == CPUFREQ_REMOVE_POLICY) {
-		acpi_processor_ppc_exit(policy);
-		acpi_thermal_cpufreq_exit(policy);
-	}
-
-	return 0;
-}
-
-static struct notifier_block acpi_processor_notifier_block = {
-	.notifier_call = acpi_processor_notifier,
-};
-
 /*
  * We keep the driver loaded even when ACPI is not running.
  * This is needed for the powernow-k8 driver, that works even without
  * ACPI, but needs symbols from this driver
  */
-static enum cpuhp_state hp_online;
+
 static int __init acpi_processor_driver_init(void)
 {
 	int result = 0;
@@ -323,26 +314,12 @@ static int __init acpi_processor_driver_init(void)
 	if (result < 0)
 		return result;
 
-	result = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
-					   "acpi/cpu-drv:online",
-					   acpi_soft_cpu_online, NULL);
-	if (result < 0)
-		goto err;
-	hp_online = result;
-	cpuhp_setup_state_nocalls(CPUHP_ACPI_CPUDRV_DEAD, "acpi/cpu-drv:dead",
-				  NULL, acpi_soft_cpu_dead);
-
-	if (!cpufreq_register_notifier(&acpi_processor_notifier_block,
-				       CPUFREQ_POLICY_NOTIFIER)) {
-		acpi_processor_cpufreq_init = true;
-		acpi_processor_ignore_ppc_init();
-	}
-
+	acpi_processor_syscore_init();
+	register_hotcpu_notifier(&acpi_cpu_notifier);
+	acpi_thermal_cpufreq_init();
+	acpi_processor_ppc_init();
 	acpi_processor_throttling_init();
 	return 0;
-err:
-	driver_unregister(&acpi_processor_driver);
-	return result;
 }
 
 static void __exit acpi_processor_driver_exit(void)
@@ -350,14 +327,10 @@ static void __exit acpi_processor_driver_exit(void)
 	if (acpi_disabled)
 		return;
 
-	if (acpi_processor_cpufreq_init) {
-		cpufreq_unregister_notifier(&acpi_processor_notifier_block,
-					    CPUFREQ_POLICY_NOTIFIER);
-		acpi_processor_cpufreq_init = false;
-	}
-
-	cpuhp_remove_state_nocalls(hp_online);
-	cpuhp_remove_state_nocalls(CPUHP_ACPI_CPUDRV_DEAD);
+	acpi_processor_ppc_exit();
+	acpi_thermal_cpufreq_exit();
+	unregister_hotcpu_notifier(&acpi_cpu_notifier);
+	acpi_processor_syscore_exit();
 	driver_unregister(&acpi_processor_driver);
 }
 

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * MPC8272 ADS board support
  *
@@ -7,6 +6,11 @@
  *
  * Based on code by Vitaly Bordug <vbordug@ru.mvista.com>
  * Copyright (c) 2006 MontaVista Software, Inc.
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #include <linux/init.h>
@@ -197,7 +201,8 @@ machine_device_initcall(mpc8272_ads, declare_of_platform_devices);
  */
 static int __init mpc8272_ads_probe(void)
 {
-	return of_machine_is_compatible("fsl,mpc8272ads");
+	unsigned long root = of_get_flat_dt_root();
+	return of_flat_dt_is_compatible(root, "fsl,mpc8272ads");
 }
 
 define_machine(mpc8272_ads)

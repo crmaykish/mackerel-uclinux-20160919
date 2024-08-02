@@ -7,9 +7,8 @@
  */
 
 #include <asm/cop2.h>
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/interrupt.h>
-#include <linux/sched/task_stack.h>
 
 #include "octeon-crypto.h"
 
@@ -43,7 +42,7 @@ unsigned long octeon_crypto_enable(struct octeon_cop2_state *state)
 	local_irq_restore(flags);
 	return status & ST0_CU2;
 }
-EXPORT_SYMBOL_GPL(octeon_crypto_enable);
+EXPORT_SYMBOL(octeon_crypto_enable);
 
 /**
  * Disable access to Octeon's COP2 crypto hardware in the kernel. This must be
@@ -66,4 +65,4 @@ void octeon_crypto_disable(struct octeon_cop2_state *state,
 	local_irq_restore(flags);
 	preempt_enable();
 }
-EXPORT_SYMBOL_GPL(octeon_crypto_disable);
+EXPORT_SYMBOL(octeon_crypto_disable);

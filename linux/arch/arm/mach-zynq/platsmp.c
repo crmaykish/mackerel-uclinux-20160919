@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * This file contains Xilinx specific SMP code, used to start up
  * the second processor.
@@ -8,6 +7,15 @@
  * based on linux/arch/arm/mach-realview/platsmp.c
  *
  * Copyright (C) 2002 ARM Ltd.
+ *
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/export.h>
@@ -57,7 +65,7 @@ int zynq_cpun_start(u32 address, int cpu)
 			* 0x4: Jump by mov instruction
 			* 0x8: Jumping address
 			*/
-			memcpy_toio(zero, &zynq_secondary_trampoline,
+			memcpy((__force void *)zero, &zynq_secondary_trampoline,
 							trampoline_size);
 			writel(address, zero + trampoline_size);
 
@@ -81,7 +89,7 @@ EXPORT_SYMBOL(zynq_cpun_start);
 
 static int zynq_boot_secondary(unsigned int cpu, struct task_struct *idle)
 {
-	return zynq_cpun_start(__pa_symbol(secondary_startup_arm), cpu);
+	return zynq_cpun_start(virt_to_phys(secondary_startup), cpu);
 }
 
 /*
@@ -149,7 +157,7 @@ static void zynq_cpu_die(unsigned int cpu)
 }
 #endif
 
-const struct smp_operations zynq_smp_ops __initconst = {
+struct smp_operations zynq_smp_ops __initdata = {
 	.smp_init_cpus		= zynq_smp_init_cpus,
 	.smp_prepare_cpus	= zynq_smp_prepare_cpus,
 	.smp_boot_secondary	= zynq_boot_secondary,

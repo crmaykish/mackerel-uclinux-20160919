@@ -1,8 +1,11 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  arch/arm/include/asm/assembler.h
  *
  *  Copyright (C) 1996-2000 Russell King
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  *  This file contains arm architecture specific defines
  *  for the different processors.
@@ -18,11 +21,11 @@
 #endif
 
 #include <asm/ptrace.h>
+#include <asm/domain.h>
 #include <asm/opcodes-virt.h>
 #include <asm/asm-offsets.h>
 #include <asm/page.h>
 #include <asm/thread_info.h>
-#include <asm/uaccess-asm.h>
 
 #define IOMEM(x)	(x)
 
@@ -84,8 +87,6 @@
 #define CALGN(code...)
 #endif
 
-#define IMM12_MASK 0xfff
-
 /*
  * Enable and disable interrupts
  */
@@ -104,16 +105,6 @@
 
 	.macro	enable_irq_notrace
 	msr	cpsr_c, #SVC_MODE
-	.endm
-#endif
-
-#if __LINUX_ARM_ARCH__ < 7
-	.macro	dsb, args
-	mcr	p15, 0, r0, c7, c10, 4
-	.endm
-
-	.macro	isb, args
-	mcr	p15, 0, r0, c7, c5, 4
 	.endm
 #endif
 
@@ -168,11 +159,7 @@
 	.endm
 
 	.macro	save_and_disable_irqs_notrace, oldcpsr
-#ifdef CONFIG_CPU_V7M
-	mrs	\oldcpsr, primask
-#else
 	mrs	\oldcpsr, cpsr
-#endif
 	disable_irq_notrace
 	.endm
 
@@ -250,14 +237,12 @@
 	.endm
 #endif
 
-#define USERL(l, x...)				\
+#define USER(x...)				\
 9999:	x;					\
 	.pushsection __ex_table,"a";		\
 	.align	3;				\
-	.long	9999b,l;			\
+	.long	9999b,9001f;			\
 	.popsection
-
-#define USER(x...)	USERL(9001f, x)
 
 #ifdef CONFIG_SMP
 #define ALT_SMP(instr...)					\
@@ -279,9 +264,10 @@
 	.endif							;\
 	.popsection
 #define ALT_UP_B(label)					\
+	.equ	up_b_offset, label - 9998b			;\
 	.pushsection ".alt.smp.init", "a"			;\
 	.long	9998b						;\
-	W(b)	. + (label - 9998b)					;\
+	W(b)	. + up_b_offset					;\
 	.popsection
 #else
 #define ALT_SMP(instr...)
@@ -382,9 +368,9 @@ THUMB(	orr	\reg , \reg , #PSR_T_BIT	)
 	.macro	usraccoff, instr, reg, ptr, inc, off, cond, abort, t=TUSER()
 9999:
 	.if	\inc == 1
-	\instr\()b\t\cond\().w \reg, [\ptr, #\off]
+	\instr\cond\()b\()\t\().w \reg, [\ptr, #\off]
 	.elseif	\inc == 4
-	\instr\t\cond\().w \reg, [\ptr, #\off]
+	\instr\cond\()\t\().w \reg, [\ptr, #\off]
 	.else
 	.error	"Unsupported inc macro argument"
 	.endif
@@ -423,9 +409,9 @@ THUMB(	orr	\reg , \reg , #PSR_T_BIT	)
 	.rept	\rept
 9999:
 	.if	\inc == 1
-	\instr\()b\t\cond \reg, [\ptr], #\inc
+	\instr\cond\()b\()\t \reg, [\ptr], #\inc
 	.elseif	\inc == 4
-	\instr\t\cond \reg, [\ptr], #\inc
+	\instr\cond\()\t \reg, [\ptr], #\inc
 	.else
 	.error	"Unsupported inc macro argument"
 	.endif
@@ -455,6 +441,56 @@ THUMB(	orr	\reg , \reg , #PSR_T_BIT	)
 	.size \name , . - \name
 	.endm
 
+	.macro check_uaccess, addr:req, size:req, limit:req, tmp:req, bad:req
+#ifndef CONFIG_CPU_USE_DOMAINS
+	adds	\tmp, \addr, #\size - 1
+	sbcccs	\tmp, \tmp, \limit
+	bcs	\bad
+#endif
+	.endm
+
+	.macro	uaccess_disable, tmp, isb=1
+#ifdef CONFIG_CPU_SW_DOMAIN_PAN
+	/*
+	 * Whenever we re-enter userspace, the domains should always be
+	 * set appropriately.
+	 */
+	mov	\tmp, #DACR_UACCESS_DISABLE
+	mcr	p15, 0, \tmp, c3, c0, 0		@ Set domain register
+	.if	\isb
+	instr_sync
+	.endif
+#endif
+	.endm
+
+	.macro	uaccess_enable, tmp, isb=1
+#ifdef CONFIG_CPU_SW_DOMAIN_PAN
+	/*
+	 * Whenever we re-enter userspace, the domains should always be
+	 * set appropriately.
+	 */
+	mov	\tmp, #DACR_UACCESS_ENABLE
+	mcr	p15, 0, \tmp, c3, c0, 0
+	.if	\isb
+	instr_sync
+	.endif
+#endif
+	.endm
+
+	.macro	uaccess_save, tmp
+#ifdef CONFIG_CPU_SW_DOMAIN_PAN
+	mrc	p15, 0, \tmp, c3, c0, 0
+	str	\tmp, [sp, #S_FRAME_SIZE]
+#endif
+	.endm
+
+	.macro	uaccess_restore
+#ifdef CONFIG_CPU_SW_DOMAIN_PAN
+	ldr	r0, [sp, #S_FRAME_SIZE]
+	mcr	p15, 0, r0, c3, c0, 0
+#endif
+	.endm
+
 	.irp	c,,eq,ne,cs,cc,mi,pl,vs,vc,hi,ls,ge,lt,gt,le,hs,lo
 	.macro	ret\c, reg
 #if __LINUX_ARM_ARCH__ < 6
@@ -475,33 +511,5 @@ THUMB(	orr	\reg , \reg , #PSR_T_BIT	)
 	nop
 #endif
 	.endm
-
-	.macro	bug, msg, line
-#ifdef CONFIG_THUMB2_KERNEL
-1:	.inst	0xde02
-#else
-1:	.inst	0xe7f001f2
-#endif
-#ifdef CONFIG_DEBUG_BUGVERBOSE
-	.pushsection .rodata.str, "aMS", %progbits, 1
-2:	.asciz	"\msg"
-	.popsection
-	.pushsection __bug_table, "aw"
-	.align	2
-	.word	1b, 2b
-	.hword	\line
-	.popsection
-#endif
-	.endm
-
-#ifdef CONFIG_KPROBES
-#define _ASM_NOKPROBE(entry)				\
-	.pushsection "_kprobe_blacklist", "aw" ;	\
-	.balign 4 ;					\
-	.long entry;					\
-	.popsection
-#else
-#define _ASM_NOKPROBE(entry)
-#endif
 
 #endif /* __ASM_ASSEMBLER_H__ */

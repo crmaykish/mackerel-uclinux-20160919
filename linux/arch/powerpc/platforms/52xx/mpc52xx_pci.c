@@ -319,7 +319,7 @@ mpc52xx_pci_setup(struct pci_controller *hose,
 
 	tmp = in_be32(&pci_regs->gscr);
 #if 0
-	/* Reset the exteral bus ( internal PCI controller is NOT reset ) */
+	/* Reset the exteral bus ( internal PCI controller is NOT resetted ) */
 	/* Not necessary and can be a bad thing if for example the bootloader
 	   is displaying a splash screen or ... Just left here for
 	   documentation purpose if anyone need it */
@@ -369,19 +369,19 @@ mpc52xx_add_bridge(struct device_node *node)
 	const int *bus_range;
 	struct resource rsrc;
 
-	pr_debug("Adding MPC52xx PCI host bridge %pOF\n", node);
+	pr_debug("Adding MPC52xx PCI host bridge %s\n", node->full_name);
 
 	pci_add_flags(PCI_REASSIGN_ALL_BUS);
 
 	if (of_address_to_resource(node, 0, &rsrc) != 0) {
-		printk(KERN_ERR "Can't get %pOF resources\n", node);
+		printk(KERN_ERR "Can't get %s resources\n", node->full_name);
 		return -EINVAL;
 	}
 
 	bus_range = of_get_property(node, "bus-range", &len);
 	if (bus_range == NULL || len < 2 * sizeof(int)) {
-		printk(KERN_WARNING "Can't get %pOF bus-range, assume bus 0\n",
-		       node);
+		printk(KERN_WARNING "Can't get %s bus-range, assume bus 0\n",
+		       node->full_name);
 		bus_range = NULL;
 	}
 

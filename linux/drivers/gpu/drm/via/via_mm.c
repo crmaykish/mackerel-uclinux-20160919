@@ -25,13 +25,8 @@
  * Authors: Thomas Hellström <thomas-at-tungstengraphics-dot-com>
  */
 
-#include <linux/slab.h>
-
-#include <drm/drm_device.h>
-#include <drm/drm_file.h>
-#include <drm/drm_irq.h>
+#include <drm/drmP.h>
 #include <drm/via_drm.h>
-
 #include "via_drv.h"
 
 #define VIA_MM_ALIGN_SHIFT 4
@@ -145,11 +140,11 @@ int via_mem_alloc(struct drm_device *dev, void *data,
 	if (mem->type == VIA_MEM_AGP)
 		retval = drm_mm_insert_node(&dev_priv->agp_mm,
 					    &item->mm_node,
-					    tmpSize);
+					    tmpSize, 0, DRM_MM_SEARCH_DEFAULT);
 	else
 		retval = drm_mm_insert_node(&dev_priv->vram_mm,
 					    &item->mm_node,
-					    tmpSize);
+					    tmpSize, 0, DRM_MM_SEARCH_DEFAULT);
 	if (retval)
 		goto fail_alloc;
 
@@ -213,7 +208,7 @@ void via_reclaim_buffers_locked(struct drm_device *dev,
 	struct via_file_private *file_priv = file->driver_priv;
 	struct via_memblock *entry, *next;
 
-	if (!(dev->master && file->master->lock.hw_lock))
+	if (!(file->minor->master && file->master->lock.hw_lock))
 		return;
 
 	drm_legacy_idlelock_take(&file->master->lock);

@@ -1,10 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	Linux NET3: IP/IP protocol decoder modified to support
  *		    virtual tunnel interface
  *
  *	Authors:
  *		Saurabh Mohan (saurabh.mohan@vyatta.com) 05/07/2012
+ *
+ *	This program is free software; you can redistribute it and/or
+ *	modify it under the terms of the GNU General Public License
+ *	as published by the Free Software Foundation; either version
+ *	2 of the License, or (at your option) any later version.
+ *
  */
 
 /*
@@ -25,6 +30,7 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/if_arp.h>
+#include <linux/mroute.h>
 #include <linux/init.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/if_ether.h>
@@ -41,11 +47,11 @@
 
 static struct rtnl_link_ops vti_link_ops __read_mostly;
 
-static unsigned int vti_net_id __read_mostly;
+static int vti_net_id __read_mostly;
 static int vti_tunnel_init(struct net_device *dev);
 
 static int vti_input(struct sk_buff *skb, int nexthdr, __be32 spi,
-		     int encap_type, bool update_skb_dev)
+		     int encap_type)
 {
 	struct ip_tunnel *tunnel;
 	const struct iphdr *iph = ip_hdr(skb);
@@ -60,9 +66,6 @@ static int vti_input(struct sk_buff *skb, int nexthdr, __be32 spi,
 
 		XFRM_TUNNEL_SKB_CB(skb)->tunnel.ip4 = tunnel;
 
-		if (update_skb_dev)
-			skb->dev = tunnel->dev;
-
 		return xfrm_input(skb, nexthdr, spi, encap_type);
 	}
 
@@ -72,49 +75,12 @@ drop:
 	return 0;
 }
 
-static int vti_input_proto(struct sk_buff *skb, int nexthdr, __be32 spi,
-			   int encap_type)
-{
-	return vti_input(skb, nexthdr, spi, encap_type, false);
-}
-
-static int vti_rcv(struct sk_buff *skb, __be32 spi, bool update_skb_dev)
+static int vti_rcv(struct sk_buff *skb)
 {
 	XFRM_SPI_SKB_CB(skb)->family = AF_INET;
 	XFRM_SPI_SKB_CB(skb)->daddroff = offsetof(struct iphdr, daddr);
 
-	return vti_input(skb, ip_hdr(skb)->protocol, spi, 0, update_skb_dev);
-}
-
-static int vti_rcv_proto(struct sk_buff *skb)
-{
-	return vti_rcv(skb, 0, false);
-}
-
-static int vti_rcv_tunnel(struct sk_buff *skb)
-{
-	struct ip_tunnel_net *itn = net_generic(dev_net(skb->dev), vti_net_id);
-	const struct iphdr *iph = ip_hdr(skb);
-	struct ip_tunnel *tunnel;
-
-	tunnel = ip_tunnel_lookup(itn, skb->dev->ifindex, TUNNEL_NO_KEY,
-				  iph->saddr, iph->daddr, 0);
-	if (tunnel) {
-		struct tnl_ptk_info tpi = {
-			.proto = htons(ETH_P_IP),
-		};
-
-		if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb))
-			goto drop;
-		if (iptunnel_pull_header(skb, 0, tpi.proto, false))
-			goto drop;
-		return ip_tunnel_rcv(tunnel, skb, &tpi, NULL, false);
-	}
-
-	return -EINVAL;
-drop:
-	kfree_skb(skb);
-	return 0;
+	return vti_input(skb, ip_hdr(skb)->protocol, 0, 0);
 }
 
 static int vti_rcv_cb(struct sk_buff *skb, int err)
@@ -123,7 +89,6 @@ static int vti_rcv_cb(struct sk_buff *skb, int err)
 	struct net_device *dev;
 	struct pcpu_sw_netstats *tstats;
 	struct xfrm_state *x;
-	const struct xfrm_mode *inner_mode;
 	struct ip_tunnel *tunnel = XFRM_TUNNEL_SKB_CB(skb)->tunnel.ip4;
 	u32 orig_mark = skb->mark;
 	int ret;
@@ -141,19 +106,7 @@ static int vti_rcv_cb(struct sk_buff *skb, int err)
 	}
 
 	x = xfrm_input_state(skb);
-
-	inner_mode = &x->inner_mode;
-
-	if (x->sel.family == AF_UNSPEC) {
-		inner_mode = xfrm_ip2inner_mode(x, XFRM_MODE_SKB_CB(skb)->protocol);
-		if (inner_mode == NULL) {
-			XFRM_INC_STATS(dev_net(skb->dev),
-				       LINUX_MIB_XFRMINSTATEMODEERROR);
-			return -EINVAL;
-		}
-	}
-
-	family = inner_mode->family;
+	family = x->inner_mode->afinfo->family;
 
 	skb->mark = be32_to_cpu(tunnel->parms.i_key);
 	ret = xfrm_policy_check(NULL, XFRM_POLICY_IN, skb, family);
@@ -203,44 +156,11 @@ static netdev_tx_t vti_xmit(struct sk_buff *skb, struct net_device *dev,
 	struct ip_tunnel_parm *parms = &tunnel->parms;
 	struct dst_entry *dst = skb_dst(skb);
 	struct net_device *tdev;	/* Device to other host */
-	int pkt_len = skb->len;
 	int err;
-	int mtu;
 
 	if (!dst) {
-		switch (skb->protocol) {
-		case htons(ETH_P_IP): {
-			struct rtable *rt;
-
-			fl->u.ip4.flowi4_oif = dev->ifindex;
-			fl->u.ip4.flowi4_flags |= FLOWI_FLAG_ANYSRC;
-			rt = __ip_route_output_key(dev_net(dev), &fl->u.ip4);
-			if (IS_ERR(rt)) {
-				dev->stats.tx_carrier_errors++;
-				goto tx_error_icmp;
-			}
-			dst = &rt->dst;
-			skb_dst_set(skb, dst);
-			break;
-		}
-#if IS_ENABLED(CONFIG_IPV6)
-		case htons(ETH_P_IPV6):
-			fl->u.ip6.flowi6_oif = dev->ifindex;
-			fl->u.ip6.flowi6_flags |= FLOWI_FLAG_ANYSRC;
-			dst = ip6_route_output(dev_net(dev), NULL, &fl->u.ip6);
-			if (dst->error) {
-				dst_release(dst);
-				dst = NULL;
-				dev->stats.tx_carrier_errors++;
-				goto tx_error_icmp;
-			}
-			skb_dst_set(skb, dst);
-			break;
-#endif
-		default:
-			dev->stats.tx_carrier_errors++;
-			goto tx_error_icmp;
-		}
+		dev->stats.tx_carrier_errors++;
+		goto tx_error_icmp;
 	}
 
 	dst_hold(dst);
@@ -264,21 +184,13 @@ static netdev_tx_t vti_xmit(struct sk_buff *skb, struct net_device *dev,
 		goto tx_error;
 	}
 
-	mtu = dst_mtu(dst);
-	if (skb->len > mtu) {
-		skb_dst_update_pmtu_no_confirm(skb, mtu);
-		if (skb->protocol == htons(ETH_P_IP)) {
-			icmp_send(skb, ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED,
-				  htonl(mtu));
-		} else {
-			if (mtu < IPV6_MIN_MTU)
-				mtu = IPV6_MIN_MTU;
-
-			icmpv6_send(skb, ICMPV6_PKT_TOOBIG, 0, mtu);
-		}
-
-		dst_release(dst);
-		goto tx_error;
+	if (tunnel->err_count > 0) {
+		if (time_before(jiffies,
+				tunnel->err_time + IPTUNNEL_ERR_TIMEO)) {
+			tunnel->err_count--;
+			dst_link_failure(skb);
+		} else
+			tunnel->err_count = 0;
 	}
 
 	skb_scrub_packet(skb, !net_eq(tunnel->net, dev_net(dev)));
@@ -287,8 +199,8 @@ static netdev_tx_t vti_xmit(struct sk_buff *skb, struct net_device *dev,
 
 	err = dst_output(tunnel->net, skb->sk, skb);
 	if (net_xmit_eval(err) == 0)
-		err = pkt_len;
-	iptunnel_xmit_stats(dev, err);
+		err = skb->len;
+	iptunnel_xmit_stats(err, &dev->stats, dev->tstats);
 	return NETDEV_TX_OK;
 
 tx_error_icmp:
@@ -307,33 +219,27 @@ static netdev_tx_t vti_tunnel_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	struct flowi fl;
 
-	if (!pskb_inet_may_pull(skb))
-		goto tx_err;
-
 	memset(&fl, 0, sizeof(fl));
 
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
-		memset(IPCB(skb), 0, sizeof(*IPCB(skb)));
 		xfrm_decode_session(skb, &fl, AF_INET);
+		memset(IPCB(skb), 0, sizeof(*IPCB(skb)));
 		break;
 	case htons(ETH_P_IPV6):
-		memset(IP6CB(skb), 0, sizeof(*IP6CB(skb)));
 		xfrm_decode_session(skb, &fl, AF_INET6);
+		memset(IP6CB(skb), 0, sizeof(*IP6CB(skb)));
 		break;
 	default:
-		goto tx_err;
+		dev->stats.tx_errors++;
+		dev_kfree_skb(skb);
+		return NETDEV_TX_OK;
 	}
 
 	/* override mark with tunnel output key */
 	fl.flowi_mark = be32_to_cpu(tunnel->parms.o_key);
 
 	return vti_xmit(skb, dev, &fl);
-
-tx_err:
-	dev->stats.tx_errors++;
-	kfree_skb(skb);
-	return NETDEV_TX_OK;
 }
 
 static int vti4_err(struct sk_buff *skb, u32 info)
@@ -390,9 +296,9 @@ static int vti4_err(struct sk_buff *skb, u32 info)
 		return 0;
 
 	if (icmp_hdr(skb)->type == ICMP_DEST_UNREACH)
-		ipv4_update_pmtu(skb, net, info, 0, protocol);
+		ipv4_update_pmtu(skb, net, info, 0, 0, protocol, 0);
 	else
-		ipv4_redirect(skb, net, 0, protocol);
+		ipv4_redirect(skb, net, 0, 0, protocol, 0);
 	xfrm_state_put(x);
 
 	return 0;
@@ -459,6 +365,8 @@ static int vti_tunnel_init(struct net_device *dev)
 	memcpy(dev->dev_addr, &iph->saddr, 4);
 	memcpy(dev->broadcast, &iph->daddr, 4);
 
+	dev->hard_header_len	= LL_MAX_HEADER + sizeof(struct iphdr);
+	dev->mtu		= ETH_DATA_LEN;
 	dev->flags		= IFF_NOARP;
 	dev->addr_len		= 4;
 	dev->features		|= NETIF_F_LLTX;
@@ -478,33 +386,27 @@ static void __net_init vti_fb_tunnel_init(struct net_device *dev)
 }
 
 static struct xfrm4_protocol vti_esp4_protocol __read_mostly = {
-	.handler	=	vti_rcv_proto,
-	.input_handler	=	vti_input_proto,
+	.handler	=	vti_rcv,
+	.input_handler	=	vti_input,
 	.cb_handler	=	vti_rcv_cb,
 	.err_handler	=	vti4_err,
 	.priority	=	100,
 };
 
 static struct xfrm4_protocol vti_ah4_protocol __read_mostly = {
-	.handler	=	vti_rcv_proto,
-	.input_handler	=	vti_input_proto,
+	.handler	=	vti_rcv,
+	.input_handler	=	vti_input,
 	.cb_handler	=	vti_rcv_cb,
 	.err_handler	=	vti4_err,
 	.priority	=	100,
 };
 
 static struct xfrm4_protocol vti_ipcomp4_protocol __read_mostly = {
-	.handler	=	vti_rcv_proto,
-	.input_handler	=	vti_input_proto,
+	.handler	=	vti_rcv,
+	.input_handler	=	vti_input,
 	.cb_handler	=	vti_rcv_cb,
 	.err_handler	=	vti4_err,
 	.priority	=	100,
-};
-
-static struct xfrm_tunnel ipip_handler __read_mostly = {
-	.handler	=	vti_rcv_tunnel,
-	.err_handler	=	vti4_err,
-	.priority	=	0,
 };
 
 static int __net_init vti_init_net(struct net *net)
@@ -516,32 +418,30 @@ static int __net_init vti_init_net(struct net *net)
 	if (err)
 		return err;
 	itn = net_generic(net, vti_net_id);
-	if (itn->fb_tunnel_dev)
-		vti_fb_tunnel_init(itn->fb_tunnel_dev);
+	vti_fb_tunnel_init(itn->fb_tunnel_dev);
 	return 0;
 }
 
-static void __net_exit vti_exit_batch_net(struct list_head *list_net)
+static void __net_exit vti_exit_net(struct net *net)
 {
-	ip_tunnel_delete_nets(list_net, vti_net_id, &vti_link_ops);
+	struct ip_tunnel_net *itn = net_generic(net, vti_net_id);
+	ip_tunnel_delete_net(itn, &vti_link_ops);
 }
 
 static struct pernet_operations vti_net_ops = {
 	.init = vti_init_net,
-	.exit_batch = vti_exit_batch_net,
+	.exit = vti_exit_net,
 	.id   = &vti_net_id,
 	.size = sizeof(struct ip_tunnel_net),
 };
 
-static int vti_tunnel_validate(struct nlattr *tb[], struct nlattr *data[],
-			       struct netlink_ext_ack *extack)
+static int vti_tunnel_validate(struct nlattr *tb[], struct nlattr *data[])
 {
 	return 0;
 }
 
 static void vti_netlink_parms(struct nlattr *data[],
-			      struct ip_tunnel_parm *parms,
-			      __u32 *fwmark)
+			      struct ip_tunnel_parm *parms)
 {
 	memset(parms, 0, sizeof(*parms));
 
@@ -567,31 +467,24 @@ static void vti_netlink_parms(struct nlattr *data[],
 	if (data[IFLA_VTI_REMOTE])
 		parms->iph.daddr = nla_get_in_addr(data[IFLA_VTI_REMOTE]);
 
-	if (data[IFLA_VTI_FWMARK])
-		*fwmark = nla_get_u32(data[IFLA_VTI_FWMARK]);
 }
 
 static int vti_newlink(struct net *src_net, struct net_device *dev,
-		       struct nlattr *tb[], struct nlattr *data[],
-		       struct netlink_ext_ack *extack)
+		       struct nlattr *tb[], struct nlattr *data[])
 {
 	struct ip_tunnel_parm parms;
-	__u32 fwmark = 0;
 
-	vti_netlink_parms(data, &parms, &fwmark);
-	return ip_tunnel_newlink(dev, tb, &parms, fwmark);
+	vti_netlink_parms(data, &parms);
+	return ip_tunnel_newlink(dev, tb, &parms);
 }
 
 static int vti_changelink(struct net_device *dev, struct nlattr *tb[],
-			  struct nlattr *data[],
-			  struct netlink_ext_ack *extack)
+			  struct nlattr *data[])
 {
-	struct ip_tunnel *t = netdev_priv(dev);
-	__u32 fwmark = t->fwmark;
 	struct ip_tunnel_parm p;
 
-	vti_netlink_parms(data, &p, &fwmark);
-	return ip_tunnel_changelink(dev, tb, &p, fwmark);
+	vti_netlink_parms(data, &p);
+	return ip_tunnel_changelink(dev, tb, &p);
 }
 
 static size_t vti_get_size(const struct net_device *dev)
@@ -607,8 +500,6 @@ static size_t vti_get_size(const struct net_device *dev)
 		nla_total_size(4) +
 		/* IFLA_VTI_REMOTE */
 		nla_total_size(4) +
-		/* IFLA_VTI_FWMARK */
-		nla_total_size(4) +
 		0;
 }
 
@@ -617,13 +508,11 @@ static int vti_fill_info(struct sk_buff *skb, const struct net_device *dev)
 	struct ip_tunnel *t = netdev_priv(dev);
 	struct ip_tunnel_parm *p = &t->parms;
 
-	if (nla_put_u32(skb, IFLA_VTI_LINK, p->link) ||
-	    nla_put_be32(skb, IFLA_VTI_IKEY, p->i_key) ||
-	    nla_put_be32(skb, IFLA_VTI_OKEY, p->o_key) ||
-	    nla_put_in_addr(skb, IFLA_VTI_LOCAL, p->iph.saddr) ||
-	    nla_put_in_addr(skb, IFLA_VTI_REMOTE, p->iph.daddr) ||
-	    nla_put_u32(skb, IFLA_VTI_FWMARK, t->fwmark))
-		return -EMSGSIZE;
+	nla_put_u32(skb, IFLA_VTI_LINK, p->link);
+	nla_put_be32(skb, IFLA_VTI_IKEY, p->i_key);
+	nla_put_be32(skb, IFLA_VTI_OKEY, p->o_key);
+	nla_put_in_addr(skb, IFLA_VTI_LOCAL, p->iph.saddr);
+	nla_put_in_addr(skb, IFLA_VTI_REMOTE, p->iph.daddr);
 
 	return 0;
 }
@@ -634,7 +523,6 @@ static const struct nla_policy vti_policy[IFLA_VTI_MAX + 1] = {
 	[IFLA_VTI_OKEY]		= { .type = NLA_U32 },
 	[IFLA_VTI_LOCAL]	= { .len = FIELD_SIZEOF(struct iphdr, saddr) },
 	[IFLA_VTI_REMOTE]	= { .len = FIELD_SIZEOF(struct iphdr, daddr) },
-	[IFLA_VTI_FWMARK]	= { .type = NLA_U32 },
 };
 
 static struct rtnl_link_ops vti_link_ops __read_mostly = {
@@ -675,11 +563,6 @@ static int __init vti_init(void)
 	if (err < 0)
 		goto xfrm_proto_comp_failed;
 
-	msg = "ipip tunnel";
-	err = xfrm4_tunnel_register(&ipip_handler, AF_INET);
-	if (err < 0)
-		goto xfrm_tunnel_failed;
-
 	msg = "netlink interface";
 	err = rtnl_link_register(&vti_link_ops);
 	if (err < 0)
@@ -688,8 +571,6 @@ static int __init vti_init(void)
 	return err;
 
 rtnl_link_failed:
-	xfrm4_tunnel_deregister(&ipip_handler, AF_INET);
-xfrm_tunnel_failed:
 	xfrm4_protocol_deregister(&vti_ipcomp4_protocol, IPPROTO_COMP);
 xfrm_proto_comp_failed:
 	xfrm4_protocol_deregister(&vti_ah4_protocol, IPPROTO_AH);
@@ -705,7 +586,6 @@ pernet_dev_failed:
 static void __exit vti_fini(void)
 {
 	rtnl_link_unregister(&vti_link_ops);
-	xfrm4_tunnel_deregister(&ipip_handler, AF_INET);
 	xfrm4_protocol_deregister(&vti_ipcomp4_protocol, IPPROTO_COMP);
 	xfrm4_protocol_deregister(&vti_ah4_protocol, IPPROTO_AH);
 	xfrm4_protocol_deregister(&vti_esp4_protocol, IPPROTO_ESP);

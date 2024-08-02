@@ -1,10 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * External Interrupt Controller on Spider South Bridge
  *
  * (C) Copyright IBM Deutschland Entwicklung GmbH 2005
  *
  * Author: Arnd Bergmann <arndb@de.ibm.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/interrupt.h>
@@ -194,17 +207,17 @@ static void spider_irq_cascade(struct irq_desc *desc)
 
 	cs = in_be32(pic->regs + TIR_CS) >> 24;
 	if (cs == SPIDER_IRQ_INVALID)
-		virq = 0;
+		virq = NO_IRQ;
 	else
 		virq = irq_linear_revmap(pic->host, cs);
 
-	if (virq)
+	if (virq != NO_IRQ)
 		generic_handle_irq(virq);
 
 	chip->irq_eoi(&desc->irq_data);
 }
 
-/* For hooking up the cascade we have a problem. Our device-tree is
+/* For hooking up the cascace we have a problem. Our device-tree is
  * crap and we don't know on which BE iic interrupt we are hooked on at
  * least not the "standard" way. We can reconstitute it based on two
  * informations though: which BE node we are connected to and whether
@@ -232,19 +245,19 @@ static unsigned int __init spider_find_cascade_and_node(struct spider_pic *pic)
 	/* Now do the horrible hacks */
 	tmp = of_get_property(of_node, "#interrupt-cells", NULL);
 	if (tmp == NULL)
-		return 0;
+		return NO_IRQ;
 	intsize = *tmp;
 	imap = of_get_property(of_node, "interrupt-map", &imaplen);
 	if (imap == NULL || imaplen < (intsize + 1))
-		return 0;
+		return NO_IRQ;
 	iic = of_find_node_by_phandle(imap[intsize]);
 	if (iic == NULL)
-		return 0;
+		return NO_IRQ;
 	imap += intsize + 1;
 	tmp = of_get_property(iic, "#interrupt-cells", NULL);
 	if (tmp == NULL) {
 		of_node_put(iic);
-		return 0;
+		return NO_IRQ;
 	}
 	intsize = *tmp;
 	/* Assume unit is last entry of interrupt specifier */
@@ -253,7 +266,7 @@ static unsigned int __init spider_find_cascade_and_node(struct spider_pic *pic)
 	tmp = of_get_property(iic, "ibm,interrupt-server-ranges", NULL);
 	if (tmp == NULL) {
 		of_node_put(iic);
-		return 0;
+		return NO_IRQ;
 	}
 	/* ugly as hell but works for now */
 	pic->node_id = (*tmp) >> 1;
@@ -268,7 +281,7 @@ static unsigned int __init spider_find_cascade_and_node(struct spider_pic *pic)
 				  (pic->node_id << IIC_IRQ_NODE_SHIFT) |
 				  (2 << IIC_IRQ_CLASS_SHIFT) |
 				  unit);
-	if (!virq)
+	if (virq == NO_IRQ)
 		printk(KERN_ERR "spider_pic: failed to map cascade !");
 	return virq;
 }
@@ -305,13 +318,13 @@ static void __init spider_init_one(struct device_node *of_node, int chip,
 
 	/* Hook up the cascade interrupt to the iic and nodeid */
 	virq = spider_find_cascade_and_node(pic);
-	if (!virq)
+	if (virq == NO_IRQ)
 		return;
 	irq_set_handler_data(virq, pic);
 	irq_set_chained_handler(virq, spider_irq_cascade);
 
-	printk(KERN_INFO "spider_pic: node %d, addr: 0x%lx %pOF\n",
-	       pic->node_id, addr, of_node);
+	printk(KERN_INFO "spider_pic: node %d, addr: 0x%lx %s\n",
+	       pic->node_id, addr, of_node->full_name);
 
 	/* Enable the interrupt detection enable bit. Do this last! */
 	out_be32(pic->regs + TIR_DEN, in_be32(pic->regs + TIR_DEN) | 0x1);
@@ -330,7 +343,8 @@ void __init spider_init_IRQ(void)
 	 * device-tree is bogus anyway) so all we can do is pray or maybe test
 	 * the address and deduce the node-id
 	 */
-	for_each_node_by_name(dn, "interrupt-controller") {
+	for (dn = NULL;
+	     (dn = of_find_node_by_name(dn, "interrupt-controller"));) {
 		if (of_device_is_compatible(dn, "CBEA,platform-spider-pic")) {
 			if (of_address_to_resource(dn, 0, &r)) {
 				printk(KERN_WARNING "spider-pic: Failed\n");

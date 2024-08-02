@@ -32,15 +32,11 @@
  * Thomas Hellström <thomas-at-tungstengraphics-dot-com>
  */
 
-#include <linux/export.h>
-#include <linux/hash.h>
-#include <linux/mm.h>
-#include <linux/rculist.h>
-#include <linux/slab.h>
-#include <linux/vmalloc.h>
-
+#include <drm/drmP.h>
 #include <drm/drm_hashtab.h>
-#include <drm/drm_print.h>
+#include <linux/hash.h>
+#include <linux/slab.h>
+#include <linux/export.h>
 
 int drm_ht_create(struct drm_open_hash *ht, unsigned int order)
 {
@@ -51,7 +47,7 @@ int drm_ht_create(struct drm_open_hash *ht, unsigned int order)
 	if (size <= PAGE_SIZE / sizeof(*ht->table))
 		ht->table = kcalloc(size, sizeof(*ht->table), GFP_KERNEL);
 	else
-		ht->table = vzalloc(array_size(size, sizeof(*ht->table)));
+		ht->table = vzalloc(size*sizeof(*ht->table));
 	if (!ht->table) {
 		DRM_ERROR("Out of memory for hash table\n");
 		return -ENOMEM;
@@ -146,7 +142,7 @@ int drm_ht_just_insert_please(struct drm_open_hash *ht, struct drm_hash_item *it
 			      unsigned long add)
 {
 	int ret;
-	unsigned long mask = (1UL << bits) - 1;
+	unsigned long mask = (1 << bits) - 1;
 	unsigned long first, unshifted_key;
 
 	unshifted_key = hash_long(seed, bits);
@@ -202,7 +198,10 @@ EXPORT_SYMBOL(drm_ht_remove_item);
 void drm_ht_remove(struct drm_open_hash *ht)
 {
 	if (ht->table) {
-		kvfree(ht->table);
+		if ((PAGE_SIZE / sizeof(*ht->table)) >> ht->order)
+			kfree(ht->table);
+		else
+			vfree(ht->table);
 		ht->table = NULL;
 	}
 }

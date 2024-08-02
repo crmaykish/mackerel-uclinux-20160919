@@ -24,18 +24,17 @@
 #include <subdev/bios.h>
 #include <subdev/bios/bit.h>
 #include <subdev/bios/perf.h>
-#include <subdev/pci.h>
 
-u32
+u16
 nvbios_perf_table(struct nvkm_bios *bios, u8 *ver, u8 *hdr,
 		  u8 *cnt, u8 *len, u8 *snr, u8 *ssz)
 {
 	struct bit_entry bit_P;
-	u32 perf = 0;
+	u16 perf = 0x0000;
 
 	if (!bit_entry(bios, 'P', &bit_P)) {
 		if (bit_P.version <= 2) {
-			perf = nvbios_rd32(bios, bit_P.offset + 0);
+			perf = nvbios_rd16(bios, bit_P.offset + 0);
 			if (perf) {
 				*ver = nvbios_rd08(bios, perf + 0);
 				*hdr = nvbios_rd08(bios, perf + 1);
@@ -72,15 +71,15 @@ nvbios_perf_table(struct nvkm_bios *bios, u8 *ver, u8 *hdr,
 		}
 	}
 
-	return 0;
+	return 0x0000;
 }
 
-u32
+u16
 nvbios_perf_entry(struct nvkm_bios *bios, int idx,
 		  u8 *ver, u8 *hdr, u8 *cnt, u8 *len)
 {
 	u8  snr, ssz;
-	u32 perf = nvbios_perf_table(bios, ver, hdr, cnt, len, &snr, &ssz);
+	u16 perf = nvbios_perf_table(bios, ver, hdr, cnt, len, &snr, &ssz);
 	if (perf && idx < *cnt) {
 		perf = perf + *hdr + (idx * (*len + (snr * ssz)));
 		*hdr = *len;
@@ -88,14 +87,14 @@ nvbios_perf_entry(struct nvkm_bios *bios, int idx,
 		*len = ssz;
 		return perf;
 	}
-	return 0;
+	return 0x0000;
 }
 
-u32
+u16
 nvbios_perfEp(struct nvkm_bios *bios, int idx,
 	      u8 *ver, u8 *hdr, u8 *cnt, u8 *len, struct nvbios_perfE *info)
 {
-	u32 perf = nvbios_perf_entry(bios, idx, ver, hdr, cnt, len);
+	u16 perf = nvbios_perf_entry(bios, idx, ver, hdr, cnt, len);
 	memset(info, 0x00, sizeof(*info));
 	info->pstate = nvbios_rd08(bios, perf + 0x00);
 	switch (!!perf * *ver) {
@@ -135,7 +134,6 @@ nvbios_perfEp(struct nvkm_bios *bios, int idx,
 		break;
 	case 0x30:
 		info->script   = nvbios_rd16(bios, perf + 0x02);
-		/* fall through */
 	case 0x35:
 		info->fanspeed = nvbios_rd08(bios, perf + 0x06);
 		info->voltage  = nvbios_rd08(bios, perf + 0x07);
@@ -147,24 +145,9 @@ nvbios_perfEp(struct nvkm_bios *bios, int idx,
 		break;
 	case 0x40:
 		info->voltage  = nvbios_rd08(bios, perf + 0x02);
-		switch (nvbios_rd08(bios, perf + 0xb) & 0x3) {
-		case 0:
-			info->pcie_speed = NVKM_PCIE_SPEED_5_0;
-			break;
-		case 3:
-		case 1:
-			info->pcie_speed = NVKM_PCIE_SPEED_2_5;
-			break;
-		case 2:
-			info->pcie_speed = NVKM_PCIE_SPEED_8_0;
-			break;
-		default:
-			break;
-		}
-		info->pcie_width = 0xff;
 		break;
 	default:
-		return 0;
+		return 0x0000;
 	}
 	return perf;
 }
@@ -203,7 +186,7 @@ nvbios_perf_fan_parse(struct nvkm_bios *bios,
 		      struct nvbios_perf_fan *fan)
 {
 	u8  ver, hdr, cnt, len, snr, ssz;
-	u32 perf = nvbios_perf_table(bios, &ver, &hdr, &cnt, &len, &snr, &ssz);
+	u16 perf = nvbios_perf_table(bios, &ver, &hdr, &cnt, &len, &snr, &ssz);
 	if (!perf)
 		return -ENODEV;
 

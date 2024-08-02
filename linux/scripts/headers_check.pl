@@ -1,5 +1,4 @@
-#!/usr/bin/env perl
-# SPDX-License-Identifier: GPL-2.0
+#!/usr/bin/perl -w
 #
 # headers_check.pl execute a number of trivial consistency checks
 #
@@ -19,7 +18,6 @@
 #
 # 3) Check for leaked CONFIG_ symbols
 
-use warnings;
 use strict;
 use File::Basename;
 
@@ -69,10 +67,6 @@ sub check_declarations
 {
 	# soundcard.h is what it is
 	if ($line =~ m/^void seqbuf_dump\(void\);/) {
-		return;
-	}
-	# drm headers are being C++ friendly
-	if ($line =~ m/^extern "C"/) {
 		return;
 	}
 	if ($line =~ m/^(\s*extern|unsigned|char|short|int|long|void)\b/) {

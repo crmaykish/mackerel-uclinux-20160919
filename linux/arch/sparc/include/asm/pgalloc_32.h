@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _SPARC_PGALLOC_H
 #define _SPARC_PGALLOC_H
 
@@ -17,6 +16,8 @@ void srmmu_free_nocache(void *addr, int size);
 
 extern struct resource sparc_iomap;
 
+#define check_pgt_cache()	do { } while (0)
+
 pgd_t *get_pgd_fast(void);
 static inline void free_pgd_fast(pgd_t *pgd)
 {
@@ -28,9 +29,9 @@ static inline void free_pgd_fast(pgd_t *pgd)
 
 static inline void pgd_set(pgd_t * pgdp, pmd_t * pmdp)
 {
-	unsigned long pa = __nocache_pa(pmdp);
+	unsigned long pa = __nocache_pa((unsigned long)pmdp);
 
-	set_pte((pte_t *)pgdp, __pte((SRMMU_ET_PTD | (pa >> 4))));
+	set_pte((pte_t *)pgdp, (SRMMU_ET_PTD | (pa >> 4)));
 }
 
 #define pgd_populate(MM, PGD, PMD)      pgd_set(PGD, PMD)
@@ -56,9 +57,10 @@ void pmd_populate(struct mm_struct *mm, pmd_t *pmdp, struct page *ptep);
 void pmd_set(pmd_t *pmdp, pte_t *ptep);
 #define pmd_populate_kernel(MM, PMD, PTE) pmd_set(PMD, PTE)
 
-pgtable_t pte_alloc_one(struct mm_struct *mm);
+pgtable_t pte_alloc_one(struct mm_struct *mm, unsigned long address);
 
-static inline pte_t *pte_alloc_one_kernel(struct mm_struct *mm)
+static inline pte_t *pte_alloc_one_kernel(struct mm_struct *mm,
+					  unsigned long address)
 {
 	return srmmu_get_nocache(PTE_SIZE, PTE_SIZE);
 }

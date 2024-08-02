@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * kernel/power/autosleep.c
  *
@@ -116,7 +115,7 @@ int pm_autosleep_set_state(suspend_state_t state)
 
 int __init pm_autosleep_init(void)
 {
-	autosleep_ws = wakeup_source_register(NULL, "autosleep");
+	autosleep_ws = wakeup_source_register("autosleep");
 	if (!autosleep_ws)
 		return -ENOMEM;
 

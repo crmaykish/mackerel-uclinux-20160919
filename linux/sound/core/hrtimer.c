@@ -1,7 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * ALSA timer back-end using hrtimer
  * Copyright (C) 2008 Takashi Iwai
+ *
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ *
  */
 
 #include <linux/init.h>
@@ -24,53 +38,37 @@ static unsigned int resolution;
 struct snd_hrtimer {
 	struct snd_timer *timer;
 	struct hrtimer hrt;
-	bool in_callback;
+	atomic_t running;
 };
 
 static enum hrtimer_restart snd_hrtimer_callback(struct hrtimer *hrt)
 {
 	struct snd_hrtimer *stime = container_of(hrt, struct snd_hrtimer, hrt);
 	struct snd_timer *t = stime->timer;
-	ktime_t delta;
-	unsigned long ticks;
-	enum hrtimer_restart ret = HRTIMER_NORESTART;
+	unsigned long oruns;
 
-	spin_lock(&t->lock);
-	if (!t->running)
-		goto out; /* fast path */
-	stime->in_callback = true;
-	ticks = t->sticks;
-	spin_unlock(&t->lock);
+	if (!atomic_read(&stime->running))
+		return HRTIMER_NORESTART;
 
-	/* calculate the drift */
-	delta = ktime_sub(hrt->base->get_time(), hrtimer_get_expires(hrt));
-	if (delta > 0)
-		ticks += ktime_divns(delta, ticks * resolution);
+	oruns = hrtimer_forward_now(hrt, ns_to_ktime(t->sticks * resolution));
+	snd_timer_interrupt(stime->timer, t->sticks * oruns);
 
-	snd_timer_interrupt(stime->timer, ticks);
-
-	spin_lock(&t->lock);
-	if (t->running) {
-		hrtimer_add_expires_ns(hrt, t->sticks * resolution);
-		ret = HRTIMER_RESTART;
-	}
-
-	stime->in_callback = false;
- out:
-	spin_unlock(&t->lock);
-	return ret;
+	if (!atomic_read(&stime->running))
+		return HRTIMER_NORESTART;
+	return HRTIMER_RESTART;
 }
 
 static int snd_hrtimer_open(struct snd_timer *t)
 {
 	struct snd_hrtimer *stime;
 
-	stime = kzalloc(sizeof(*stime), GFP_KERNEL);
+	stime = kmalloc(sizeof(*stime), GFP_KERNEL);
 	if (!stime)
 		return -ENOMEM;
 	hrtimer_init(&stime->hrt, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	stime->timer = t;
 	stime->hrt.function = snd_hrtimer_callback;
+	atomic_set(&stime->running, 0);
 	t->private_data = stime;
 	return 0;
 }
@@ -80,11 +78,6 @@ static int snd_hrtimer_close(struct snd_timer *t)
 	struct snd_hrtimer *stime = t->private_data;
 
 	if (stime) {
-		spin_lock_irq(&t->lock);
-		t->running = 0; /* just to be sure */
-		stime->in_callback = 1; /* skip start/stop */
-		spin_unlock_irq(&t->lock);
-
 		hrtimer_cancel(&stime->hrt);
 		kfree(stime);
 		t->private_data = NULL;
@@ -96,24 +89,22 @@ static int snd_hrtimer_start(struct snd_timer *t)
 {
 	struct snd_hrtimer *stime = t->private_data;
 
-	if (stime->in_callback)
-		return 0;
+	atomic_set(&stime->running, 0);
+	hrtimer_cancel(&stime->hrt);
 	hrtimer_start(&stime->hrt, ns_to_ktime(t->sticks * resolution),
 		      HRTIMER_MODE_REL);
+	atomic_set(&stime->running, 1);
 	return 0;
 }
 
 static int snd_hrtimer_stop(struct snd_timer *t)
 {
 	struct snd_hrtimer *stime = t->private_data;
-
-	if (stime->in_callback)
-		return 0;
-	hrtimer_try_to_cancel(&stime->hrt);
+	atomic_set(&stime->running, 0);
 	return 0;
 }
 
-static const struct snd_timer_hardware hrtimer_hw __initconst = {
+static struct snd_timer_hardware hrtimer_hw = {
 	.flags =	SNDRV_TIMER_HW_AUTO | SNDRV_TIMER_HW_TASKLET,
 	.open =		snd_hrtimer_open,
 	.close =	snd_hrtimer_close,
@@ -145,7 +136,6 @@ static int __init snd_hrtimer_init(void)
 	timer->hw = hrtimer_hw;
 	timer->hw.resolution = resolution;
 	timer->hw.ticks = NANO_SEC / resolution;
-	timer->max_instances = 100; /* lower the limit */
 
 	err = snd_timer_global_register(timer);
 	if (err < 0) {

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  ebtable_nat
  *
@@ -10,11 +9,10 @@
  */
 
 #include <linux/netfilter_bridge/ebtables.h>
-#include <uapi/linux/netfilter_bridge.h>
 #include <linux/module.h>
 
 #define NAT_VALID_HOOKS ((1 << NF_BR_PRE_ROUTING) | (1 << NF_BR_LOCAL_OUT) | \
-			 (1 << NF_BR_POST_ROUTING))
+   (1 << NF_BR_POST_ROUTING))
 
 static struct ebt_entries initial_chains[] = {
 	{
@@ -43,10 +41,18 @@ static struct ebt_replace_kernel initial_table = {
 	.entries	= (char *)initial_chains,
 };
 
-static const struct ebt_table frame_nat = {
+static int check(const struct ebt_table_info *info, unsigned int valid_hooks)
+{
+	if (valid_hooks & ~NAT_VALID_HOOKS)
+		return -EINVAL;
+	return 0;
+}
+
+static struct ebt_table frame_nat = {
 	.name		= "nat",
 	.table		= &initial_table,
 	.valid_hooks	= NAT_VALID_HOOKS,
+	.check		= check,
 	.me		= THIS_MODULE,
 };
 
@@ -64,7 +70,7 @@ ebt_nat_out(void *priv, struct sk_buff *skb,
 	return ebt_do_table(skb, state, state->net->xt.frame_nat);
 }
 
-static const struct nf_hook_ops ebt_ops_nat[] = {
+static struct nf_hook_ops ebt_ops_nat[] __read_mostly = {
 	{
 		.hook		= ebt_nat_out,
 		.pf		= NFPROTO_BRIDGE,
@@ -87,13 +93,8 @@ static const struct nf_hook_ops ebt_ops_nat[] = {
 
 static int __net_init frame_nat_net_init(struct net *net)
 {
-	return ebt_register_table(net, &frame_nat, ebt_ops_nat,
-				  &net->xt.frame_nat);
-}
-
-static void __net_exit frame_nat_net_pre_exit(struct net *net)
-{
-	ebt_unregister_table_pre_exit(net, "nat", ebt_ops_nat);
+	net->xt.frame_nat = ebt_register_table(net, &frame_nat);
+	return PTR_ERR_OR_ZERO(net->xt.frame_nat);
 }
 
 static void __net_exit frame_nat_net_exit(struct net *net)
@@ -104,16 +105,24 @@ static void __net_exit frame_nat_net_exit(struct net *net)
 static struct pernet_operations frame_nat_net_ops = {
 	.init = frame_nat_net_init,
 	.exit = frame_nat_net_exit,
-	.pre_exit = frame_nat_net_pre_exit,
 };
 
 static int __init ebtable_nat_init(void)
 {
-	return register_pernet_subsys(&frame_nat_net_ops);
+	int ret;
+
+	ret = register_pernet_subsys(&frame_nat_net_ops);
+	if (ret < 0)
+		return ret;
+	ret = nf_register_hooks(ebt_ops_nat, ARRAY_SIZE(ebt_ops_nat));
+	if (ret < 0)
+		unregister_pernet_subsys(&frame_nat_net_ops);
+	return ret;
 }
 
 static void __exit ebtable_nat_fini(void)
 {
+	nf_unregister_hooks(ebt_ops_nat, ARRAY_SIZE(ebt_ops_nat));
 	unregister_pernet_subsys(&frame_nat_net_ops);
 }
 

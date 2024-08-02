@@ -1,11 +1,19 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  *  Driver for the Conexant CX23885 PCIe bridge
  *
  *  Copyright (c) 2006 Steven Toth <stoth@linuxtv.org>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *
+ *  GNU General Public License for more details.
  */
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/pci.h>
 #include <linux/i2c.h>
@@ -22,7 +30,7 @@
 #include <media/rc-core.h>
 
 #include "cx23885-reg.h"
-#include "media/drv-intf/cx2341x.h"
+#include "media/cx2341x.h"
 
 #include <linux/mutex.h>
 
@@ -93,15 +101,6 @@
 #define CX23885_BOARD_DVBSKY_T982              51
 #define CX23885_BOARD_HAUPPAUGE_HVR5525        52
 #define CX23885_BOARD_HAUPPAUGE_STARBURST      53
-#define CX23885_BOARD_VIEWCAST_260E            54
-#define CX23885_BOARD_VIEWCAST_460E            55
-#define CX23885_BOARD_HAUPPAUGE_QUADHD_DVB     56
-#define CX23885_BOARD_HAUPPAUGE_QUADHD_ATSC    57
-#define CX23885_BOARD_HAUPPAUGE_HVR1265_K4     58
-#define CX23885_BOARD_HAUPPAUGE_STARBURST2     59
-#define CX23885_BOARD_HAUPPAUGE_QUADHD_DVB_885 60
-#define CX23885_BOARD_HAUPPAUGE_QUADHD_ATSC_885 61
-#define CX23885_BOARD_AVERMEDIA_CE310B         62
 
 #define GPIO_0 0x00000001
 #define GPIO_1 0x00000002
@@ -128,6 +127,7 @@
 	V4L2_STD_PAL_60 |  V4L2_STD_SECAM_L   |  V4L2_STD_SECAM_DK)
 
 struct cx23885_fmt {
+	char  *name;
 	u32   fourcc;          /* v4l2 format id */
 	int   depth;
 	int   flags;
@@ -236,7 +236,7 @@ struct cx23885_i2c {
 	struct i2c_client          i2c_client;
 	u32                        i2c_rc;
 
-	/* 885 registers used for raw address */
+	/* 885 registers used for raw addess */
 	u32                        i2c_period;
 	u32                        reg_ctrl;
 	u32                        reg_stat;
@@ -253,7 +253,7 @@ struct cx23885_dmaqueue {
 struct cx23885_tsport {
 	struct cx23885_dev *dev;
 
-	unsigned                   nr;
+	int                        nr;
 	int                        sram_chno;
 
 	struct vb2_dvb_frontends   frontends;
@@ -351,7 +351,7 @@ struct cx23885_audio_dev {
 
 struct cx23885_dev {
 	atomic_t                   refcount;
-	struct v4l2_device	   v4l2_dev;
+	struct v4l2_device 	   v4l2_dev;
 	struct v4l2_ctrl_handler   ctrl_handler;
 
 	/* pci stuff */
@@ -401,7 +401,7 @@ struct cx23885_dev {
 	unsigned int               tuner_bus;
 	unsigned int               radio_type;
 	unsigned char              radio_addr;
-	struct v4l2_subdev	   *sd_cx25840;
+	struct v4l2_subdev 	   *sd_cx25840;
 	struct work_struct	   cx25840_work;
 
 	/* Infrared */
@@ -428,6 +428,7 @@ struct cx23885_dev {
 	struct vb2_queue           vb2_vidq;
 	struct cx23885_dmaqueue    vbiq;
 	struct vb2_queue           vb2_vbiq;
+	void			   *alloc_ctx;
 
 	spinlock_t                 slock;
 
@@ -441,8 +442,6 @@ struct cx23885_dev {
 	/* Analog raw audio */
 	struct cx23885_audio_dev   *audio_dev;
 
-	/* Does the system require periodic DMA resets? */
-	unsigned int		need_dma_reset:1;
 };
 
 static inline struct cx23885_dev *to_cx23885(struct v4l2_device *v4l2_dev)
@@ -587,7 +586,7 @@ int cx23885_set_tvnorm(struct cx23885_dev *dev, v4l2_std_id norm);
 extern int cx23885_vbi_fmt(struct file *file, void *priv,
 	struct v4l2_format *f);
 extern void cx23885_vbi_timeout(unsigned long data);
-extern const struct vb2_ops cx23885_vbi_qops;
+extern struct vb2_ops cx23885_vbi_qops;
 extern int cx23885_vbi_irq(struct cx23885_dev *dev, u32 status);
 
 /* cx23885-i2c.c                                                */
@@ -627,6 +626,11 @@ extern int cx23885_risc_databuffer(struct pci_dev *pci,
 
 /* ----------------------------------------------------------- */
 /* tv norms                                                    */
+
+static inline unsigned int norm_maxw(v4l2_std_id norm)
+{
+	return (norm & V4L2_STD_525_60) ? 720 : 768;
+}
 
 static inline unsigned int norm_maxh(v4l2_std_id norm)
 {

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/arch/m68k/hp300/config.c
  *
@@ -13,7 +12,6 @@
 #include <linux/string.h>
 #include <linux/kernel.h>
 #include <linux/console.h>
-#include <linux/rtc.h>
 
 #include <asm/bootinfo.h>
 #include <asm/bootinfo-hp300.h>
@@ -22,6 +20,7 @@
 #include <asm/blinken.h>
 #include <asm/io.h>                               /* readb() and writeb() */
 #include <asm/hp300hw.h>
+#include <asm/rtc.h>
 
 #include "time.h"
 
@@ -254,6 +253,7 @@ void __init config_hp300(void)
 	mach_sched_init      = hp300_sched_init;
 	mach_init_IRQ        = hp300_init_IRQ;
 	mach_get_model       = hp300_get_model;
+	arch_gettimeoffset   = hp300_gettimeoffset;
 	mach_hwclk	     = hp300_hwclk;
 	mach_get_ss	     = hp300_get_ss;
 	mach_reset           = hp300_reset;

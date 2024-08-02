@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2014 Florian Vaussard, EPFL Mobots group
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 /*
@@ -116,7 +119,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&mcspi1_pins>;
 
-	lcd0: display@1 {
+	lcd0: display@0 {
 		compatible = "lgphilips,lb035q02";
 		label = "lcd35";
 
@@ -149,7 +152,7 @@
 
 		interrupt-parent = <&gpio4>;
 		interrupts = <18 0>;			/* gpio_114 */
-		pendown-gpio = <&gpio4 18 GPIO_ACTIVE_LOW>;
+		pendown-gpio = <&gpio4 18 GPIO_ACTIVE_HIGH>;
 
 		ti,x-min = /bits/ 16 <0x0>;
 		ti,x-max = /bits/ 16 <0x0fff>;
@@ -158,6 +161,6 @@
 		ti,x-plate-ohms = /bits/ 16 <180>;
 		ti,pressure-max = /bits/ 16 <255>;
 
-		wakeup-source;
+		linux,wakeup;
 	};
 };

@@ -1,8 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *    Support for LG2160 - ATSC/MH
  *
  *    Copyright (C) 2010 Michael Krufky <mkrufky@linuxtv.org>
+ *
+ *    This program is free software; you can redistribute it and/or modify
+ *    it under the terms of the GNU General Public License as published by
+ *    the Free Software Foundation; either version 2 of the License, or
+ *    (at your option) any later version.
+ *
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *    GNU General Public License for more details.
+ *
+ *    You should have received a copy of the GNU General Public License
+ *    along with this program; if not, write to the Free Software
+ *    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
  */
 
 #include <linux/jiffies.h>
@@ -928,102 +942,101 @@ static int lg216x_read_rs_err_count(struct lg216x_state *state, u16 *err)
 
 /* ------------------------------------------------------------------------ */
 
-static int lg216x_get_frontend(struct dvb_frontend *fe,
-			       struct dtv_frontend_properties *c)
+static int lg216x_get_frontend(struct dvb_frontend *fe)
 {
 	struct lg216x_state *state = fe->demodulator_priv;
 	int ret;
 
 	lg_dbg("\n");
 
-	c->modulation = VSB_8;
-	c->frequency = state->current_frequency;
-	c->delivery_system = SYS_ATSCMH;
+	fe->dtv_property_cache.modulation = VSB_8;
+	fe->dtv_property_cache.frequency = state->current_frequency;
+	fe->dtv_property_cache.delivery_system = SYS_ATSCMH;
 
 	ret = lg216x_get_fic_version(state,
-				     &c->atscmh_fic_ver);
+				     &fe->dtv_property_cache.atscmh_fic_ver);
 	if (lg_fail(ret))
 		goto fail;
-	if (state->fic_ver != c->atscmh_fic_ver) {
-		state->fic_ver = c->atscmh_fic_ver;
+	if (state->fic_ver != fe->dtv_property_cache.atscmh_fic_ver) {
+		state->fic_ver = fe->dtv_property_cache.atscmh_fic_ver;
 
 #if 0
 		ret = lg2160_get_parade_id(state,
-				&c->atscmh_parade_id);
+				&fe->dtv_property_cache.atscmh_parade_id);
 		if (lg_fail(ret))
 			goto fail;
 /* #else */
-		c->atscmh_parade_id = state->parade_id;
+		fe->dtv_property_cache.atscmh_parade_id = state->parade_id;
 #endif
 		ret = lg216x_get_nog(state,
-				     &c->atscmh_nog);
+				     &fe->dtv_property_cache.atscmh_nog);
 		if (lg_fail(ret))
 			goto fail;
 		ret = lg216x_get_tnog(state,
-				      &c->atscmh_tnog);
+				      &fe->dtv_property_cache.atscmh_tnog);
 		if (lg_fail(ret))
 			goto fail;
 		ret = lg216x_get_sgn(state,
-				     &c->atscmh_sgn);
+				     &fe->dtv_property_cache.atscmh_sgn);
 		if (lg_fail(ret))
 			goto fail;
 		ret = lg216x_get_prc(state,
-				     &c->atscmh_prc);
+				     &fe->dtv_property_cache.atscmh_prc);
 		if (lg_fail(ret))
 			goto fail;
 
 		ret = lg216x_get_rs_frame_mode(state,
 			(enum atscmh_rs_frame_mode *)
-			&c->atscmh_rs_frame_mode);
+			&fe->dtv_property_cache.atscmh_rs_frame_mode);
 		if (lg_fail(ret))
 			goto fail;
 		ret = lg216x_get_rs_frame_ensemble(state,
 			(enum atscmh_rs_frame_ensemble *)
-			&c->atscmh_rs_frame_ensemble);
+			&fe->dtv_property_cache.atscmh_rs_frame_ensemble);
 		if (lg_fail(ret))
 			goto fail;
 		ret = lg216x_get_rs_code_mode(state,
 			(enum atscmh_rs_code_mode *)
-			&c->atscmh_rs_code_mode_pri,
+			&fe->dtv_property_cache.atscmh_rs_code_mode_pri,
 			(enum atscmh_rs_code_mode *)
-			&c->atscmh_rs_code_mode_sec);
+			&fe->dtv_property_cache.atscmh_rs_code_mode_sec);
 		if (lg_fail(ret))
 			goto fail;
 		ret = lg216x_get_sccc_block_mode(state,
 			(enum atscmh_sccc_block_mode *)
-			&c->atscmh_sccc_block_mode);
+			&fe->dtv_property_cache.atscmh_sccc_block_mode);
 		if (lg_fail(ret))
 			goto fail;
 		ret = lg216x_get_sccc_code_mode(state,
 			(enum atscmh_sccc_code_mode *)
-			&c->atscmh_sccc_code_mode_a,
+			&fe->dtv_property_cache.atscmh_sccc_code_mode_a,
 			(enum atscmh_sccc_code_mode *)
-			&c->atscmh_sccc_code_mode_b,
+			&fe->dtv_property_cache.atscmh_sccc_code_mode_b,
 			(enum atscmh_sccc_code_mode *)
-			&c->atscmh_sccc_code_mode_c,
+			&fe->dtv_property_cache.atscmh_sccc_code_mode_c,
 			(enum atscmh_sccc_code_mode *)
-			&c->atscmh_sccc_code_mode_d);
+			&fe->dtv_property_cache.atscmh_sccc_code_mode_d);
 		if (lg_fail(ret))
 			goto fail;
 	}
 #if 0
 	ret = lg216x_read_fic_err_count(state,
-				(u8 *)&c->atscmh_fic_err);
+				(u8 *)&fe->dtv_property_cache.atscmh_fic_err);
 	if (lg_fail(ret))
 		goto fail;
 	ret = lg216x_read_crc_err_count(state,
-				&c->atscmh_crc_err);
+				&fe->dtv_property_cache.atscmh_crc_err);
 	if (lg_fail(ret))
 		goto fail;
 	ret = lg216x_read_rs_err_count(state,
-				&c->atscmh_rs_err);
+				&fe->dtv_property_cache.atscmh_rs_err);
 	if (lg_fail(ret))
 		goto fail;
 
 	switch (state->cfg->lg_chip) {
 	case LG2160:
-		if (((c->atscmh_rs_err >= 240) &&
-		     (c->atscmh_crc_err >= 240)) &&
+		if (((fe->dtv_property_cache.atscmh_rs_err >= 240) &&
+		     (fe->dtv_property_cache.atscmh_crc_err >= 240)) &&
 		    ((jiffies_to_msecs(jiffies) - state->last_reset) > 6000))
 			ret = lg216x_soft_reset(state);
 		break;
@@ -1038,10 +1051,17 @@ fail:
 	return ret;
 }
 
+static int lg216x_get_property(struct dvb_frontend *fe,
+			       struct dtv_property *tvp)
+{
+	return (DTV_ATSCMH_FIC_VER == tvp->cmd) ?
+		lg216x_get_frontend(fe) : 0;
+}
+
+
 static int lg2160_set_frontend(struct dvb_frontend *fe)
 {
 	struct lg216x_state *state = fe->demodulator_priv;
-	struct dtv_frontend_properties *c = &fe->dtv_property_cache;
 	int ret;
 
 	lg_dbg("(%d)\n", fe->dtv_property_cache.frequency);
@@ -1109,7 +1129,7 @@ static int lg2160_set_frontend(struct dvb_frontend *fe)
 	ret = lg216x_enable_fic(state, 1);
 	lg_fail(ret);
 
-	lg216x_get_frontend(fe, c);
+	lg216x_get_frontend(fe);
 fail:
 	return ret;
 }
@@ -1335,19 +1355,21 @@ static void lg216x_release(struct dvb_frontend *fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops lg2160_ops = {
+static struct dvb_frontend_ops lg2160_ops = {
 	.delsys = { SYS_ATSCMH },
 	.info = {
 		.name = "LG Electronics LG2160 ATSC/MH Frontend",
-		.frequency_min_hz      =  54 * MHz,
-		.frequency_max_hz      = 858 * MHz,
-		.frequency_stepsize_hz = 62500,
+		.frequency_min      = 54000000,
+		.frequency_max      = 858000000,
+		.frequency_stepsize = 62500,
 	},
 	.i2c_gate_ctrl        = lg216x_i2c_gate_ctrl,
 #if 0
 	.init                 = lg216x_init,
 	.sleep                = lg216x_sleep,
 #endif
+	.get_property         = lg216x_get_property,
+
 	.set_frontend         = lg2160_set_frontend,
 	.get_frontend         = lg216x_get_frontend,
 	.get_tune_settings    = lg216x_get_tune_settings,
@@ -1361,19 +1383,21 @@ static const struct dvb_frontend_ops lg2160_ops = {
 	.release              = lg216x_release,
 };
 
-static const struct dvb_frontend_ops lg2161_ops = {
+static struct dvb_frontend_ops lg2161_ops = {
 	.delsys = { SYS_ATSCMH },
 	.info = {
 		.name = "LG Electronics LG2161 ATSC/MH Frontend",
-		.frequency_min_hz      =  54 * MHz,
-		.frequency_max_hz      = 858 * MHz,
-		.frequency_stepsize_hz = 62500,
+		.frequency_min      = 54000000,
+		.frequency_max      = 858000000,
+		.frequency_stepsize = 62500,
 	},
 	.i2c_gate_ctrl        = lg216x_i2c_gate_ctrl,
 #if 0
 	.init                 = lg216x_init,
 	.sleep                = lg216x_sleep,
 #endif
+	.get_property         = lg216x_get_property,
+
 	.set_frontend         = lg2160_set_frontend,
 	.get_frontend         = lg216x_get_frontend,
 	.get_tune_settings    = lg216x_get_tune_settings,
@@ -1426,7 +1450,7 @@ struct dvb_frontend *lg2160_attach(const struct lg2160_config *config,
 
 	return &state->frontend;
 }
-EXPORT_SYMBOL_GPL(lg2160_attach);
+EXPORT_SYMBOL(lg2160_attach);
 
 MODULE_DESCRIPTION("LG Electronics LG216x ATSC/MH Demodulator Driver");
 MODULE_AUTHOR("Michael Krufky <mkrufky@linuxtv.org>");

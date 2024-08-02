@@ -1,7 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 1996, 2003 VIA Networking Technologies, Inc.
  * All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
  *
  * File: power.c
  *
@@ -38,7 +52,7 @@
 
 /*---------------------  Export Functions  --------------------------*/
 
-/*
+/*+
  *
  * Routine Description:
  * Enable hw power saving functions
@@ -46,48 +60,52 @@
  * Return Value:
  *    None.
  *
- */
+ -*/
 
-void PSvEnablePowerSaving(struct vnt_private *priv,
-			  unsigned short wListenInterval)
+void
+PSvEnablePowerSaving(
+	void *hDeviceContext,
+	unsigned short wListenInterval
+)
 {
-	u16 wAID = priv->current_aid | BIT(14) | BIT(15);
+	struct vnt_private *pDevice = hDeviceContext;
+	u16 wAID = pDevice->current_aid | BIT(14) | BIT(15);
 
 	/* set period of power up before TBTT */
-	VNSvOutPortW(priv->PortOffset + MAC_REG_PWBT, C_PWBT);
-	if (priv->op_mode != NL80211_IFTYPE_ADHOC) {
+	VNSvOutPortW(pDevice->PortOffset + MAC_REG_PWBT, C_PWBT);
+	if (pDevice->op_mode != NL80211_IFTYPE_ADHOC) {
 		/* set AID */
-		VNSvOutPortW(priv->PortOffset + MAC_REG_AIDATIM, wAID);
+		VNSvOutPortW(pDevice->PortOffset + MAC_REG_AIDATIM, wAID);
 	} else {
 		/* set ATIM Window */
 #if 0 /* TODO atim window */
-		MACvWriteATIMW(priv->PortOffset, pMgmt->wCurrATIMWindow);
+		MACvWriteATIMW(pDevice->PortOffset, pMgmt->wCurrATIMWindow);
 #endif
 	}
 	/* Set AutoSleep */
-	MACvRegBitsOn(priv->PortOffset, MAC_REG_PSCFG, PSCFG_AUTOSLEEP);
+	MACvRegBitsOn(pDevice->PortOffset, MAC_REG_PSCFG, PSCFG_AUTOSLEEP);
 	/* Set HWUTSF */
-	MACvRegBitsOn(priv->PortOffset, MAC_REG_TFTCTL, TFTCTL_HWUTSF);
+	MACvRegBitsOn(pDevice->PortOffset, MAC_REG_TFTCTL, TFTCTL_HWUTSF);
 
 	if (wListenInterval >= 2) {
 		/* clear always listen beacon */
-		MACvRegBitsOff(priv->PortOffset, MAC_REG_PSCTL, PSCTL_ALBCN);
+		MACvRegBitsOff(pDevice->PortOffset, MAC_REG_PSCTL, PSCTL_ALBCN);
 		/* first time set listen next beacon */
-		MACvRegBitsOn(priv->PortOffset, MAC_REG_PSCTL, PSCTL_LNBCN);
+		MACvRegBitsOn(pDevice->PortOffset, MAC_REG_PSCTL, PSCTL_LNBCN);
 	} else {
 		/* always listen beacon */
-		MACvRegBitsOn(priv->PortOffset, MAC_REG_PSCTL, PSCTL_ALBCN);
+		MACvRegBitsOn(pDevice->PortOffset, MAC_REG_PSCTL, PSCTL_ALBCN);
 	}
 
 	/* enable power saving hw function */
-	MACvRegBitsOn(priv->PortOffset, MAC_REG_PSCTL, PSCTL_PSEN);
-	priv->bEnablePSMode = true;
+	MACvRegBitsOn(pDevice->PortOffset, MAC_REG_PSCTL, PSCTL_PSEN);
+	pDevice->bEnablePSMode = true;
 
-	priv->bPWBitOn = true;
+	pDevice->bPWBitOn = true;
 	pr_debug("PS:Power Saving Mode Enable...\n");
 }
 
-/*
+/*+
  *
  * Routine Description:
  * Disable hw power saving functions
@@ -95,28 +113,31 @@ void PSvEnablePowerSaving(struct vnt_private *priv,
  * Return Value:
  *    None.
  *
- */
+ -*/
 
 void
 PSvDisablePowerSaving(
-	struct vnt_private *priv
+	void *hDeviceContext
 )
 {
+	struct vnt_private *pDevice = hDeviceContext;
+
 	/* disable power saving hw function */
-	MACbPSWakeup(priv);
+	MACbPSWakeup(pDevice->PortOffset);
 	/* clear AutoSleep */
-	MACvRegBitsOff(priv->PortOffset, MAC_REG_PSCFG, PSCFG_AUTOSLEEP);
+	MACvRegBitsOff(pDevice->PortOffset, MAC_REG_PSCFG, PSCFG_AUTOSLEEP);
 	/* clear HWUTSF */
-	MACvRegBitsOff(priv->PortOffset, MAC_REG_TFTCTL, TFTCTL_HWUTSF);
+	MACvRegBitsOff(pDevice->PortOffset, MAC_REG_TFTCTL, TFTCTL_HWUTSF);
 	/* set always listen beacon */
-	MACvRegBitsOn(priv->PortOffset, MAC_REG_PSCTL, PSCTL_ALBCN);
+	MACvRegBitsOn(pDevice->PortOffset, MAC_REG_PSCTL, PSCTL_ALBCN);
 
-	priv->bEnablePSMode = false;
+	pDevice->bEnablePSMode = false;
 
-	priv->bPWBitOn = false;
+	pDevice->bPWBitOn = false;
 }
 
-/*
+
+/*+
  *
  * Routine Description:
  * Check if Next TBTT must wake up
@@ -124,30 +145,31 @@ PSvDisablePowerSaving(
  * Return Value:
  *    None.
  *
- */
+ -*/
 
 bool
 PSbIsNextTBTTWakeUp(
-	struct vnt_private *priv
+	void *hDeviceContext
 )
 {
-	struct ieee80211_hw *hw = priv->hw;
+	struct vnt_private *pDevice = hDeviceContext;
+	struct ieee80211_hw *hw = pDevice->hw;
 	struct ieee80211_conf *conf = &hw->conf;
-	bool wake_up = false;
+	bool bWakeUp = false;
 
 	if (conf->listen_interval > 1) {
-		if (!priv->wake_up_count)
-			priv->wake_up_count = conf->listen_interval;
+		if (!pDevice->wake_up_count)
+			pDevice->wake_up_count = conf->listen_interval;
 
-		--priv->wake_up_count;
+		--pDevice->wake_up_count;
 
-		if (priv->wake_up_count == 1) {
+		if (pDevice->wake_up_count == 1) {
 			/* Turn on wake up to listen next beacon */
-			MACvRegBitsOn(priv->PortOffset,
+			MACvRegBitsOn(pDevice->PortOffset,
 				      MAC_REG_PSCTL, PSCTL_LNBCN);
-			wake_up = true;
+			bWakeUp = true;
 		}
 	}
 
-	return wake_up;
+	return bWakeUp;
 }

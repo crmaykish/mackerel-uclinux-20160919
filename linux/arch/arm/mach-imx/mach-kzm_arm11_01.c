@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * KZM-ARM11-01 support
  *  Copyright (C) 2009  Yoichi Yuasa <yuasa@linux-mips.org>
@@ -7,6 +6,16 @@
  *  Copyright (C) 2000 Deep Blue Solutions Ltd
  *  Copyright (C) 2002 Shane Nay (shane@minirl.com)
  *  Copyright 2005-2007 Freescale Semiconductor, Inc. All Rights Reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/gpio.h>
@@ -54,7 +63,7 @@
  */
 #define KZM_ARM11_16550		(MX31_CS4_BASE_ADDR + 0x1050)
 
-#if IS_ENABLED(CONFIG_SERIAL_8250)
+#if defined(CONFIG_SERIAL_8250) || defined(CONFIG_SERIAL_8250_MODULE)
 /*
  * KZM-ARM11-01 has an external UART on FPGA
  */
@@ -132,7 +141,7 @@ static inline int kzm_init_ext_uart(void)
 /*
  * SMSC LAN9118
  */
-#if IS_ENABLED(CONFIG_SMSC911X)
+#if defined(CONFIG_SMSC911X) || defined(CONFIG_SMSC911X_MODULE)
 static struct smsc911x_platform_config kzm_smsc9118_config = {
 	.phy_interface	= PHY_INTERFACE_MODE_MII,
 	.irq_polarity	= SMSC911X_IRQ_POLARITY_ACTIVE_HIGH,
@@ -192,7 +201,7 @@ static inline int kzm_init_smsc9118(void)
 }
 #endif
 
-#if IS_ENABLED(CONFIG_SERIAL_IMX)
+#if defined(CONFIG_SERIAL_IMX) || defined(CONFIG_SERIAL_IMX_MODULE)
 static const struct imxuart_platform_data uart_pdata __initconst = {
 	.flags = IMXUART_HAVE_RTSCTS,
 };
@@ -236,15 +245,11 @@ static void __init kzm_board_init(void)
 
 	mxc_iomux_setup_multiple_pins(kzm_pins,
 				      ARRAY_SIZE(kzm_pins), "kzm");
+	kzm_init_ext_uart();
+	kzm_init_smsc9118();
 	kzm_init_imx_uart();
 
 	pr_info("Clock input source is 26MHz\n");
-}
-
-static void __init kzm_late_init(void)
-{
-	kzm_init_ext_uart();
-	kzm_init_smsc9118();
 }
 
 /*
@@ -286,6 +291,5 @@ MACHINE_START(KZM_ARM11_01, "Kyoto Microcomputer Co., Ltd. KZM-ARM11-01")
 	.init_irq = mx31_init_irq,
 	.init_time	= kzm_timer_init,
 	.init_machine = kzm_board_init,
-	.init_late	= kzm_late_init,
 	.restart	= mxc_restart,
 MACHINE_END

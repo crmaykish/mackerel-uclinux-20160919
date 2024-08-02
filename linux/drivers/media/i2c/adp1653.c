@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/media/i2c/adp1653.c
  *
@@ -11,10 +10,25 @@
  *	Tuukka Toivonen <tuukkat76@gmail.com>
  *	Pavel Machek <pavel@ucw.cz>
  *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+ * 02110-1301 USA
+ *
  * TODO:
  * - fault interrupt handling
  * - hardware strobe
  * - power doesn't need to be ON if all lights are off
+ *
  */
 
 #include <linux/delay.h>
@@ -23,7 +37,7 @@
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/gpio/consumer.h>
-#include <media/i2c/adp1653.h>
+#include <media/adp1653.h>
 #include <media/v4l2-device.h>
 
 #define TIMEOUT_MAX		820000
@@ -81,7 +95,7 @@ static int adp1653_get_fault(struct adp1653_flash *flash)
 	int rval;
 
 	fault = i2c_smbus_read_byte_data(client, ADP1653_REG_FAULT);
-	if (fault < 0)
+	if (IS_ERR_VALUE(fault))
 		return fault;
 
 	flash->fault |= fault;
@@ -91,13 +105,13 @@ static int adp1653_get_fault(struct adp1653_flash *flash)
 
 	/* Clear faults. */
 	rval = i2c_smbus_write_byte_data(client, ADP1653_REG_OUT_SEL, 0);
-	if (rval < 0)
+	if (IS_ERR_VALUE(rval))
 		return rval;
 
 	flash->led_mode->val = V4L2_FLASH_LED_MODE_NONE;
 
 	rval = adp1653_update_hw(flash);
-	if (rval)
+	if (IS_ERR_VALUE(rval))
 		return rval;
 
 	return flash->fault;
@@ -144,7 +158,7 @@ static int adp1653_get_ctrl(struct v4l2_ctrl *ctrl)
 	int rval;
 
 	rval = adp1653_get_fault(flash);
-	if (rval)
+	if (IS_ERR_VALUE(rval))
 		return rval;
 
 	ctrl->cur.val = 0;
@@ -170,7 +184,7 @@ static int adp1653_set_ctrl(struct v4l2_ctrl *ctrl)
 	int rval;
 
 	rval = adp1653_get_fault(flash);
-	if (rval)
+	if (IS_ERR_VALUE(rval))
 		return rval;
 	if ((rval & (ADP1653_REG_FAULT_FLT_SCP |
 		     ADP1653_REG_FAULT_FLT_OT |
@@ -452,9 +466,9 @@ static int adp1653_of_init(struct i2c_client *client,
 	of_node_put(child);
 
 	pd->enable_gpio = devm_gpiod_get(&client->dev, "enable", GPIOD_OUT_LOW);
-	if (IS_ERR(pd->enable_gpio)) {
+	if (!pd->enable_gpio) {
 		dev_err(&client->dev, "Error getting GPIO\n");
-		return PTR_ERR(pd->enable_gpio);
+		return -EINVAL;
 	}
 
 	return 0;
@@ -483,7 +497,7 @@ static int adp1653_probe(struct i2c_client *client,
 		if (!client->dev.platform_data) {
 			dev_err(&client->dev,
 				"Neither DT not platform data provided\n");
-			return -EINVAL;
+			return EINVAL;
 		}
 		flash->platform_data = client->dev.platform_data;
 	}
@@ -498,11 +512,11 @@ static int adp1653_probe(struct i2c_client *client,
 	if (ret)
 		goto free_and_quit;
 
-	ret = media_entity_pads_init(&flash->subdev.entity, 0, NULL);
+	ret = media_entity_init(&flash->subdev.entity, 0, NULL, 0);
 	if (ret < 0)
 		goto free_and_quit;
 
-	flash->subdev.entity.function = MEDIA_ENT_F_FLASH;
+	flash->subdev.entity.type = MEDIA_ENT_T_V4L2_SUBDEV_FLASH;
 
 	return 0;
 

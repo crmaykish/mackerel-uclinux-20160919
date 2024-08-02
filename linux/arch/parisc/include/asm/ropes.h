@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_PARISC_ROPES_H_
 #define _ASM_PARISC_ROPES_H_
 
@@ -85,9 +84,6 @@ struct sba_device {
 	unsigned int		num_ioc;  /* number of on-board IOC's */
 	struct ioc		ioc[MAX_IOC];
 };
-
-/* list of SBA's in system, see drivers/parisc/sba_iommu.c */
-extern struct sba_device *sba_list;
 
 #define ASTRO_RUNWAY_PORT	0x582
 #define IKE_MERCED_PORT		0x803

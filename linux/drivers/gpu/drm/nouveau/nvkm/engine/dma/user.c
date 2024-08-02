@@ -28,21 +28,8 @@
 #include <subdev/fb.h>
 #include <subdev/instmem.h>
 
-#include <nvif/cl0002.h>
+#include <nvif/class.h>
 #include <nvif/unpack.h>
-
-static const struct nvkm_object_func nvkm_dmaobj_func;
-struct nvkm_dmaobj *
-nvkm_dmaobj_search(struct nvkm_client *client, u64 handle)
-{
-	struct nvkm_object *object;
-
-	object = nvkm_object_search(client, handle, &nvkm_dmaobj_func);
-	if (IS_ERR(object))
-		return (void *)object;
-
-	return nvkm_dmaobj(object);
-}
 
 static int
 nvkm_dmaobj_bind(struct nvkm_object *base, struct nvkm_gpuobj *gpuobj,
@@ -55,7 +42,10 @@ nvkm_dmaobj_bind(struct nvkm_object *base, struct nvkm_gpuobj *gpuobj,
 static void *
 nvkm_dmaobj_dtor(struct nvkm_object *base)
 {
-	return nvkm_dmaobj(base);
+	struct nvkm_dmaobj *dmaobj = nvkm_dmaobj(base);
+	if (!RB_EMPTY_NODE(&dmaobj->rb))
+		rb_erase(&dmaobj->rb, &dmaobj->object.client->dmaroot);
+	return dmaobj;
 }
 
 static const struct nvkm_object_func
@@ -79,14 +69,15 @@ nvkm_dmaobj_ctor(const struct nvkm_dmaobj_func *func, struct nvkm_dma *dma,
 	struct nvkm_fb *fb = device->fb;
 	void *data = *pdata;
 	u32 size = *psize;
-	int ret = -ENOSYS;
+	int ret;
 
 	nvkm_object_ctor(&nvkm_dmaobj_func, oclass, &dmaobj->object);
 	dmaobj->func = func;
 	dmaobj->dma = dma;
+	RB_CLEAR_NODE(&dmaobj->rb);
 
 	nvif_ioctl(parent, "create dma size %d\n", *psize);
-	if (!(ret = nvif_unpack(ret, &data, &size, args->v0, 0, 0, true))) {
+	if (nvif_unpack(args->v0, 0, 0, true)) {
 		nvif_ioctl(parent, "create dma vers %d target %d access %d "
 				   "start %016llx limit %016llx\n",
 			   args->v0.version, args->v0.target, args->v0.access,

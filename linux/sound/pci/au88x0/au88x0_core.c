@@ -1,5 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU Library General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
 /*
@@ -1031,7 +1043,7 @@ static void vortex_fifo_init(vortex_t * vortex)
 	for (x = NR_ADB - 1; x >= 0; x--) {
 		hwwrite(vortex->mmio, addr, (FIFO_U0 | FIFO_U1));
 		if (hwread(vortex->mmio, addr) != (FIFO_U0 | FIFO_U1))
-			dev_err(vortex->card->dev, "bad adb fifo reset!\n");
+			dev_err(vortex->card->dev, "bad adb fifo reset!");
 		vortex_fifo_clearadbdata(vortex, x, FIFO_SIZE);
 		addr -= 4;
 	}
@@ -1103,7 +1115,6 @@ vortex_adbdma_setbuffers(vortex_t * vortex, int adbdma,
 		hwwrite(vortex->mmio,
 			VORTEX_ADBDMA_BUFBASE + (adbdma << 4) + 0xc,
 			snd_pcm_sgbuf_get_addr(dma->substream, psize * 3));
-		/* fall through */
 		/* 3 pages */
 	case 3:
 		dma->cfg0 |= 0x12000000;
@@ -1111,14 +1122,12 @@ vortex_adbdma_setbuffers(vortex_t * vortex, int adbdma,
 		hwwrite(vortex->mmio,
 			VORTEX_ADBDMA_BUFBASE + (adbdma << 4) + 0x8,
 			snd_pcm_sgbuf_get_addr(dma->substream, psize * 2));
-		/* fall through */
 		/* 2 pages */
 	case 2:
 		dma->cfg0 |= 0x88000000 | 0x44000000 | 0x10000000 | (psize - 1);
 		hwwrite(vortex->mmio,
 			VORTEX_ADBDMA_BUFBASE + (adbdma << 4) + 0x4,
 			snd_pcm_sgbuf_get_addr(dma->substream, psize));
-		/* fall through */
 		/* 1 page */
 	case 1:
 		dma->cfg0 |= 0x80000000 | 0x40000000 | ((psize - 1) << 0xc);
@@ -1381,20 +1390,17 @@ vortex_wtdma_setbuffers(vortex_t * vortex, int wtdma,
 		dma->cfg1 |= 0x88000000 | 0x44000000 | 0x30000000 | (psize-1);
 		hwwrite(vortex->mmio, VORTEX_WTDMA_BUFBASE + (wtdma << 4) + 0xc,
 			snd_pcm_sgbuf_get_addr(dma->substream, psize * 3));
-		/* fall through */
 		/* 3 pages */
 	case 3:
 		dma->cfg0 |= 0x12000000;
 		dma->cfg1 |= 0x80000000 | 0x40000000 | ((psize-1) << 0xc);
 		hwwrite(vortex->mmio, VORTEX_WTDMA_BUFBASE + (wtdma << 4)  + 0x8,
 			snd_pcm_sgbuf_get_addr(dma->substream, psize * 2));
-		/* fall through */
 		/* 2 pages */
 	case 2:
 		dma->cfg0 |= 0x88000000 | 0x44000000 | 0x10000000 | (psize-1);
 		hwwrite(vortex->mmio, VORTEX_WTDMA_BUFBASE + (wtdma << 4) + 0x4,
 			snd_pcm_sgbuf_get_addr(dma->substream, psize));
-		/* fall through */
 		/* 1 page */
 	case 1:
 		dma->cfg0 |= 0x80000000 | 0x40000000 | ((psize-1) << 0xc);
@@ -1438,8 +1444,9 @@ static int vortex_wtdma_bufshift(vortex_t * vortex, int wtdma)
 	int page, p, pp, delta, i;
 
 	page =
-	    (hwread(vortex->mmio, VORTEX_WTDMA_STAT + (wtdma << 2))
-	     >> WT_SUBBUF_SHIFT) & WT_SUBBUF_MASK;
+	    (hwread(vortex->mmio, VORTEX_WTDMA_STAT + (wtdma << 2)) &
+	     WT_SUBBUF_MASK)
+	    >> WT_SUBBUF_SHIFT;
 	if (dma->nr_periods >= 4)
 		delta = (page - dma->period_real) & 3;
 	else {
@@ -1998,7 +2005,7 @@ static int resnum[VORTEX_RESOURCE_LAST] =
  out: Mean checkout if != 0. Else mean Checkin resource.
  restype: Indicates type of resource to be checked in or out.
 */
-static int
+static char
 vortex_adb_checkinout(vortex_t * vortex, int resmap[], int out, int restype)
 {
 	int i, qty = resnum[restype], resinuse = 0;
@@ -2144,7 +2151,8 @@ vortex_adb_allocroute(vortex_t *vortex, int dma, int nr_ch, int dir,
 							   stream->resources, en,
 							   VORTEX_RESOURCE_SRC)) < 0) {
 					memset(stream->resources, 0,
-					       sizeof(stream->resources));
+					       sizeof(unsigned char) *
+					       VORTEX_RESOURCE_LAST);
 					return -EBUSY;
 				}
 				if (stream->type != VORTEX_PCM_A3D) {
@@ -2154,7 +2162,7 @@ vortex_adb_allocroute(vortex_t *vortex, int dma, int nr_ch, int dir,
 								   VORTEX_RESOURCE_MIXIN)) < 0) {
 						memset(stream->resources,
 						       0,
-						       sizeof(stream->resources));
+						       sizeof(unsigned char) * VORTEX_RESOURCE_LAST);
 						return -EBUSY;
 					}
 				}
@@ -2167,7 +2175,8 @@ vortex_adb_allocroute(vortex_t *vortex, int dma, int nr_ch, int dir,
 						   stream->resources, en,
 						   VORTEX_RESOURCE_A3D)) < 0) {
 				memset(stream->resources, 0,
-				       sizeof(stream->resources));
+				       sizeof(unsigned char) *
+				       VORTEX_RESOURCE_LAST);
 				dev_err(vortex->card->dev,
 					"out of A3D sources. Sorry\n");
 				return -EBUSY;
@@ -2273,9 +2282,6 @@ vortex_adb_allocroute(vortex_t *vortex, int dma, int nr_ch, int dir,
 	} else {
 		int src[2], mix[2];
 
-		if (nr_ch < 1)
-			return -EINVAL;
-
 		/* Get SRC and MIXER hardware resources. */
 		for (i = 0; i < nr_ch; i++) {
 			if ((mix[i] =
@@ -2284,7 +2290,8 @@ vortex_adb_allocroute(vortex_t *vortex, int dma, int nr_ch, int dir,
 						   VORTEX_RESOURCE_MIXOUT))
 			    < 0) {
 				memset(stream->resources, 0,
-				       sizeof(stream->resources));
+				       sizeof(unsigned char) *
+				       VORTEX_RESOURCE_LAST);
 				return -EBUSY;
 			}
 			if ((src[i] =
@@ -2292,7 +2299,8 @@ vortex_adb_allocroute(vortex_t *vortex, int dma, int nr_ch, int dir,
 						   stream->resources, en,
 						   VORTEX_RESOURCE_SRC)) < 0) {
 				memset(stream->resources, 0,
-				       sizeof(stream->resources));
+				       sizeof(unsigned char) *
+				       VORTEX_RESOURCE_LAST);
 				return -EBUSY;
 			}
 		}
@@ -2622,7 +2630,7 @@ static void vortex_spdif_init(vortex_t * vortex, int spdif_sr, int spdif_mode)
 			else
 				edi = 0x1ffff;
 		} else {
-			edi = 0x800;
+			i = edi = 0x800;
 		}
 		/* this_04 and this_08 are the CASp4Src's (samplerate converters) */
 		vortex_src_setupchannel(vortex, this_04, edi, 0, 1,
@@ -2764,7 +2772,7 @@ static int vortex_core_shutdown(vortex_t * vortex)
 
 /* Alsa support. */
 
-static int vortex_alsafmt_aspfmt(snd_pcm_format_t alsafmt, vortex_t *v)
+static int vortex_alsafmt_aspfmt(int alsafmt, vortex_t *v)
 {
 	int fmt;
 

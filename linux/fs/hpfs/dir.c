@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/hpfs/dir.c
  *
@@ -34,7 +33,7 @@ static loff_t hpfs_dir_lseek(struct file *filp, loff_t off, int whence)
 	if (whence == SEEK_DATA || whence == SEEK_HOLE)
 		return -EINVAL;
 
-	inode_lock(i);
+	mutex_lock(&i->i_mutex);
 	hpfs_lock(s);
 
 	/*pr_info("dir lseek\n");*/
@@ -45,20 +44,16 @@ static loff_t hpfs_dir_lseek(struct file *filp, loff_t off, int whence)
 		else goto fail;
 		if (pos == 12) goto fail;
 	}
-	if (unlikely(hpfs_add_pos(i, &filp->f_pos) < 0)) {
-		hpfs_unlock(s);
-		inode_unlock(i);
-		return -ENOMEM;
-	}
+	hpfs_add_pos(i, &filp->f_pos);
 ok:
 	filp->f_pos = new_off;
 	hpfs_unlock(s);
-	inode_unlock(i);
+	mutex_unlock(&i->i_mutex);
 	return new_off;
 fail:
 	/*pr_warn("illegal lseek: %016llx\n", new_off);*/
 	hpfs_unlock(s);
-	inode_unlock(i);
+	mutex_unlock(&i->i_mutex);
 	return -ESPIPE;
 }
 
@@ -146,10 +141,9 @@ static int hpfs_readdir(struct file *file, struct dir_context *ctx)
 			ctx->pos = 1;
 		}
 		if (ctx->pos == 1) {
-			ret = hpfs_add_pos(inode, &file->f_pos);
-			if (unlikely(ret < 0))
-				goto out;
 			ctx->pos = ((loff_t) hpfs_de_as_down_as_possible(inode->i_sb, hpfs_inode->i_dno) << 4) + 1;
+			hpfs_add_pos(inode, &file->f_pos);
+			file->f_version = inode->i_version;
 		}
 		next_pos = ctx->pos;
 		if (!(de = map_pos_dirent(inode, &next_pos, &qbh))) {
@@ -244,7 +238,6 @@ struct dentry *hpfs_lookup(struct inode *dir, struct dentry *dentry, unsigned in
 	result = iget_locked(dir->i_sb, ino);
 	if (!result) {
 		hpfs_error(dir->i_sb, "hpfs_lookup: can't get inode");
-		result = ERR_PTR(-ENOMEM);
 		goto bail1;
 	}
 	if (result->i_state & I_NEW) {
@@ -265,10 +258,8 @@ struct dentry *hpfs_lookup(struct inode *dir, struct dentry *dentry, unsigned in
 	hpfs_result = hpfs_i(result);
 	if (!de->directory) hpfs_result->i_parent_dir = dir->i_ino;
 
-	if (de->has_acl || de->has_xtd_perm) if (!sb_rdonly(dir->i_sb)) {
+	if (de->has_acl || de->has_xtd_perm) if (!(dir->i_sb->s_flags & MS_RDONLY)) {
 		hpfs_error(result->i_sb, "ACLs or XPERM found. This is probably HPFS386. This driver doesn't support it now. Send me some info on these structures");
-		iput(result);
-		result = ERR_PTR(-EINVAL);
 		goto bail1;
 	}
 
@@ -304,24 +295,36 @@ struct dentry *hpfs_lookup(struct inode *dir, struct dentry *dentry, unsigned in
 		}
 	}
 
-bail1:
 	hpfs_brelse4(&qbh);
 
 	/*
 	 * Made it.
 	 */
 
-end:
-end_add:
+	end:
+	end_add:
 	hpfs_unlock(dir->i_sb);
-	return d_splice_alias(result, dentry);
+	d_add(dentry, result);
+	return NULL;
+
+	/*
+	 * Didn't.
+	 */
+	bail1:
+	
+	hpfs_brelse4(&qbh);
+	
+	/*bail:*/
+
+	hpfs_unlock(dir->i_sb);
+	return ERR_PTR(-ENOENT);
 }
 
 const struct file_operations hpfs_dir_ops =
 {
 	.llseek		= hpfs_dir_lseek,
 	.read		= generic_read_dir,
-	.iterate_shared	= hpfs_readdir,
+	.iterate	= hpfs_readdir,
 	.release	= hpfs_dir_release,
 	.fsync		= hpfs_file_fsync,
 	.unlocked_ioctl	= hpfs_ioctl,

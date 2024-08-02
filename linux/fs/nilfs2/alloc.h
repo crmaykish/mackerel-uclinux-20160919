@@ -1,11 +1,25 @@
-/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * alloc.h - persistent object (dat entry/disk inode) allocator/deallocator
  *
  * Copyright (C) 2006-2008 Nippon Telegraph and Telephone Corporation.
  *
- * Originally written by Koji Sato.
- * Two allocators were unified by Ryusuke Konishi and Amagai Yoshiji.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ * Original code was written by Koji Sato <koji@osrg.net>.
+ * Two allocators were unified by Ryusuke Konishi <ryusuke@osrg.net>,
+ *                                Amagai Yoshiji <amagai@osrg.net>.
  */
 
 #ifndef _NILFS_ALLOC_H
@@ -28,7 +42,7 @@ nilfs_palloc_entries_per_group(const struct inode *inode)
 	return 1UL << (inode->i_blkbits + 3 /* log2(8 = CHAR_BITS) */);
 }
 
-int nilfs_palloc_init_blockgroup(struct inode *, unsigned int);
+int nilfs_palloc_init_blockgroup(struct inode *, unsigned);
 int nilfs_palloc_get_entry_block(struct inode *, __u64, int,
 				 struct buffer_head **);
 void *nilfs_palloc_block_get_entry(const struct inode *, __u64,
@@ -50,8 +64,8 @@ struct nilfs_palloc_req {
 	struct buffer_head *pr_entry_bh;
 };
 
-int nilfs_palloc_prepare_alloc_entry(struct inode *inode,
-				     struct nilfs_palloc_req *req, bool wrap);
+int nilfs_palloc_prepare_alloc_entry(struct inode *,
+				     struct nilfs_palloc_req *);
 void nilfs_palloc_commit_alloc_entry(struct inode *,
 				     struct nilfs_palloc_req *);
 void nilfs_palloc_abort_alloc_entry(struct inode *, struct nilfs_palloc_req *);

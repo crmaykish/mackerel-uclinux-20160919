@@ -1,8 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Fujifilm Finepix subdriver
  *
  * Copyright (C) 2008 Frank Zago
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -28,6 +41,7 @@ struct usb_fpix {
 	struct gspca_dev gspca_dev;	/* !! must be the first item */
 
 	struct work_struct work_struct;
+	struct workqueue_struct *work_thread;
 };
 
 /* Delay after which claim the next frame. If the delay is too small,
@@ -80,7 +94,7 @@ static void dostream(struct work_struct *work)
 	int ret = 0;
 	int len;
 
-	gspca_dbg(gspca_dev, D_STREAM, "dostream started\n");
+	PDEBUG(D_STREAM, "dostream started");
 
 	/* loop reading a frame */
 again:
@@ -151,7 +165,7 @@ again:
 	}
 
 out:
-	gspca_dbg(gspca_dev, D_STREAM, "dostream stopped\n");
+	PDEBUG(D_STREAM, "dostream stopped");
 }
 
 /* this function is called at probe time */
@@ -212,7 +226,9 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	/* Again, reset bulk in endpoint */
 	usb_clear_halt(gspca_dev->dev, gspca_dev->urb[0]->pipe);
 
-	schedule_work(&dev->work_struct);
+	/* Start the workqueue function to do the streaming */
+	dev->work_thread = create_singlethread_workqueue(MODULE_NAME);
+	queue_work(dev->work_thread, &dev->work_struct);
 
 	return 0;
 }
@@ -225,8 +241,9 @@ static void sd_stop0(struct gspca_dev *gspca_dev)
 
 	/* wait for the work queue to terminate */
 	mutex_unlock(&gspca_dev->usb_lock);
-	flush_work(&dev->work_struct);
+	destroy_workqueue(dev->work_thread);
 	mutex_lock(&gspca_dev->usb_lock);
+	dev->work_thread = NULL;
 }
 
 /* Table of supported USB devices */

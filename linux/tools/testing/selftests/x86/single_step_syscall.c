@@ -1,7 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * single_step_syscall.c - single-steps various x86 syscalls
  * Copyright (c) 2014-2015 Andrew Lutomirski
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
  *
  * This is a very simple series of tests that makes system calls with
  * the TF flag set.  This exercises some nasty kernel code in the
@@ -48,11 +56,9 @@ static volatile sig_atomic_t sig_traps;
 #ifdef __x86_64__
 # define REG_IP REG_RIP
 # define WIDTH "q"
-# define INT80_CLOBBERS "r8", "r9", "r10", "r11"
 #else
 # define REG_IP REG_EIP
 # define WIDTH "l"
-# define INT80_CLOBBERS
 #endif
 
 static unsigned long get_eflags(void)
@@ -111,9 +117,7 @@ static void check_result(void)
 
 int main()
 {
-#ifdef CAN_BUILD_32
 	int tmp;
-#endif
 
 	sethandler(SIGTRAP, sigtrap, 0);
 
@@ -133,13 +137,11 @@ int main()
 		      : : "c" (post_nop) : "r11");
 	check_result();
 #endif
-#ifdef CAN_BUILD_32
+
 	printf("[RUN]\tSet TF and check int80\n");
 	set_eflags(get_eflags() | X86_EFLAGS_TF);
-	asm volatile ("int $0x80" : "=a" (tmp) : "a" (SYS_getpid)
-			: INT80_CLOBBERS);
+	asm volatile ("int $0x80" : "=a" (tmp) : "a" (SYS_getpid));
 	check_result();
-#endif
 
 	/*
 	 * This test is particularly interesting if fast syscalls use

@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2013-2014 Freescale Semiconductor, Inc.
  *
  * Author: Peter Chen
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #ifndef __DRIVERS_USB_CHIPIDEA_OTG_H
@@ -17,8 +20,7 @@ void ci_handle_vbus_change(struct ci_hdrc *ci);
 static inline void ci_otg_queue_work(struct ci_hdrc *ci)
 {
 	disable_irq_nosync(ci->irq);
-	if (queue_work(ci->wq, &ci->work) == false)
-		enable_irq(ci->irq);
+	queue_work(ci->wq, &ci->work);
 }
 
 #endif /* __DRIVERS_USB_CHIPIDEA_OTG_H */

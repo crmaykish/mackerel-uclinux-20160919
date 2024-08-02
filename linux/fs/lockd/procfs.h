@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Procfs support for lockd
  *
@@ -6,6 +5,8 @@
  */
 #ifndef _LOCKD_PROCFS_H
 #define _LOCKD_PROCFS_H
+
+#include <linux/kconfig.h>
 
 #if IS_ENABLED(CONFIG_PROC_FS)
 int lockd_create_procfs(void);

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_ELFNOTE_H
 #define _LINUX_ELFNOTE_H
 /*
@@ -54,7 +53,7 @@
 .popsection				;
 
 #define ELFNOTE(name, type, desc)		\
-	ELFNOTE_START(name, type, "a")		\
+	ELFNOTE_START(name, type, "")		\
 		desc			;	\
 	ELFNOTE_END
 

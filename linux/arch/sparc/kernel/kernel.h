@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __SPARC_KERNEL_H
 #define __SPARC_KERNEL_H
 
@@ -38,6 +37,7 @@ void handle_stdfmna(struct pt_regs *regs, unsigned long sfar, unsigned long sfsr
 /* smp_64.c */
 void __irq_entry smp_call_function_client(int irq, struct pt_regs *regs);
 void __irq_entry smp_call_function_single_client(int irq, struct pt_regs *regs);
+void __irq_entry smp_new_mmu_context_version_client(int irq, struct pt_regs *regs);
 void __irq_entry smp_penguin_jailcell(int irq, struct pt_regs *regs);
 void __irq_entry smp_receive_signal_client(int irq, struct pt_regs *regs);
 
@@ -45,11 +45,7 @@ void __irq_entry smp_receive_signal_client(int irq, struct pt_regs *regs);
 void __irq_entry smp_kgdb_capture_client(int irq, struct pt_regs *regs);
 
 /* pci.c */
-#ifdef CONFIG_PCI
-int ali_sound_dma_hack(struct device *dev, u64 device_mask);
-#else
-#define ali_sound_dma_hack(dev, mask)	(0)
-#endif
+int pci64_dma_supported(struct pci_dev *pdev, u64 device_mask);
 
 /* signal32.c */
 void do_sigreturn32(struct pt_regs *regs);
@@ -57,16 +53,13 @@ asmlinkage void do_rt_sigreturn32(struct pt_regs *regs);
 void do_signal32(struct pt_regs * regs);
 asmlinkage int do_sys32_sigstack(u32 u_ssptr, u32 u_ossptr, unsigned long sp);
 
-/* time_64.c */
-void __init time_init_early(void);
-
 /* compat_audit.c */
-extern unsigned int sparc32_dir_class[];
-extern unsigned int sparc32_chattr_class[];
-extern unsigned int sparc32_write_class[];
-extern unsigned int sparc32_read_class[];
-extern unsigned int sparc32_signal_class[];
-int sparc32_classify_syscall(unsigned int syscall);
+extern unsigned sparc32_dir_class[];
+extern unsigned sparc32_chattr_class[];
+extern unsigned sparc32_write_class[];
+extern unsigned sparc32_read_class[];
+extern unsigned sparc32_signal_class[];
+int sparc32_classify_syscall(unsigned syscall);
 #endif
 
 #ifdef CONFIG_SPARC32
@@ -134,7 +127,6 @@ extern unsigned int t_nmi[];
 extern unsigned int linux_trap_ipi15_sun4d[];
 extern unsigned int linux_trap_ipi15_sun4m[];
 
-extern struct tt_entry trapbase;
 extern struct tt_entry trapbase_cpu1;
 extern struct tt_entry trapbase_cpu2;
 extern struct tt_entry trapbase_cpu3;

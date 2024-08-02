@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/drivers/video/w100fb.c
  *
@@ -18,6 +17,11 @@
  *
  * Hardware acceleration support by Alberto Mardegan
  * <mardy@users.sourceforge.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #include <linux/delay.h>
@@ -31,7 +35,7 @@
 #include <linux/vmalloc.h>
 #include <linux/module.h>
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <video/w100fb.h>
 #include "w100fb.h"
 
@@ -106,7 +110,7 @@ static ssize_t flip_store(struct device *dev, struct device_attribute *attr, con
 	return count;
 }
 
-static DEVICE_ATTR_RW(flip);
+static DEVICE_ATTR(flip, 0644, flip_show, flip_store);
 
 static ssize_t w100fb_reg_read(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
@@ -162,16 +166,7 @@ static ssize_t fastpllclk_store(struct device *dev, struct device_attribute *att
 	return count;
 }
 
-static DEVICE_ATTR_RW(fastpllclk);
-
-static struct attribute *w100fb_attrs[] = {
-	&dev_attr_fastpllclk.attr,
-	&dev_attr_reg_read.attr,
-	&dev_attr_reg_write.attr,
-	&dev_attr_flip.attr,
-	NULL,
-};
-ATTRIBUTE_GROUPS(w100fb);
+static DEVICE_ATTR(fastpllclk, 0644, fastpllclk_show, fastpllclk_store);
 
 /*
  * Some touchscreens need hsync information from the video driver to
@@ -588,7 +583,6 @@ static void w100fb_restore_vidmem(struct w100fb_par *par)
 		memsize=par->mach->mem->size;
 		memcpy_toio(remapped_fbuf + (W100_FB_BASE-MEM_WINDOW_BASE), par->saved_extmem, memsize);
 		vfree(par->saved_extmem);
-		par->saved_extmem = NULL;
 	}
 	if (par->saved_intmem) {
 		memsize=MEM_INT_SIZE;
@@ -597,7 +591,6 @@ static void w100fb_restore_vidmem(struct w100fb_par *par)
 		else
 			memcpy_toio(remapped_fbuf + (W100_FB_BASE-MEM_WINDOW_BASE), par->saved_intmem, memsize);
 		vfree(par->saved_intmem);
-		par->saved_intmem = NULL;
 	}
 }
 
@@ -700,8 +693,7 @@ int w100fb_probe(struct platform_device *pdev)
 		goto out;
 	}
 
-	info->pseudo_palette = kmalloc_array(MAX_PALETTES, sizeof(u32),
-					     GFP_KERNEL);
+	info->pseudo_palette = kmalloc(sizeof (u32) * MAX_PALETTES, GFP_KERNEL);
 	if (!info->pseudo_palette) {
 		err = -ENOMEM;
 		goto out;
@@ -763,6 +755,14 @@ int w100fb_probe(struct platform_device *pdev)
 		goto out;
 	}
 
+	err = device_create_file(&pdev->dev, &dev_attr_fastpllclk);
+	err |= device_create_file(&pdev->dev, &dev_attr_reg_read);
+	err |= device_create_file(&pdev->dev, &dev_attr_reg_write);
+	err |= device_create_file(&pdev->dev, &dev_attr_flip);
+
+	if (err != 0)
+		fb_warn(info, "failed to register attributes (%d)\n", err);
+
 	fb_info(info, "%s frame buffer device\n", info->fix.id);
 	return 0;
 out:
@@ -770,18 +770,12 @@ out:
 		fb_dealloc_cmap(&info->cmap);
 		kfree(info->pseudo_palette);
 	}
-	if (remapped_fbuf != NULL) {
+	if (remapped_fbuf != NULL)
 		iounmap(remapped_fbuf);
-		remapped_fbuf = NULL;
-	}
-	if (remapped_regs != NULL) {
+	if (remapped_regs != NULL)
 		iounmap(remapped_regs);
-		remapped_regs = NULL;
-	}
-	if (remapped_base != NULL) {
+	if (remapped_base != NULL)
 		iounmap(remapped_base);
-		remapped_base = NULL;
-	}
 	if (info)
 		framebuffer_release(info);
 	return err;
@@ -793,6 +787,11 @@ static int w100fb_remove(struct platform_device *pdev)
 	struct fb_info *info = platform_get_drvdata(pdev);
 	struct w100fb_par *par=info->par;
 
+	device_remove_file(&pdev->dev, &dev_attr_fastpllclk);
+	device_remove_file(&pdev->dev, &dev_attr_reg_read);
+	device_remove_file(&pdev->dev, &dev_attr_reg_write);
+	device_remove_file(&pdev->dev, &dev_attr_flip);
+
 	unregister_framebuffer(info);
 
 	vfree(par->saved_intmem);
@@ -801,11 +800,8 @@ static int w100fb_remove(struct platform_device *pdev)
 	fb_dealloc_cmap(&info->cmap);
 
 	iounmap(remapped_base);
-	remapped_base = NULL;
 	iounmap(remapped_regs);
-	remapped_regs = NULL;
 	iounmap(remapped_fbuf);
-	remapped_fbuf = NULL;
 
 	framebuffer_release(info);
 
@@ -1632,7 +1628,6 @@ static struct platform_driver w100fb_driver = {
 	.resume		= w100fb_resume,
 	.driver		= {
 		.name	= "w100fb",
-		.dev_groups	= w100fb_groups,
 	},
 };
 

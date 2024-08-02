@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * The idle loop for all SuperH platforms.
  *
  *  Copyright (C) 2002 - 2009  Paul Mundt
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
  */
 #include <linux/module.h>
 #include <linux/init.h>
@@ -15,7 +18,6 @@
 #include <linux/smp.h>
 #include <linux/atomic.h>
 #include <asm/pgalloc.h>
-#include <asm/processor.h>
 #include <asm/smp.h>
 #include <asm/bl_bit.h>
 

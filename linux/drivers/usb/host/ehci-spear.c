@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
 * Driver for EHCI HCD on SPEAr SOC
 *
@@ -6,6 +5,10 @@
 * Deepak Sikri <deepak.sikri@st.com>
 *
 * Based on various ehci-*.c drivers
+*
+* This file is subject to the terms and conditions of the GNU General Public
+* License. See the file COPYING in the main directory of this archive for
+* more details.
 */
 
 #include <linux/clk.h>
@@ -160,7 +163,7 @@ static struct platform_driver spear_ehci_hcd_driver = {
 	}
 };
 
-static const struct ehci_driver_overrides spear_overrides __initconst = {
+static const struct ehci_driver_overrides spear_overrides __initdata = {
 	.extra_priv_size = sizeof(struct spear_ehci),
 };
 

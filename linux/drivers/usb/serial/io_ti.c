@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * Edgeport USB Serial Converter driver
  *
  * Copyright (C) 2000-2002 Inside Out Networks, All rights reserved.
  * Copyright (C) 2001-2002 Greg Kroah-Hartman <greg@kroah.com>
+ *
+ *	This program is free software; you can redistribute it and/or modify
+ *	it under the terms of the GNU General Public License as published by
+ *	the Free Software Foundation; either version 2 of the License, or
+ *	(at your option) any later version.
  *
  * Supports the following devices:
  *	EP/1 EP/2 EP/4 EP/21 EP/22 EP/221 EP/42 EP/421 WATCHPORT
@@ -168,7 +172,6 @@ static const struct usb_device_id edgeport_2port_id_table[] = {
 	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_TI_EDGEPORT_8S) },
 	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_TI_EDGEPORT_416) },
 	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_TI_EDGEPORT_416B) },
-	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_E5805A) },
 	{ }
 };
 
@@ -207,7 +210,6 @@ static const struct usb_device_id id_table_combined[] = {
 	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_TI_EDGEPORT_8S) },
 	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_TI_EDGEPORT_416) },
 	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_TI_EDGEPORT_416B) },
-	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_E5805A) },
 	{ }
 };
 
@@ -1497,7 +1499,8 @@ static int do_boot_mode(struct edgeport_serial *serial,
 
 		dev_dbg(dev, "%s - Download successful -- Device rebooting...\n", __func__);
 
-		return 1;
+		/* return an error on purpose */
+		return -ENODEV;
 	}
 
 stayinbootmode:
@@ -1505,7 +1508,7 @@ stayinbootmode:
 	dev_dbg(dev, "%s - STAYING IN BOOT MODE\n", __func__);
 	serial->product_info.TiMode = TI_MODE_BOOT;
 
-	return 1;
+	return 0;
 }
 
 static int ti_do_config(struct edgeport_port *port, int feature, int on)
@@ -1672,12 +1675,6 @@ static void edge_interrupt_callback(struct urb *urb)
 	function    = TIUMP_GET_FUNC_FROM_CODE(data[0]);
 	dev_dbg(dev, "%s - port_number %d, function %d, info 0x%x\n", __func__,
 		port_number, function, data[1]);
-
-	if (port_number >= edge_serial->serial->num_ports) {
-		dev_err(dev, "bad port number %d\n", port_number);
-		goto exit;
-	}
-
 	port = edge_serial->serial->port[port_number];
 	edge_port = usb_get_serial_port_data(port);
 	if (!edge_port) {
@@ -1731,7 +1728,6 @@ static void edge_bulk_in_callback(struct urb *urb)
 	struct edgeport_port *edge_port = urb->context;
 	struct device *dev = &edge_port->port->dev;
 	unsigned char *data = urb->transfer_buffer;
-	unsigned long flags;
 	int retval = 0;
 	int port_number;
 	int status = urb->status;
@@ -1760,7 +1756,7 @@ static void edge_bulk_in_callback(struct urb *urb)
 
 	port_number = edge_port->port->port_number;
 
-	if (urb->actual_length > 0 && edge_port->lsr_event) {
+	if (edge_port->lsr_event) {
 		edge_port->lsr_event = 0;
 		dev_dbg(dev, "%s ===== Port %u LSR Status = %02x, Data = %02x ======\n",
 			__func__, port_number, edge_port->lsr_mask, *data);
@@ -1783,13 +1779,13 @@ static void edge_bulk_in_callback(struct urb *urb)
 
 exit:
 	/* continue read unless stopped */
-	spin_lock_irqsave(&edge_port->ep_lock, flags);
+	spin_lock(&edge_port->ep_lock);
 	if (edge_port->ep_read_urb_state == EDGE_READ_URB_RUNNING)
 		retval = usb_submit_urb(urb, GFP_ATOMIC);
 	else if (edge_port->ep_read_urb_state == EDGE_READ_URB_STOPPING)
 		edge_port->ep_read_urb_state = EDGE_READ_URB_STOPPED;
 
-	spin_unlock_irqrestore(&edge_port->ep_lock, flags);
+	spin_unlock(&edge_port->ep_lock);
 	if (retval)
 		dev_err(dev, "%s - usb_submit_urb failed with result %d\n", __func__, retval);
 }
@@ -1932,6 +1928,13 @@ static int edge_open(struct tty_struct *tty, struct usb_serial_port *port)
 	if (edge_serial->num_ports_open == 0) {
 		/* we are the first port to open, post the interrupt urb */
 		urb = edge_serial->serial->port[0]->interrupt_in_urb;
+		if (!urb) {
+			dev_err(&port->dev,
+				"%s - no interrupt urb present, exiting\n",
+				__func__);
+			status = -EINVAL;
+			goto release_es_lock;
+		}
 		urb->context = edge_serial;
 		status = usb_submit_urb(urb, GFP_KERNEL);
 		if (status) {
@@ -1951,6 +1954,12 @@ static int edge_open(struct tty_struct *tty, struct usb_serial_port *port)
 
 	/* start up our bulk read urb */
 	urb = port->read_urb;
+	if (!urb) {
+		dev_err(&port->dev, "%s - no read urb present, exiting\n",
+								__func__);
+		status = -EINVAL;
+		goto unlink_int_urb;
+	}
 	edge_port->ep_read_urb_state = EDGE_READ_URB_RUNNING;
 	urb->context = edge_port;
 	status = usb_submit_urb(urb, GFP_KERNEL);
@@ -2335,11 +2344,8 @@ static void change_port_settings(struct tty_struct *tty,
 	if (!baud) {
 		/* pick a default, any default... */
 		baud = 9600;
-	} else {
-		/* Avoid a zero divisor. */
-		baud = min(baud, 461550);
+	} else
 		tty_encode_baud_rate(tty, baud, baud);
-	}
 
 	edge_port->baud_rate = baud;
 	config->wBaudRate = (__u16)((461550L + baud/2) / baud);
@@ -2374,6 +2380,14 @@ static void edge_set_termios(struct tty_struct *tty,
 		struct usb_serial_port *port, struct ktermios *old_termios)
 {
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
+	unsigned int cflag;
+
+	cflag = tty->termios.c_cflag;
+
+	dev_dbg(&port->dev, "%s - clfag %08x iflag %08x\n", __func__,
+		tty->termios.c_cflag, tty->termios.c_iflag);
+	dev_dbg(&port->dev, "%s - old clfag %08x old iflag %08x\n", __func__,
+		old_termios->c_cflag, old_termios->c_iflag);
 
 	if (edge_port == NULL)
 		return;
@@ -2439,26 +2453,49 @@ static int edge_tiocmget(struct tty_struct *tty)
 	return result;
 }
 
-static int get_serial_info(struct tty_struct *tty,
-				struct serial_struct *ss)
+static int get_serial_info(struct edgeport_port *edge_port,
+				struct serial_struct __user *retinfo)
 {
-	struct usb_serial_port *port = tty->driver_data;
-	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
+	struct serial_struct tmp;
 	unsigned cwait;
+
+	if (!retinfo)
+		return -EFAULT;
 
 	cwait = edge_port->port->port.closing_wait;
 	if (cwait != ASYNC_CLOSING_WAIT_NONE)
 		cwait = jiffies_to_msecs(cwait) / 10;
 
-	ss->type		= PORT_16550A;
-	ss->line		= edge_port->port->minor;
-	ss->port		= edge_port->port->port_number;
-	ss->irq			= 0;
-	ss->xmit_fifo_size	= edge_port->port->bulk_out_size;
-	ss->baud_base		= 9600;
-	ss->close_delay		= 5*HZ;
-	ss->closing_wait	= cwait;
+	memset(&tmp, 0, sizeof(tmp));
+
+	tmp.type		= PORT_16550A;
+	tmp.line		= edge_port->port->minor;
+	tmp.port		= edge_port->port->port_number;
+	tmp.irq			= 0;
+	tmp.flags		= ASYNC_SKIP_TEST | ASYNC_AUTO_IRQ;
+	tmp.xmit_fifo_size	= edge_port->port->bulk_out_size;
+	tmp.baud_base		= 9600;
+	tmp.close_delay		= 5*HZ;
+	tmp.closing_wait	= cwait;
+
+	if (copy_to_user(retinfo, &tmp, sizeof(*retinfo)))
+		return -EFAULT;
 	return 0;
+}
+
+static int edge_ioctl(struct tty_struct *tty,
+					unsigned int cmd, unsigned long arg)
+{
+	struct usb_serial_port *port = tty->driver_data;
+	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
+
+	switch (cmd) {
+	case TIOCGSERIAL:
+		dev_dbg(&port->dev, "%s - TIOCGSERIAL\n", __func__);
+		return get_serial_info(edge_port,
+				(struct serial_struct __user *) arg);
+	}
+	return -ENOIOCTLCMD;
 }
 
 static void edge_break(struct tty_struct *tty, int break_state)
@@ -2506,25 +2543,6 @@ static void edge_heartbeat_work(struct work_struct *work)
 	edge_heartbeat_schedule(serial);
 }
 
-static int edge_calc_num_ports(struct usb_serial *serial,
-				struct usb_serial_endpoints *epds)
-{
-	struct device *dev = &serial->interface->dev;
-	unsigned char num_ports = serial->type->num_ports;
-
-	/* Make sure we have the required endpoints when in download mode. */
-	if (serial->interface->cur_altsetting->desc.bNumEndpoints > 1) {
-		if (epds->num_bulk_in < num_ports ||
-				epds->num_bulk_out < num_ports ||
-				epds->num_interrupt_in < 1) {
-			dev_err(dev, "required endpoints missing\n");
-			return -ENODEV;
-		}
-	}
-
-	return num_ports;
-}
-
 static int edge_startup(struct usb_serial *serial)
 {
 	struct edgeport_serial *edge_serial;
@@ -2538,17 +2556,13 @@ static int edge_startup(struct usb_serial *serial)
 
 	mutex_init(&edge_serial->es_lock);
 	edge_serial->serial = serial;
-	INIT_DELAYED_WORK(&edge_serial->heartbeat_work, edge_heartbeat_work);
 	usb_set_serial_data(serial, edge_serial);
 
 	status = download_fw(edge_serial);
-	if (status < 0) {
+	if (status) {
 		kfree(edge_serial);
 		return status;
 	}
-
-	if (status > 0)
-		return 1;	/* bind but do not register any ports */
 
 	product_id = le16_to_cpu(
 			edge_serial->serial->dev->descriptor.idProduct);
@@ -2561,6 +2575,7 @@ static int edge_startup(struct usb_serial *serial)
 		}
 	}
 
+	INIT_DELAYED_WORK(&edge_serial->heartbeat_work, edge_heartbeat_work);
 	edge_heartbeat_schedule(edge_serial);
 
 	return 0;
@@ -2568,9 +2583,6 @@ static int edge_startup(struct usb_serial *serial)
 
 static void edge_disconnect(struct usb_serial *serial)
 {
-	struct edgeport_serial *edge_serial = usb_get_serial_data(serial);
-
-	cancel_delayed_work_sync(&edge_serial->heartbeat_work);
 }
 
 static void edge_release(struct usb_serial *serial)
@@ -2710,18 +2722,16 @@ static struct usb_serial_driver edgeport_1port_device = {
 	.description		= "Edgeport TI 1 port adapter",
 	.id_table		= edgeport_1port_id_table,
 	.num_ports		= 1,
-	.num_bulk_out		= 1,
 	.open			= edge_open,
 	.close			= edge_close,
 	.throttle		= edge_throttle,
 	.unthrottle		= edge_unthrottle,
 	.attach			= edge_startup,
-	.calc_num_ports		= edge_calc_num_ports,
 	.disconnect		= edge_disconnect,
 	.release		= edge_release,
 	.port_probe		= edge_port_probe,
 	.port_remove		= edge_port_remove,
-	.get_serial		= get_serial_info,
+	.ioctl			= edge_ioctl,
 	.set_termios		= edge_set_termios,
 	.tiocmget		= edge_tiocmget,
 	.tiocmset		= edge_tiocmset,
@@ -2749,18 +2759,16 @@ static struct usb_serial_driver edgeport_2port_device = {
 	.description		= "Edgeport TI 2 port adapter",
 	.id_table		= edgeport_2port_id_table,
 	.num_ports		= 2,
-	.num_bulk_out		= 1,
 	.open			= edge_open,
 	.close			= edge_close,
 	.throttle		= edge_throttle,
 	.unthrottle		= edge_unthrottle,
 	.attach			= edge_startup,
-	.calc_num_ports		= edge_calc_num_ports,
 	.disconnect		= edge_disconnect,
 	.release		= edge_release,
 	.port_probe		= edge_port_probe,
 	.port_remove		= edge_port_remove,
-	.get_serial		= get_serial_info,
+	.ioctl			= edge_ioctl,
 	.set_termios		= edge_set_termios,
 	.tiocmget		= edge_tiocmget,
 	.tiocmset		= edge_tiocmset,

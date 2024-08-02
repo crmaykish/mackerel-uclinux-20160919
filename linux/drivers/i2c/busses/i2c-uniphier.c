@@ -1,6 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2015 Masahiro Yamada <yamada.masahiro@socionext.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -44,7 +53,6 @@ struct uniphier_i2c_priv {
 	void __iomem *membase;
 	struct clk *clk;
 	unsigned int busy_cnt;
-	unsigned int clk_cycle;
 };
 
 static irqreturn_t uniphier_i2c_interrupt(int irq, void *dev_id)
@@ -71,6 +79,7 @@ static int uniphier_i2c_xfer_byte(struct i2c_adapter *adap, u32 txdata,
 	reinit_completion(&priv->comp);
 
 	txdata |= UNIPHIER_I2C_DTRM_IRQEN;
+	dev_dbg(&adap->dev, "write data: 0x%04x\n", txdata);
 	writel(txdata, priv->membase + UNIPHIER_I2C_DTRM);
 
 	time_left = wait_for_completion_timeout(&priv->comp, adap->timeout);
@@ -80,6 +89,8 @@ static int uniphier_i2c_xfer_byte(struct i2c_adapter *adap, u32 txdata,
 	}
 
 	rxdata = readl(priv->membase + UNIPHIER_I2C_DREC);
+	dev_dbg(&adap->dev, "read data: 0x%04x\n", rxdata);
+
 	if (rxdatap)
 		*rxdatap = rxdata;
 
@@ -95,11 +106,14 @@ static int uniphier_i2c_send_byte(struct i2c_adapter *adap, u32 txdata)
 	if (ret)
 		return ret;
 
-	if (unlikely(rxdata & UNIPHIER_I2C_DREC_LAB))
+	if (unlikely(rxdata & UNIPHIER_I2C_DREC_LAB)) {
+		dev_dbg(&adap->dev, "arbitration lost\n");
 		return -EAGAIN;
-
-	if (unlikely(rxdata & UNIPHIER_I2C_DREC_LRB))
+	}
+	if (unlikely(rxdata & UNIPHIER_I2C_DREC_LRB)) {
+		dev_dbg(&adap->dev, "could not get ACK\n");
 		return -ENXIO;
+	}
 
 	return 0;
 }
@@ -109,6 +123,7 @@ static int uniphier_i2c_tx(struct i2c_adapter *adap, u16 addr, u16 len,
 {
 	int ret;
 
+	dev_dbg(&adap->dev, "start condition\n");
 	ret = uniphier_i2c_send_byte(adap, addr << 1 |
 				     UNIPHIER_I2C_DTRM_STA |
 				     UNIPHIER_I2C_DTRM_NACK);
@@ -130,6 +145,7 @@ static int uniphier_i2c_rx(struct i2c_adapter *adap, u16 addr, u16 len,
 {
 	int ret;
 
+	dev_dbg(&adap->dev, "start condition\n");
 	ret = uniphier_i2c_send_byte(adap, addr << 1 |
 				     UNIPHIER_I2C_DTRM_STA |
 				     UNIPHIER_I2C_DTRM_NACK |
@@ -153,6 +169,7 @@ static int uniphier_i2c_rx(struct i2c_adapter *adap, u16 addr, u16 len,
 
 static int uniphier_i2c_stop(struct i2c_adapter *adap)
 {
+	dev_dbg(&adap->dev, "stop condition\n");
 	return uniphier_i2c_send_byte(adap, UNIPHIER_I2C_DTRM_STO |
 				      UNIPHIER_I2C_DTRM_NACK);
 }
@@ -163,6 +180,9 @@ static int uniphier_i2c_master_xfer_one(struct i2c_adapter *adap,
 	bool is_read = msg->flags & I2C_M_RD;
 	bool recovery = false;
 	int ret;
+
+	dev_dbg(&adap->dev, "%s: addr=0x%02x, len=%d, stop=%d\n",
+		is_read ? "receive" : "transmit", msg->addr, msg->len, stop);
 
 	if (is_read)
 		ret = uniphier_i2c_rx(adap, msg->addr, msg->len, msg->buf);
@@ -227,8 +247,11 @@ static int uniphier_i2c_master_xfer(struct i2c_adapter *adap,
 		return ret;
 
 	for (msg = msgs; msg < emsg; msg++) {
-		/* Emit STOP if it is the last message or I2C_M_STOP is set. */
-		bool stop = (msg + 1 == emsg) || (msg->flags & I2C_M_STOP);
+		/* If next message is read, skip the stop condition */
+		bool stop = !(msg + 1 < emsg && msg[1].flags & I2C_M_RD);
+		/* but, force it if I2C_M_STOP is set */
+		if (msg->flags & I2C_M_STOP)
+			stop = true;
 
 		ret = uniphier_i2c_master_xfer_one(adap, msg, stop);
 		if (ret)
@@ -293,53 +316,21 @@ static struct i2c_bus_recovery_info uniphier_i2c_bus_recovery_info = {
 	.unprepare_recovery = uniphier_i2c_unprepare_recovery,
 };
 
-static void uniphier_i2c_hw_init(struct uniphier_i2c_priv *priv)
+static int uniphier_i2c_clk_init(struct device *dev,
+				 struct uniphier_i2c_priv *priv)
 {
-	unsigned int cyc = priv->clk_cycle;
-
-	uniphier_i2c_reset(priv, true);
-
-	/*
-	 * Bit30-16: clock cycles of tLOW.
-	 *  Standard-mode: tLOW = 4.7 us, tHIGH = 4.0 us
-	 *  Fast-mode:     tLOW = 1.3 us, tHIGH = 0.6 us
-	 * "tLow/tHIGH = 5/4" meets both.
-	 */
-	writel((cyc * 5 / 9 << 16) | cyc, priv->membase + UNIPHIER_I2C_CLK);
-
-	uniphier_i2c_reset(priv, false);
-}
-
-static int uniphier_i2c_probe(struct platform_device *pdev)
-{
-	struct device *dev = &pdev->dev;
-	struct uniphier_i2c_priv *priv;
-	u32 bus_speed;
+	struct device_node *np = dev->of_node;
 	unsigned long clk_rate;
-	int irq, ret;
+	u32 bus_speed;
+	int ret;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
-	if (!priv)
-		return -ENOMEM;
-
-	priv->membase = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(priv->membase))
-		return PTR_ERR(priv->membase);
-
-	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(dev, "failed to get IRQ number\n");
-		return irq;
-	}
-
-	if (of_property_read_u32(dev->of_node, "clock-frequency", &bus_speed))
+	if (of_property_read_u32(np, "clock-frequency", &bus_speed))
 		bus_speed = UNIPHIER_I2C_DEFAULT_SPEED;
 
-	if (!bus_speed || bus_speed > UNIPHIER_I2C_MAX_SPEED) {
-		dev_err(dev, "invalid clock-frequency %d\n", bus_speed);
-		return -EINVAL;
-	}
+	if (bus_speed > UNIPHIER_I2C_MAX_SPEED)
+		bus_speed = UNIPHIER_I2C_MAX_SPEED;
 
+	/* Get input clk rate through clk driver */
 	priv->clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(priv->clk)) {
 		dev_err(dev, "failed to get clock\n");
@@ -351,13 +342,40 @@ static int uniphier_i2c_probe(struct platform_device *pdev)
 		return ret;
 
 	clk_rate = clk_get_rate(priv->clk);
-	if (!clk_rate) {
-		dev_err(dev, "input clock rate should not be zero\n");
-		ret = -EINVAL;
-		goto disable_clk;
+
+	uniphier_i2c_reset(priv, true);
+
+	writel((clk_rate / bus_speed / 2 << 16) | (clk_rate / bus_speed),
+	       priv->membase + UNIPHIER_I2C_CLK);
+
+	uniphier_i2c_reset(priv, false);
+
+	return 0;
+}
+
+static int uniphier_i2c_probe(struct platform_device *pdev)
+{
+	struct device *dev = &pdev->dev;
+	struct uniphier_i2c_priv *priv;
+	struct resource *regs;
+	int irq;
+	int ret;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	priv->membase = devm_ioremap_resource(dev, regs);
+	if (IS_ERR(priv->membase))
+		return PTR_ERR(priv->membase);
+
+	irq = platform_get_irq(pdev, 0);
+	if (irq < 0) {
+		dev_err(dev, "failed to get IRQ number");
+		return irq;
 	}
 
-	priv->clk_cycle = clk_rate / bus_speed;
 	init_completion(&priv->comp);
 	priv->adap.owner = THIS_MODULE;
 	priv->adap.algo = &uniphier_i2c_algo;
@@ -368,17 +386,24 @@ static int uniphier_i2c_probe(struct platform_device *pdev)
 	i2c_set_adapdata(&priv->adap, priv);
 	platform_set_drvdata(pdev, priv);
 
-	uniphier_i2c_hw_init(priv);
+	ret = uniphier_i2c_clk_init(dev, priv);
+	if (ret)
+		return ret;
 
 	ret = devm_request_irq(dev, irq, uniphier_i2c_interrupt, 0, pdev->name,
 			       priv);
 	if (ret) {
 		dev_err(dev, "failed to request irq %d\n", irq);
-		goto disable_clk;
+		goto err;
 	}
 
 	ret = i2c_add_adapter(&priv->adap);
-disable_clk:
+	if (ret) {
+		dev_err(dev, "failed to add I2C adapter\n");
+		goto err;
+	}
+
+err:
 	if (ret)
 		clk_disable_unprepare(priv->clk);
 
@@ -395,33 +420,6 @@ static int uniphier_i2c_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static int __maybe_unused uniphier_i2c_suspend(struct device *dev)
-{
-	struct uniphier_i2c_priv *priv = dev_get_drvdata(dev);
-
-	clk_disable_unprepare(priv->clk);
-
-	return 0;
-}
-
-static int __maybe_unused uniphier_i2c_resume(struct device *dev)
-{
-	struct uniphier_i2c_priv *priv = dev_get_drvdata(dev);
-	int ret;
-
-	ret = clk_prepare_enable(priv->clk);
-	if (ret)
-		return ret;
-
-	uniphier_i2c_hw_init(priv);
-
-	return 0;
-}
-
-static const struct dev_pm_ops uniphier_i2c_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(uniphier_i2c_suspend, uniphier_i2c_resume)
-};
-
 static const struct of_device_id uniphier_i2c_match[] = {
 	{ .compatible = "socionext,uniphier-i2c" },
 	{ /* sentinel */ }
@@ -434,7 +432,6 @@ static struct platform_driver uniphier_i2c_drv = {
 	.driver = {
 		.name  = "uniphier-i2c",
 		.of_match_table = uniphier_i2c_match,
-		.pm = &uniphier_i2c_pm_ops,
 	},
 };
 module_platform_driver(uniphier_i2c_drv);

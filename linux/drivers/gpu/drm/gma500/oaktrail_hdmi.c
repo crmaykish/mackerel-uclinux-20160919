@@ -24,13 +24,11 @@
  *	Li Peng <peng.li@intel.com>
  */
 
-#include <linux/delay.h>
-
+#include <drm/drmP.h>
 #include <drm/drm.h>
-
-#include "psb_drv.h"
 #include "psb_intel_drv.h"
 #include "psb_intel_reg.h"
+#include "psb_drv.h"
 
 #define HDMI_READ(reg)		readl(hdmi_dev->regs + (reg))
 #define HDMI_WRITE(reg, val)	writel(val, hdmi_dev->regs + (reg))
@@ -511,7 +509,7 @@ static void oaktrail_hdmi_dpms(struct drm_encoder *encoder, int mode)
 	HDMI_WRITE(HDMI_VIDEO_REG, temp);
 }
 
-static enum drm_mode_status oaktrail_hdmi_mode_valid(struct drm_connector *connector,
+static int oaktrail_hdmi_mode_valid(struct drm_connector *connector,
 				struct drm_display_mode *mode)
 {
 	if (mode->clock > 165000)
@@ -580,7 +578,7 @@ static int oaktrail_hdmi_get_modes(struct drm_connector *connector)
 	}
 
 	if (edid) {
-		drm_connector_update_edid_property(connector, edid);
+		drm_mode_connector_update_edid_property(connector, edid);
 		ret = drm_add_edid_modes(connector, edid);
 	}
 	return ret;
@@ -603,6 +601,7 @@ static void oaktrail_hdmi_destroy(struct drm_connector *connector)
 
 static const struct drm_encoder_helper_funcs oaktrail_hdmi_helper_funcs = {
 	.dpms = oaktrail_hdmi_dpms,
+	.mode_fixup = gma_encoder_mode_fixup,
 	.prepare = gma_encoder_prepare,
 	.mode_set = oaktrail_hdmi_mode_set,
 	.commit = gma_encoder_commit,
@@ -655,7 +654,7 @@ void oaktrail_hdmi_init(struct drm_device *dev,
 
 	drm_encoder_init(dev, encoder,
 			 &oaktrail_hdmi_enc_funcs,
-			 DRM_MODE_ENCODER_TMDS, NULL);
+			 DRM_MODE_ENCODER_TMDS);
 
 	gma_connector_attach_encoder(gma_connector, gma_encoder);
 
@@ -817,7 +816,7 @@ void oaktrail_hdmi_restore(struct drm_device *dev)
 	PSB_WVDC32(hdmi_dev->saveDPLL_ADJUST, DPLL_ADJUST);
 	PSB_WVDC32(hdmi_dev->saveDPLL_UPDATE, DPLL_UPDATE);
 	PSB_WVDC32(hdmi_dev->saveDPLL_CLK_ENABLE, DPLL_CLK_ENABLE);
-	udelay(150);
+	DRM_UDELAY(150);
 
 	/* pipe */
 	PSB_WVDC32(pipeb->src, PIPEBSRC);

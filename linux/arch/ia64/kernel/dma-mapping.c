@@ -1,27 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0
-#include <linux/dma-direct.h>
+#include <linux/dma-mapping.h>
 #include <linux/export.h>
 
 /* Set this to 1 if there is a HW IOMMU in the system */
 int iommu_detected __read_mostly;
 
-const struct dma_map_ops *dma_ops;
+struct dma_map_ops *dma_ops;
 EXPORT_SYMBOL(dma_ops);
 
-void *arch_dma_alloc(struct device *dev, size_t size,
-		dma_addr_t *dma_handle, gfp_t gfp, unsigned long attrs)
-{
-	return dma_direct_alloc_pages(dev, size, dma_handle, gfp, attrs);
-}
+#define PREALLOC_DMA_DEBUG_ENTRIES (1 << 16)
 
-void arch_dma_free(struct device *dev, size_t size, void *cpu_addr,
-		dma_addr_t dma_addr, unsigned long attrs)
+static int __init dma_init(void)
 {
-	dma_direct_free_pages(dev, size, cpu_addr, dma_addr, attrs);
-}
+	dma_debug_init(PREALLOC_DMA_DEBUG_ENTRIES);
 
-long arch_dma_coherent_to_pfn(struct device *dev, void *cpu_addr,
-		dma_addr_t dma_addr)
-{
-	return page_to_pfn(virt_to_page(cpu_addr));
+	return 0;
 }
+fs_initcall(dma_init);
+
+struct dma_map_ops *dma_get_ops(struct device *dev)
+{
+	return dma_ops;
+}
+EXPORT_SYMBOL(dma_get_ops);

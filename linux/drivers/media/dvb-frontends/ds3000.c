@@ -1,10 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
     Montage Technology DS3000 - DVBS/S2 Demodulator driver
     Copyright (C) 2009-2012 Konstantin Dimitrov <kosio.dimitrov@gmail.com>
 
     Copyright (C) 2009-2012 TurboSight.com
 
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, write to the Free Software
+    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/slab.h>
@@ -14,7 +26,7 @@
 #include <linux/init.h>
 #include <linux/firmware.h>
 
-#include <media/dvb_frontend.h>
+#include "dvb_frontend.h"
 #include "ts2020.h"
 #include "ds3000.h"
 
@@ -236,8 +248,8 @@ static int ds3000_writereg(struct ds3000_state *state, int reg, int data)
 
 	err = i2c_transfer(state->i2c, &msg, 1);
 	if (err != 1) {
-		printk(KERN_ERR "%s: writereg error(err == %i, reg == 0x%02x, value == 0x%02x)\n",
-		       __func__, err, reg, data);
+		printk(KERN_ERR "%s: writereg error(err == %i, reg == 0x%02x,"
+			 " value == 0x%02x)\n", __func__, err, reg, data);
 		return -EREMOTEIO;
 	}
 
@@ -265,8 +277,10 @@ static int ds3000_writeFW(struct ds3000_state *state, int reg,
 	u8 *buf;
 
 	buf = kmalloc(33, GFP_KERNEL);
-	if (!buf)
+	if (buf == NULL) {
+		printk(KERN_ERR "Unable to kmalloc\n");
 		return -ENOMEM;
+	}
 
 	*(buf) = reg;
 
@@ -282,8 +296,8 @@ static int ds3000_writeFW(struct ds3000_state *state, int reg,
 
 		ret = i2c_transfer(state->i2c, &msg, 1);
 		if (ret != 1) {
-			printk(KERN_ERR "%s: write error(err == %i, reg == 0x%02x\n",
-			       __func__, ret, reg);
+			printk(KERN_ERR "%s: write error(err == %i, "
+				"reg == 0x%02x\n", __func__, ret, reg);
 			ret = -EREMOTEIO;
 			goto error;
 		}
@@ -350,8 +364,8 @@ static int ds3000_firmware_ondemand(struct dvb_frontend *fe)
 				state->i2c->dev.parent);
 	printk(KERN_INFO "%s: Waiting for firmware upload(2)...\n", __func__);
 	if (ret) {
-		printk(KERN_ERR "%s: No firmware uploaded (timeout or file not found?)\n",
-		       __func__);
+		printk(KERN_ERR "%s: No firmware uploaded (timeout or file not "
+				"found?)\n", __func__);
 		return ret;
 	}
 
@@ -444,7 +458,7 @@ static int ds3000_read_status(struct dvb_frontend *fe, enum fe_status *status)
 
 		break;
 	default:
-		return -EINVAL;
+		return 1;
 	}
 
 	if (state->config->set_lock_led)
@@ -514,7 +528,7 @@ static int ds3000_read_ber(struct dvb_frontend *fe, u32* ber)
 			*ber = 0xffffffff;
 		break;
 	default:
-		return -EINVAL;
+		return 1;
 	}
 
 	return 0;
@@ -609,7 +623,7 @@ static int ds3000_read_snr(struct dvb_frontend *fe, u16 *snr)
 				snr_reading, *snr);
 		break;
 	default:
-		return -EINVAL;
+		return 1;
 	}
 
 	return 0;
@@ -647,7 +661,7 @@ static int ds3000_read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
 		state->prevUCBS2 = _ucblocks;
 		break;
 	default:
-		return -EINVAL;
+		return 1;
 	}
 
 	return 0;
@@ -740,7 +754,7 @@ static int ds3000_send_diseqc_msg(struct dvb_frontend *fe,
 		data |= 0x80;
 		ds3000_writereg(state, 0xa2, data);
 
-		return -ETIMEDOUT;
+		return 1;
 	}
 
 	data = ds3000_readreg(state, 0xa2);
@@ -794,7 +808,7 @@ static int ds3000_diseqc_send_burst(struct dvb_frontend *fe,
 		data |= 0x80;
 		ds3000_writereg(state, 0xa2, data);
 
-		return -ETIMEDOUT;
+		return 1;
 	}
 
 	data = ds3000_readreg(state, 0xa2);
@@ -816,20 +830,22 @@ static void ds3000_release(struct dvb_frontend *fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops ds3000_ops;
+static struct dvb_frontend_ops ds3000_ops;
 
 struct dvb_frontend *ds3000_attach(const struct ds3000_config *config,
 				    struct i2c_adapter *i2c)
 {
-	struct ds3000_state *state;
+	struct ds3000_state *state = NULL;
 	int ret;
 
 	dprintk("%s\n", __func__);
 
 	/* allocate memory for the internal state */
-	state = kzalloc(sizeof(*state), GFP_KERNEL);
-	if (!state)
-		return NULL;
+	state = kzalloc(sizeof(struct ds3000_state), GFP_KERNEL);
+	if (state == NULL) {
+		printk(KERN_ERR "Unable to kmalloc\n");
+		goto error2;
+	}
 
 	state->config = config;
 	state->i2c = i2c;
@@ -838,9 +854,8 @@ struct dvb_frontend *ds3000_attach(const struct ds3000_config *config,
 	/* check if the demod is present */
 	ret = ds3000_readreg(state, 0x00) & 0xfe;
 	if (ret != 0xe0) {
-		kfree(state);
 		printk(KERN_ERR "Invalid probe, probably not a DS3000\n");
-		return NULL;
+		goto error3;
 	}
 
 	printk(KERN_INFO "DS3000 chip version: %d.%d attached.\n",
@@ -858,8 +873,13 @@ struct dvb_frontend *ds3000_attach(const struct ds3000_config *config,
 	 */
 	ds3000_set_voltage(&state->frontend, SEC_VOLTAGE_OFF);
 	return &state->frontend;
+
+error3:
+	kfree(state);
+error2:
+	return NULL;
 }
-EXPORT_SYMBOL_GPL(ds3000_attach);
+EXPORT_SYMBOL(ds3000_attach);
 
 static int ds3000_set_carrier_offset(struct dvb_frontend *fe,
 					s32 carrier_offset_khz)
@@ -902,7 +922,7 @@ static int ds3000_set_frontend(struct dvb_frontend *fe)
 	/* ds3000 global reset */
 	ds3000_writereg(state, 0x07, 0x80);
 	ds3000_writereg(state, 0x07, 0x00);
-	/* ds3000 built-in uC reset */
+	/* ds3000 build-in uC reset */
 	ds3000_writereg(state, 0xb2, 0x01);
 	/* ds3000 software reset */
 	ds3000_writereg(state, 0x00, 0x01);
@@ -931,22 +951,13 @@ static int ds3000_set_frontend(struct dvb_frontend *fe)
 			ds3000_writereg(state, 0xfe, 0x98);
 		break;
 	default:
-		return -EINVAL;
+		return 1;
 	}
 
 	/* enable 27MHz clock output */
 	ds3000_writereg(state, 0x29, 0x80);
 	/* enable ac coupling */
 	ds3000_writereg(state, 0x25, 0x8a);
-
-	if ((c->symbol_rate < ds3000_ops.info.symbol_rate_min) ||
-			(c->symbol_rate > ds3000_ops.info.symbol_rate_max)) {
-		dprintk("%s() symbol_rate %u out of range (%u ... %u)\n",
-				__func__, c->symbol_rate,
-				ds3000_ops.info.symbol_rate_min,
-				ds3000_ops.info.symbol_rate_max);
-		return -EINVAL;
-	}
 
 	/* enhance symbol rate performance */
 	if ((c->symbol_rate / 1000) <= 5000) {
@@ -1011,7 +1022,7 @@ static int ds3000_set_frontend(struct dvb_frontend *fe)
 
 	/* ds3000 out of software reset */
 	ds3000_writereg(state, 0x00, 0x00);
-	/* start ds3000 built-in uC */
+	/* start ds3000 build-in uC */
 	ds3000_writereg(state, 0xb2, 0x00);
 
 	if (fe->ops.tuner_ops.get_frequency) {
@@ -1084,14 +1095,14 @@ static int ds3000_initfe(struct dvb_frontend *fe)
 	return 0;
 }
 
-static const struct dvb_frontend_ops ds3000_ops = {
+static struct dvb_frontend_ops ds3000_ops = {
 	.delsys = { SYS_DVBS, SYS_DVBS2 },
 	.info = {
 		.name = "Montage Technology DS3000",
-		.frequency_min_hz =  950 * MHz,
-		.frequency_max_hz = 2150 * MHz,
-		.frequency_stepsize_hz = 1011 * kHz,
-		.frequency_tolerance_hz = 5 * MHz,
+		.frequency_min = 950000,
+		.frequency_max = 2150000,
+		.frequency_stepsize = 1011, /* kHz for QPSK frontends */
+		.frequency_tolerance = 5000,
 		.symbol_rate_min = 1000000,
 		.symbol_rate_max = 45000000,
 		.caps = FE_CAN_INVERSION_AUTO |
@@ -1124,7 +1135,8 @@ static const struct dvb_frontend_ops ds3000_ops = {
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "Activates frontend debugging (default:0)");
 
-MODULE_DESCRIPTION("DVB Frontend module for Montage Technology DS3000 hardware");
+MODULE_DESCRIPTION("DVB Frontend module for Montage Technology "
+			"DS3000 hardware");
 MODULE_AUTHOR("Konstantin Dimitrov <kosio.dimitrov@gmail.com>");
 MODULE_LICENSE("GPL");
 MODULE_FIRMWARE(DS3000_DEFAULT_FIRMWARE);

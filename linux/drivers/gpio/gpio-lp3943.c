@@ -1,15 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TI/National Semiconductor LP3943 GPIO driver
  *
  * Copyright 2013 Texas Instruments
  *
  * Author: Milo Kim <milo.kim@ti.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; version 2.
  */
 
 #include <linux/bitops.h>
 #include <linux/err.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/mfd/lp3943.h>
 #include <linux/module.h>
@@ -42,9 +45,14 @@ struct lp3943_gpio {
 	u16 input_mask;		/* 1 = GPIO is input direction, 0 = output */
 };
 
+static inline struct lp3943_gpio *to_lp3943_gpio(struct gpio_chip *_chip)
+{
+	return container_of(_chip, struct lp3943_gpio, chip);
+}
+
 static int lp3943_gpio_request(struct gpio_chip *chip, unsigned offset)
 {
-	struct lp3943_gpio *lp3943_gpio = gpiochip_get_data(chip);
+	struct lp3943_gpio *lp3943_gpio = to_lp3943_gpio(chip);
 	struct lp3943 *lp3943 = lp3943_gpio->lp3943;
 
 	/* Return an error if the pin is already assigned */
@@ -56,7 +64,7 @@ static int lp3943_gpio_request(struct gpio_chip *chip, unsigned offset)
 
 static void lp3943_gpio_free(struct gpio_chip *chip, unsigned offset)
 {
-	struct lp3943_gpio *lp3943_gpio = gpiochip_get_data(chip);
+	struct lp3943_gpio *lp3943_gpio = to_lp3943_gpio(chip);
 	struct lp3943 *lp3943 = lp3943_gpio->lp3943;
 
 	clear_bit(offset, &lp3943->pin_used);
@@ -74,7 +82,7 @@ static int lp3943_gpio_set_mode(struct lp3943_gpio *lp3943_gpio, u8 offset,
 
 static int lp3943_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
-	struct lp3943_gpio *lp3943_gpio = gpiochip_get_data(chip);
+	struct lp3943_gpio *lp3943_gpio = to_lp3943_gpio(chip);
 
 	lp3943_gpio->input_mask |= BIT(offset);
 
@@ -130,7 +138,7 @@ static int lp3943_get_gpio_out_status(struct lp3943_gpio *lp3943_gpio,
 
 static int lp3943_gpio_get(struct gpio_chip *chip, unsigned offset)
 {
-	struct lp3943_gpio *lp3943_gpio = gpiochip_get_data(chip);
+	struct lp3943_gpio *lp3943_gpio = to_lp3943_gpio(chip);
 
 	/*
 	 * Limitation:
@@ -149,7 +157,7 @@ static int lp3943_gpio_get(struct gpio_chip *chip, unsigned offset)
 
 static void lp3943_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 {
-	struct lp3943_gpio *lp3943_gpio = gpiochip_get_data(chip);
+	struct lp3943_gpio *lp3943_gpio = to_lp3943_gpio(chip);
 	u8 data;
 
 	if (value)
@@ -163,7 +171,7 @@ static void lp3943_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 static int lp3943_gpio_direction_output(struct gpio_chip *chip, unsigned offset,
 					int value)
 {
-	struct lp3943_gpio *lp3943_gpio = gpiochip_get_data(chip);
+	struct lp3943_gpio *lp3943_gpio = to_lp3943_gpio(chip);
 
 	lp3943_gpio_set(chip, offset, value);
 	lp3943_gpio->input_mask &= ~BIT(offset);
@@ -197,12 +205,19 @@ static int lp3943_gpio_probe(struct platform_device *pdev)
 
 	lp3943_gpio->lp3943 = lp3943;
 	lp3943_gpio->chip = lp3943_gpio_chip;
-	lp3943_gpio->chip.parent = &pdev->dev;
+	lp3943_gpio->chip.dev = &pdev->dev;
 
 	platform_set_drvdata(pdev, lp3943_gpio);
 
-	return devm_gpiochip_add_data(&pdev->dev, &lp3943_gpio->chip,
-				      lp3943_gpio);
+	return gpiochip_add(&lp3943_gpio->chip);
+}
+
+static int lp3943_gpio_remove(struct platform_device *pdev)
+{
+	struct lp3943_gpio *lp3943_gpio = platform_get_drvdata(pdev);
+
+	gpiochip_remove(&lp3943_gpio->chip);
+	return 0;
 }
 
 static const struct of_device_id lp3943_gpio_of_match[] = {
@@ -213,6 +228,7 @@ MODULE_DEVICE_TABLE(of, lp3943_gpio_of_match);
 
 static struct platform_driver lp3943_gpio_driver = {
 	.probe = lp3943_gpio_probe,
+	.remove = lp3943_gpio_remove,
 	.driver = {
 		.name = "lp3943-gpio",
 		.of_match_table = lp3943_gpio_of_match,

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Samsung EXYNOS4x12 FIMC-IS (Imaging Subsystem) driver
  *
@@ -9,6 +8,10 @@
  *
  * The hardware handling code derived from a driver written by
  * Younghwan Joo <yhwan.joo@samsung.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/bitops.h>
@@ -27,7 +30,7 @@
 #include <media/v4l2-ioctl.h>
 #include <media/videobuf2-v4l2.h>
 #include <media/videobuf2-dma-contig.h>
-#include <media/drv-intf/exynos-fimc.h>
+#include <media/exynos-fimc.h>
 
 #include "common.h"
 #include "media-dev.h"
@@ -36,34 +39,41 @@
 #include "fimc-is-param.h"
 
 static int isp_video_capture_queue_setup(struct vb2_queue *vq,
+			const void *parg,
 			unsigned int *num_buffers, unsigned int *num_planes,
-			unsigned int sizes[], struct device *alloc_devs[])
+			unsigned int sizes[], void *allocators[])
 {
+	const struct v4l2_format *pfmt = parg;
 	struct fimc_isp *isp = vb2_get_drv_priv(vq);
 	struct v4l2_pix_format_mplane *vid_fmt = &isp->video_capture.pixfmt;
-	const struct fimc_fmt *fmt = isp->video_capture.format;
+	const struct v4l2_pix_format_mplane *pixm = NULL;
+	const struct fimc_fmt *fmt;
 	unsigned int wh, i;
 
-	wh = vid_fmt->width * vid_fmt->height;
+	if (pfmt) {
+		pixm = &pfmt->fmt.pix_mp;
+		fmt = fimc_isp_find_format(&pixm->pixelformat, NULL, -1);
+		wh = pixm->width * pixm->height;
+	} else {
+		fmt = isp->video_capture.format;
+		wh = vid_fmt->width * vid_fmt->height;
+	}
 
 	if (fmt == NULL)
 		return -EINVAL;
 
 	*num_buffers = clamp_t(u32, *num_buffers, FIMC_ISP_REQ_BUFS_MIN,
 						FIMC_ISP_REQ_BUFS_MAX);
-	if (*num_planes) {
-		if (*num_planes != fmt->memplanes)
-			return -EINVAL;
-		for (i = 0; i < *num_planes; i++)
-			if (sizes[i] < (wh * fmt->depth[i]) / 8)
-				return -EINVAL;
-		return 0;
-	}
-
 	*num_planes = fmt->memplanes;
 
-	for (i = 0; i < fmt->memplanes; i++)
-		sizes[i] = (wh * fmt->depth[i]) / 8;
+	for (i = 0; i < fmt->memplanes; i++) {
+		unsigned int size = (wh * fmt->depth[i]) / 8;
+		if (pixm)
+			sizes[i] = max(size, pixm->plane_fmt[i].sizeimage);
+		else
+			sizes[i] = size;
+		allocators[i] = isp->alloc_ctx;
+	}
 
 	return 0;
 }
@@ -211,8 +221,8 @@ static void isp_video_capture_buffer_queue(struct vb2_buffer *vb)
 							ivb->dma_addr[i];
 
 			isp_dbg(2, &video->ve.vdev,
-				"dma_buf %d (%d/%d/%d) addr: %pad\n",
-				buf_index, ivb->index, i, vb->index,
+				"dma_buf %pad (%d/%d/%d) addr: %pad\n",
+				&buf_index, ivb->index, i, vb->index,
 				&ivb->dma_addr[i]);
 		}
 
@@ -244,7 +254,7 @@ void fimc_isp_video_irq_handler(struct fimc_is *is)
 	buf_index = (is->i2h_cmd.args[1] - 1) % video->buf_count;
 	vbuf = &video->buffers[buf_index]->vb;
 
-	vbuf->vb2_buf.timestamp = ktime_get_ns();
+	v4l2_get_timestamp(&vbuf->timestamp);
 	vb2_buffer_done(&vbuf->vb2_buf, VB2_BUF_STATE_DONE);
 
 	video->buf_mask &= ~BIT(buf_index);
@@ -280,7 +290,7 @@ static int isp_video_open(struct file *file)
 		goto rel_fh;
 
 	if (v4l2_fh_is_singular_file(file)) {
-		mutex_lock(&me->graph_obj.mdev->graph_mutex);
+		mutex_lock(&me->parent->graph_mutex);
 
 		ret = fimc_pipeline_call(ve, open, me, true);
 
@@ -288,7 +298,7 @@ static int isp_video_open(struct file *file)
 		if (ret == 0)
 			me->use_count++;
 
-		mutex_unlock(&me->graph_obj.mdev->graph_mutex);
+		mutex_unlock(&me->parent->graph_mutex);
 	}
 	if (!ret)
 		goto unlock;
@@ -304,21 +314,18 @@ static int isp_video_release(struct file *file)
 	struct fimc_isp *isp = video_drvdata(file);
 	struct fimc_is_video *ivc = &isp->video_capture;
 	struct media_entity *entity = &ivc->ve.vdev.entity;
-	struct media_device *mdev = entity->graph_obj.mdev;
-	bool is_singular_file;
+	struct media_device *mdev = entity->parent;
 
 	mutex_lock(&isp->video_lock);
 
-	is_singular_file = v4l2_fh_is_singular_file(file);
-
-	if (is_singular_file && ivc->streaming) {
-		media_pipeline_stop(entity);
+	if (v4l2_fh_is_singular_file(file) && ivc->streaming) {
+		media_entity_pipeline_stop(entity);
 		ivc->streaming = 0;
 	}
 
-	_vb2_fop_release(file, NULL);
+	vb2_fop_release(file);
 
-	if (is_singular_file) {
+	if (v4l2_fh_is_singular_file(file)) {
 		fimc_pipeline_call(&ivc->ve, close);
 
 		mutex_lock(&mdev->graph_mutex);
@@ -349,12 +356,12 @@ static int isp_video_querycap(struct file *file, void *priv,
 {
 	struct fimc_isp *isp = video_drvdata(file);
 
-	__fimc_vidioc_querycap(&isp->pdev->dev, cap);
+	__fimc_vidioc_querycap(&isp->pdev->dev, cap, V4L2_CAP_STREAMING);
 	return 0;
 }
 
-static int isp_video_enum_fmt(struct file *file, void *priv,
-			      struct v4l2_fmtdesc *f)
+static int isp_video_enum_fmt_mplane(struct file *file, void *priv,
+					struct v4l2_fmtdesc *f)
 {
 	const struct fimc_fmt *fmt;
 
@@ -365,6 +372,7 @@ static int isp_video_enum_fmt(struct file *file, void *priv,
 	if (WARN_ON(fmt == NULL))
 		return -EINVAL;
 
+	strlcpy(f->description, fmt->name, sizeof(f->description));
 	f->pixelformat = fmt->fourcc;
 
 	return 0;
@@ -383,17 +391,12 @@ static void __isp_video_try_fmt(struct fimc_isp *isp,
 				struct v4l2_pix_format_mplane *pixm,
 				const struct fimc_fmt **fmt)
 {
-	const struct fimc_fmt *__fmt;
-
-	__fmt = fimc_isp_find_format(&pixm->pixelformat, NULL, 2);
-
-	if (fmt)
-		*fmt = __fmt;
+	*fmt = fimc_isp_find_format(&pixm->pixelformat, NULL, 2);
 
 	pixm->colorspace = V4L2_COLORSPACE_SRGB;
 	pixm->field = V4L2_FIELD_NONE;
-	pixm->num_planes = __fmt->memplanes;
-	pixm->pixelformat = __fmt->fourcc;
+	pixm->num_planes = (*fmt)->memplanes;
+	pixm->pixelformat = (*fmt)->fourcc;
 	/*
 	 * TODO: double check with the docmentation these width/height
 	 * constraints are correct.
@@ -466,7 +469,8 @@ static int isp_video_pipeline_validate(struct fimc_isp *isp)
 
 		/* Retrieve format at the source pad */
 		pad = media_entity_remote_pad(pad);
-		if (!pad || !is_media_entity_v4l2_subdev(pad->entity))
+		if (pad == NULL ||
+		    media_entity_type(pad->entity) != MEDIA_ENT_T_V4L2_SUBDEV)
 			break;
 
 		sd = media_entity_to_v4l2_subdev(pad->entity);
@@ -493,7 +497,7 @@ static int isp_video_streamon(struct file *file, void *priv,
 	struct media_entity *me = &ve->vdev.entity;
 	int ret;
 
-	ret = media_pipeline_start(me, &ve->pipe->mp);
+	ret = media_entity_pipeline_start(me, &ve->pipe->mp);
 	if (ret < 0)
 		return ret;
 
@@ -508,7 +512,7 @@ static int isp_video_streamon(struct file *file, void *priv,
 	isp->video_capture.streaming = 1;
 	return 0;
 p_stop:
-	media_pipeline_stop(me);
+	media_entity_pipeline_stop(me);
 	return ret;
 }
 
@@ -523,7 +527,7 @@ static int isp_video_streamoff(struct file *file, void *priv,
 	if (ret < 0)
 		return ret;
 
-	media_pipeline_stop(&video->ve.vdev.entity);
+	media_entity_pipeline_stop(&video->ve.vdev.entity);
 	video->streaming = 0;
 	return 0;
 }
@@ -550,7 +554,7 @@ static int isp_video_reqbufs(struct file *file, void *priv,
 
 static const struct v4l2_ioctl_ops isp_video_ioctl_ops = {
 	.vidioc_querycap		= isp_video_querycap,
-	.vidioc_enum_fmt_vid_cap	= isp_video_enum_fmt,
+	.vidioc_enum_fmt_vid_cap_mplane	= isp_video_enum_fmt_mplane,
 	.vidioc_try_fmt_vid_cap_mplane	= isp_video_try_fmt_mplane,
 	.vidioc_s_fmt_vid_cap_mplane	= isp_video_s_fmt_mplane,
 	.vidioc_g_fmt_vid_cap_mplane	= isp_video_g_fmt_mplane,
@@ -597,7 +601,6 @@ int fimc_isp_video_device_register(struct fimc_isp *isp,
 	q->drv_priv = isp;
 	q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 	q->lock = &isp->video_lock;
-	q->dev = &isp->pdev->dev;
 
 	ret = vb2_queue_init(q);
 	if (ret < 0)
@@ -605,7 +608,9 @@ int fimc_isp_video_device_register(struct fimc_isp *isp,
 
 	vdev = &iv->ve.vdev;
 	memset(vdev, 0, sizeof(*vdev));
-	strscpy(vdev->name, "fimc-is-isp.capture", sizeof(vdev->name));
+	snprintf(vdev->name, sizeof(vdev->name), "fimc-is-isp.%s",
+			type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE ?
+			"capture" : "output");
 	vdev->queue = q;
 	vdev->fops = &isp_video_fops;
 	vdev->ioctl_ops = &isp_video_ioctl_ops;
@@ -613,10 +618,9 @@ int fimc_isp_video_device_register(struct fimc_isp *isp,
 	vdev->minor = -1;
 	vdev->release = video_device_release_empty;
 	vdev->lock = &isp->video_lock;
-	vdev->device_caps = V4L2_CAP_STREAMING | V4L2_CAP_VIDEO_CAPTURE_MPLANE;
 
 	iv->pad.flags = MEDIA_PAD_FL_SINK;
-	ret = media_entity_pads_init(&vdev->entity, 1, &iv->pad);
+	ret = media_entity_init(&vdev->entity, 1, &iv->pad, 0);
 	if (ret < 0)
 		return ret;
 

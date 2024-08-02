@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 	.align	32
 	.globl	__flushw_user
 	.type	__flushw_user,#function
@@ -16,7 +15,6 @@ __flushw_user:
 2:	retl
 	 nop
 	.size	__flushw_user,.-__flushw_user
-EXPORT_SYMBOL(__flushw_user)
 
 	/* Flush %fp and %i7 to the stack for all register
 	 * windows active inside of the cpu.  This allows
@@ -63,4 +61,3 @@ real_hard_smp_processor_id:
 	.size		hard_smp_processor_id,.-hard_smp_processor_id
 #endif
 	.size		real_hard_smp_processor_id,.-real_hard_smp_processor_id
-EXPORT_SYMBOL_GPL(real_hard_smp_processor_id)

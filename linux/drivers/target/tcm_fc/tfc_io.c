@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2010 Cisco Systems, Inc.
  *
@@ -10,6 +9,19 @@
  * Copyright (c) 2009 Rising Tide, Inc.
  * Copyright (c) 2009 Linux-iSCSI.org
  * Copyright (c) 2009 Nicholas A. Bellinger <nab@linux-iscsi.org>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 /* XXX TBD some includes may be extraneous */
@@ -70,7 +82,7 @@ int ft_queue_data_in(struct se_cmd *se_cmd)
 
 	ep = fc_seq_exch(cmd->seq);
 	lport = ep->lp;
-	cmd->seq = fc_seq_start_next(cmd->seq);
+	cmd->seq = lport->tt.seq_start_next(cmd->seq);
 
 	remaining = se_cmd->data_length;
 
@@ -136,14 +148,15 @@ int ft_queue_data_in(struct se_cmd *se_cmd)
 					   page, off_in_page, tlen);
 			fr_len(fp) += tlen;
 			fp_skb(fp)->data_len += tlen;
-			fp_skb(fp)->truesize += page_size(page);
+			fp_skb(fp)->truesize +=
+					PAGE_SIZE << compound_order(page);
 		} else {
 			BUG_ON(!page);
 			from = kmap_atomic(page + (mem_off >> PAGE_SHIFT));
 			page_addr = from;
-			from += offset_in_page(mem_off);
+			from += mem_off & ~PAGE_MASK;
 			tlen = min(tlen, (size_t)(PAGE_SIZE -
-						offset_in_page(mem_off)));
+						(mem_off & ~PAGE_MASK)));
 			memcpy(to, from, tlen);
 			kunmap_atomic(page_addr);
 			to += tlen;
@@ -161,7 +174,7 @@ int ft_queue_data_in(struct se_cmd *se_cmd)
 			f_ctl |= FC_FC_END_SEQ;
 		fc_fill_fc_hdr(fp, FC_RCTL_DD_SOL_DATA, ep->did, ep->sid,
 			       FC_TYPE_FCP, f_ctl, fh_off);
-		error = fc_seq_send(lport, seq, fp);
+		error = lport->tt.seq_send(lport, seq, fp);
 		if (error) {
 			pr_info_ratelimited("%s: Failed to send frame %p, "
 						"xid <0x%x>, remaining %zu, "
@@ -301,9 +314,9 @@ void ft_recv_write_data(struct ft_cmd *cmd, struct fc_frame *fp)
 
 		to = kmap_atomic(page + (mem_off >> PAGE_SHIFT));
 		page_addr = to;
-		to += offset_in_page(mem_off);
+		to += mem_off & ~PAGE_MASK;
 		tlen = min(tlen, (size_t)(PAGE_SIZE -
-					  offset_in_page(mem_off)));
+					  (mem_off & ~PAGE_MASK)));
 		memcpy(to, from, tlen);
 		kunmap_atomic(page_addr);
 

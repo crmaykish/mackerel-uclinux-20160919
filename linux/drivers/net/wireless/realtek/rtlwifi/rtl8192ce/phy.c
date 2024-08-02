@@ -1,5 +1,31 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright(c) 2009-2012  Realtek Corporation.*/
+/******************************************************************************
+ *
+ * Copyright(c) 2009-2012  Realtek Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ * The full GNU General Public License is included in this distribution in the
+ * file called LICENSE.
+ *
+ * Contact Information:
+ * wlanfae <wlanfae@realtek.com>
+ * Realtek Corporation, No. 2, Innovation Road II, Hsinchu Science Park,
+ * Hsinchu 300, Taiwan.
+ *
+ * Larry Finger <Larry.Finger@lwfinger.net>
+ *
+ *****************************************************************************/
 
 #include "../wifi.h"
 #include "../pci.h"
@@ -39,7 +65,7 @@ u32 rtl92c_phy_query_rf_reg(struct ieee80211_hw *hw,
 							       rfpath, regaddr);
 	}
 
-	bitshift = calculate_bit_shift(bitmask);
+	bitshift = _rtl92c_phy_calculate_bit_shift(bitmask);
 	readback_value = (original_value & bitmask) >> bitshift;
 
 	spin_unlock(&rtlpriv->locks.rf_lock);
@@ -82,7 +108,7 @@ bool rtl92c_phy_bb_config(struct ieee80211_hw *hw)
 	rtl_write_byte(rtlpriv, REG_RF_CTRL, RF_EN | RF_RSTB | RF_SDMRSTB);
 	rtl_write_byte(rtlpriv, REG_SYS_FUNC_EN,
 		       FEN_PPLL | FEN_PCIEA | FEN_DIO_PCIE |
-		       FEN_BB_GLB_RSTN | FEN_BBRSTB);
+		       FEN_BB_GLB_RSTn | FEN_BBRSTB);
 	rtl_write_byte(rtlpriv, REG_AFE_XTAL_CTRL + 1, 0x80);
 	regvaldw = rtl_read_dword(rtlpriv, REG_LEDCFG0);
 	rtl_write_dword(rtlpriv, REG_LEDCFG0, regvaldw | BIT(23));
@@ -110,7 +136,7 @@ void rtl92ce_phy_set_rf_reg(struct ieee80211_hw *hw,
 			original_value = _rtl92c_phy_rf_serial_read(hw,
 								    rfpath,
 								    regaddr);
-			bitshift = calculate_bit_shift(bitmask);
+			bitshift = _rtl92c_phy_calculate_bit_shift(bitmask);
 			data =
 			    ((original_value & (~bitmask)) |
 			     (data << bitshift));
@@ -122,7 +148,7 @@ void rtl92ce_phy_set_rf_reg(struct ieee80211_hw *hw,
 			original_value = _rtl92c_phy_fw_rf_serial_read(hw,
 								       rfpath,
 								       regaddr);
-			bitshift = calculate_bit_shift(bitmask);
+			bitshift = _rtl92c_phy_calculate_bit_shift(bitmask);
 			data =
 			    ((original_value & (~bitmask)) |
 			     (data << bitshift));
@@ -214,7 +240,7 @@ bool _rtl92ce_phy_config_bb_with_pgheaderfile(struct ieee80211_hw *hw,
 		for (i = 0; i < phy_regarray_pg_len; i = i + 3) {
 			rtl_addr_delay(phy_regarray_table_pg[i]);
 
-			_rtl92c_store_pwrindex_diffrate_offset(hw,
+			_rtl92c_store_pwrIndex_diffrate_offset(hw,
 					       phy_regarray_table_pg[i],
 					       phy_regarray_table_pg[i + 1],
 					       phy_regarray_table_pg[i + 2]);
@@ -274,11 +300,14 @@ bool rtl92c_phy_config_rf_with_headerfile(struct ieee80211_hw *hw,
 		}
 		break;
 	case RF90_PATH_C:
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
+			 "switch case not processed\n");
+		break;
 	case RF90_PATH_D:
-		pr_info("Incorrect rfpath %#x\n", rfpath);
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
+			 "switch case not processed\n");
 		break;
 	default:
-		pr_info("switch case %#x not processed\n", rfpath);
 		break;
 	}
 	return true;
@@ -318,7 +347,8 @@ void rtl92ce_phy_set_bw_mode_callback(struct ieee80211_hw *hw)
 		rtl_write_byte(rtlpriv, REG_RRSR + 2, reg_prsr_rsc);
 		break;
 	default:
-		pr_info("unknown bandwidth: %#X\n", rtlphy->current_chan_bw);
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
+			 "unknown bandwidth: %#X\n", rtlphy->current_chan_bw);
 		break;
 	}
 
@@ -342,8 +372,8 @@ void rtl92ce_phy_set_bw_mode_callback(struct ieee80211_hw *hw)
 			       HAL_PRIME_CHNL_OFFSET_LOWER) ? 2 : 1);
 		break;
 	default:
-		pr_err("unknown bandwidth: %#X\n",
-		       rtlphy->current_chan_bw);
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
+			 "unknown bandwidth: %#X\n", rtlphy->current_chan_bw);
 		break;
 	}
 	rtl92ce_phy_rf6052_set_bandwidth(hw, rtlphy->current_chan_bw);
@@ -442,14 +472,13 @@ static bool _rtl92ce_phy_set_rf_power_state(struct ieee80211_hw *hw,
 			if ((ppsc->rfpwr_state == ERFOFF) &&
 			    RT_IN_PS_LEVEL(ppsc, RT_RF_OFF_LEVL_HALT_NIC)) {
 				bool rtstatus;
-				u32 initializecount = 0;
-
+				u32 InitializeCount = 0;
 				do {
-					initializecount++;
+					InitializeCount++;
 					RT_TRACE(rtlpriv, COMP_RF, DBG_DMESG,
 						 "IPS Set eRf nic enable\n");
 					rtstatus = rtl_ps_enable_nic(hw);
-				} while (!rtstatus && (initializecount < 10));
+				} while (!rtstatus && (InitializeCount < 10));
 				RT_CLEAR_PS_LEVEL(ppsc,
 						  RT_RF_OFF_LEVL_HALT_NIC);
 			} else {
@@ -524,8 +553,8 @@ static bool _rtl92ce_phy_set_rf_power_state(struct ieee80211_hw *hw,
 			break;
 		}
 	default:
-		pr_err("switch case %#x not processed\n",
-		       rfpwr_state);
+		RT_TRACE(rtlpriv, COMP_ERR, DBG_EMERG,
+			 "switch case not processed\n");
 		bresult = false;
 		break;
 	}

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
@@ -23,6 +22,11 @@
  *		data-registers to hold input values and one tries to
  *		specify d0 and d1 as scratch registers. Letting gcc
  *		choose these registers itself solves the problem.
+ *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
  */
 
 /* Revised by Kenneth Albanowski for m68knommu. Basic problem: unaligned access
@@ -187,7 +191,9 @@ static inline u32 from64to32(u64 x)
 }
 
 __wsum csum_tcpudp_nofold(__be32 saddr, __be32 daddr,
-			  __u32 len, __u8 proto, __wsum sum)
+			unsigned short len,
+			unsigned short proto,
+			__wsum sum)
 {
 	unsigned long long s = (__force u32)sum;
 

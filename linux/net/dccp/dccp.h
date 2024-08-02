@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef _DCCP_H
 #define _DCCP_H
 /*
@@ -7,6 +6,10 @@
  *  An implementation of the DCCP protocol
  *  Copyright (c) 2005 Arnaldo Carvalho de Melo <acme@conectiva.com.br>
  *  Copyright (c) 2005-6 Ian McDonald <ian.mcdonald@jandi.co.nz>
+ *
+ *	This program is free software; you can redistribute it and/or modify it
+ *	under the terms of the GNU General Public License version 2 as
+ *	published by the Free Software Foundation.
  */
 
 #include <linux/dccp.h>
@@ -41,9 +44,9 @@ extern bool dccp_debug;
 #define dccp_pr_debug_cat(format, a...)   DCCP_PRINTK(dccp_debug, format, ##a)
 #define dccp_debug(fmt, a...)		  dccp_pr_debug_cat(KERN_DEBUG fmt, ##a)
 #else
-#define dccp_pr_debug(format, a...)	  do {} while (0)
-#define dccp_pr_debug_cat(format, a...)	  do {} while (0)
-#define dccp_debug(format, a...)	  do {} while (0)
+#define dccp_pr_debug(format, a...)
+#define dccp_pr_debug_cat(format, a...)
+#define dccp_debug(format, a...)
 #endif
 
 extern struct inet_hashinfo dccp_hashinfo;
@@ -195,9 +198,9 @@ struct dccp_mib {
 };
 
 DECLARE_SNMP_STAT(struct dccp_mib, dccp_statistics);
-#define DCCP_INC_STATS(field)	SNMP_INC_STATS(dccp_statistics, field)
-#define __DCCP_INC_STATS(field)	__SNMP_INC_STATS(dccp_statistics, field)
-#define DCCP_DEC_STATS(field)	SNMP_DEC_STATS(dccp_statistics, field)
+#define DCCP_INC_STATS(field)	    SNMP_INC_STATS(dccp_statistics, field)
+#define DCCP_INC_STATS_BH(field)    SNMP_INC_STATS_BH(dccp_statistics, field)
+#define DCCP_DEC_STATS(field)	    SNMP_DEC_STATS(dccp_statistics, field)
 
 /*
  * 	Checksumming routines
@@ -288,7 +291,6 @@ int dccp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
 int dccp_rcv_established(struct sock *sk, struct sk_buff *skb,
 			 const struct dccp_hdr *dh, const unsigned int len);
 
-void dccp_destruct_common(struct sock *sk);
 int dccp_init_sock(struct sock *sk, const __u8 ctl_sock_initialized);
 void dccp_destroy_sock(struct sock *sk);
 
@@ -314,7 +316,7 @@ int dccp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 		 int flags, int *addr_len);
 void dccp_shutdown(struct sock *sk, int how);
 int inet_dccp_listen(struct socket *sock, int backlog);
-__poll_t dccp_poll(struct file *file, struct socket *sock,
+unsigned int dccp_poll(struct file *file, struct socket *sock,
 		       poll_table *wait);
 int dccp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
 void dccp_req_err(struct sock *sk, u64 seq);

@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for the Solos PCI ADSL2+ card, designed to support Linux by
  *  Traverse Technologies -- http://www.traverse.com.au/
  *  Xrio Limited          -- http://www.xrio.com/
+ *
  *
  * Copyright © 2008 Traverse Technologies
  * Copyright © 2008 Intel Corporation
@@ -10,6 +10,15 @@
  * Authors: Nathan Williams <nathan@traverse.com.au>
  *          David Woodhouse <dwmw2@infradead.org>
  *          Treker Chen <treker@xrio.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #define DEBUG
@@ -196,7 +205,7 @@ static ssize_t solos_param_show(struct device *dev, struct device_attribute *att
 		return -ENOMEM;
 	}
 
-	header = skb_put(skb, sizeof(*header));
+	header = (void *)skb_put(skb, sizeof(*header));
 
 	buflen = snprintf((void *)&header[1], buflen - 1,
 			  "L%05d\n%s\n", current->pid, attr->attr.name);
@@ -252,7 +261,7 @@ static ssize_t solos_param_store(struct device *dev, struct device_attribute *at
 		return -ENOMEM;
 	}
 
-	header = skb_put(skb, sizeof(*header));
+	header = (void *)skb_put(skb, sizeof(*header));
 
 	buflen = snprintf((void *)&header[1], buflen - 1,
 			  "L%05d\n%s\n%s\n", current->pid, attr->attr.name, buf);
@@ -338,8 +347,8 @@ static char *next_string(struct sk_buff *skb)
  */       
 static int process_status(struct solos_card *card, int port, struct sk_buff *skb)
 {
-	char *str, *state_str, *snr, *attn;
-	int ver, rate_up, rate_down, err;
+	char *str, *end, *state_str, *snr, *attn;
+	int ver, rate_up, rate_down;
 
 	if (!card->atmdev[port])
 		return -ENODEV;
@@ -348,11 +357,7 @@ static int process_status(struct solos_card *card, int port, struct sk_buff *skb
 	if (!str)
 		return -EIO;
 
-	err = kstrtoint(str, 10, &ver);
-	if (err) {
-		dev_warn(&card->dev->dev, "Unexpected status interrupt version\n");
-		return err;
-	}
+	ver = simple_strtol(str, NULL, 10);
 	if (ver < 1) {
 		dev_warn(&card->dev->dev, "Unexpected status interrupt version %d\n",
 			 ver);
@@ -368,16 +373,16 @@ static int process_status(struct solos_card *card, int port, struct sk_buff *skb
 		return 0;
 	}
 
-	err = kstrtoint(str, 10, &rate_down);
-	if (err)
-		return err;
+	rate_down = simple_strtol(str, &end, 10);
+	if (*end)
+		return -EIO;
 
 	str = next_string(skb);
 	if (!str)
 		return -EIO;
-	err = kstrtoint(str, 10, &rate_up);
-	if (err)
-		return err;
+	rate_up = simple_strtol(str, &end, 10);
+	if (*end)
+		return -EIO;
 
 	state_str = next_string(skb);
 	if (!state_str)
@@ -412,7 +417,7 @@ static int process_command(struct solos_card *card, int port, struct sk_buff *sk
 	struct solos_param *prm;
 	unsigned long flags;
 	int cmdpid;
-	int found = 0, err;
+	int found = 0;
 
 	if (skb->len < 7)
 		return 0;
@@ -423,9 +428,7 @@ static int process_command(struct solos_card *card, int port, struct sk_buff *sk
 	    skb->data[6] != '\n')
 		return 0;
 
-	err = kstrtoint(&skb->data[1], 10, &cmdpid);
-	if (err)
-		return err;
+	cmdpid = simple_strtol(&skb->data[1], NULL, 10);
 
 	spin_lock_irqsave(&card->param_queue_lock, flags);
 	list_for_each_entry(prm, &card->param_queue, list) {
@@ -449,9 +452,9 @@ static ssize_t console_show(struct device *dev, struct device_attribute *attr,
 	struct sk_buff *skb;
 	unsigned int len;
 
-	spin_lock_bh(&card->cli_queue_lock);
+	spin_lock(&card->cli_queue_lock);
 	skb = skb_dequeue(&card->cli_queue[SOLOS_CHAN(atmdev)]);
-	spin_unlock_bh(&card->cli_queue_lock);
+	spin_unlock(&card->cli_queue_lock);
 	if(skb == NULL)
 		return sprintf(buf, "No data.\n");
 
@@ -477,14 +480,14 @@ static int send_command(struct solos_card *card, int dev, const char *buf, size_
 		return 0;
 	}
 
-	header = skb_put(skb, sizeof(*header));
+	header = (void *)skb_put(skb, sizeof(*header));
 
 	header->size = cpu_to_le16(size);
 	header->vpi = cpu_to_le16(0);
 	header->vci = cpu_to_le16(0);
 	header->type = cpu_to_le16(PKT_COMMAND);
 
-	skb_put_data(skb, buf, size);
+	memcpy(skb_put(skb, size), buf, size);
 
 	fpga_queue(card, dev, skb, NULL);
 
@@ -516,8 +519,9 @@ struct geos_gpio_attr {
 static ssize_t geos_gpio_store(struct device *dev, struct device_attribute *attr,
 			       const char *buf, size_t count)
 {
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
 	struct geos_gpio_attr *gattr = container_of(attr, struct geos_gpio_attr, attr);
-	struct solos_card *card = dev_get_drvdata(dev);
+	struct solos_card *card = pci_get_drvdata(pdev);
 	uint32_t data32;
 
 	if (count != 1 && (count != 2 || buf[1] != '\n'))
@@ -541,8 +545,9 @@ static ssize_t geos_gpio_store(struct device *dev, struct device_attribute *attr
 static ssize_t geos_gpio_show(struct device *dev, struct device_attribute *attr,
 			      char *buf)
 {
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
 	struct geos_gpio_attr *gattr = container_of(attr, struct geos_gpio_attr, attr);
-	struct solos_card *card = dev_get_drvdata(dev);
+	struct solos_card *card = pci_get_drvdata(pdev);
 	uint32_t data32;
 
 	data32 = ioread32(card->config_regs + GPIO_STATUS);
@@ -554,8 +559,9 @@ static ssize_t geos_gpio_show(struct device *dev, struct device_attribute *attr,
 static ssize_t hardware_show(struct device *dev, struct device_attribute *attr,
 			     char *buf)
 {
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
 	struct geos_gpio_attr *gattr = container_of(attr, struct geos_gpio_attr, attr);
-	struct solos_card *card = dev_get_drvdata(dev);
+	struct solos_card *card = pci_get_drvdata(pdev);
 	uint32_t data32;
 
 	data32 = ioread32(card->config_regs + GPIO_STATUS);
@@ -572,7 +578,7 @@ static ssize_t hardware_show(struct device *dev, struct device_attribute *attr,
 	return sprintf(buf, "%d\n", data32);
 }
 
-static DEVICE_ATTR_RW(console);
+static DEVICE_ATTR(console, 0644, console_show, console_store);
 
 
 #define SOLOS_ATTR_RO(x) static DEVICE_ATTR(x, 0444, solos_param_show, NULL);
@@ -599,7 +605,7 @@ static struct attribute *solos_attrs[] = {
 	NULL
 };
 
-static const struct attribute_group solos_attr_group = {
+static struct attribute_group solos_attr_group = {
 	.attrs = solos_attrs,
 	.name = "parameters",
 };
@@ -616,7 +622,7 @@ static struct attribute *gpio_attrs[] = {
 	NULL
 };
 
-static const struct attribute_group gpio_attr_group = {
+static struct attribute_group gpio_attr_group = {
 	.attrs = gpio_attrs,
 	.name = "gpio",
 };
@@ -933,7 +939,7 @@ static int popen(struct atm_vcc *vcc)
 			dev_warn(&card->dev->dev, "Failed to allocate sk_buff in popen()\n");
 		return -ENOMEM;
 	}
-	header = skb_put(skb, sizeof(*header));
+	header = (void *)skb_put(skb, sizeof(*header));
 
 	header->size = cpu_to_le16(0);
 	header->vpi = cpu_to_le16(vcc->vpi);
@@ -956,21 +962,21 @@ static void pclose(struct atm_vcc *vcc)
 	struct pkt_hdr *header;
 
 	/* Remove any yet-to-be-transmitted packets from the pending queue */
-	spin_lock_bh(&card->tx_queue_lock);
+	spin_lock(&card->tx_queue_lock);
 	skb_queue_walk_safe(&card->tx_queue[port], skb, tmpskb) {
 		if (SKB_CB(skb)->vcc == vcc) {
 			skb_unlink(skb, &card->tx_queue[port]);
 			solos_pop(vcc, skb);
 		}
 	}
-	spin_unlock_bh(&card->tx_queue_lock);
+	spin_unlock(&card->tx_queue_lock);
 
 	skb = alloc_skb(sizeof(*header), GFP_KERNEL);
 	if (!skb) {
 		dev_warn(&card->dev->dev, "Failed to allocate sk_buff in pclose()\n");
 		return;
 	}
-	header = skb_put(skb, sizeof(*header));
+	header = (void *)skb_put(skb, sizeof(*header));
 
 	header->size = cpu_to_le16(0);
 	header->vpi = cpu_to_le16(vcc->vpi);
@@ -1162,7 +1168,7 @@ static int psend(struct atm_vcc *vcc, struct sk_buff *skb)
 		}
 	}
 
-	header = skb_push(skb, sizeof(*header));
+	header = (void *)skb_push(skb, sizeof(*header));
 
 	/* This does _not_ include the size of the header */
 	header->size = cpu_to_le16(pktlen);
@@ -1175,7 +1181,7 @@ static int psend(struct atm_vcc *vcc, struct sk_buff *skb)
 	return 0;
 }
 
-static const struct atmdev_ops fpga_ops = {
+static struct atmdev_ops fpga_ops = {
 	.open =		popen,
 	.close =	pclose,
 	.ioctl =	NULL,
@@ -1239,10 +1245,10 @@ static int fpga_probe(struct pci_dev *dev, const struct pci_device_id *id)
 
 	if (reset) {
 		iowrite32(1, card->config_regs + FPGA_MODE);
-		ioread32(card->config_regs + FPGA_MODE);
+		data32 = ioread32(card->config_regs + FPGA_MODE); 
 
 		iowrite32(0, card->config_regs + FPGA_MODE);
-		ioread32(card->config_regs + FPGA_MODE);
+		data32 = ioread32(card->config_regs + FPGA_MODE); 
 	}
 
 	data32 = ioread32(card->config_regs + FPGA_VER);
@@ -1279,8 +1285,7 @@ static int fpga_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		card->using_dma = 1;
 		if (1) { /* All known FPGA versions so far */
 			card->dma_alignment = 3;
-			card->dma_bounce = kmalloc_array(card->nr_ports,
-							 BUF_SIZE, GFP_KERNEL);
+			card->dma_bounce = kmalloc(card->nr_ports * BUF_SIZE, GFP_KERNEL);
 			if (!card->dma_bounce) {
 				dev_warn(&card->dev->dev, "Failed to allocate DMA bounce buffers\n");
 				err = -ENOMEM;
@@ -1387,7 +1392,7 @@ static int atm_init(struct solos_card *card, struct device *parent)
 			continue;
 		}
 
-		header = skb_put(skb, sizeof(*header));
+		header = (void *)skb_put(skb, sizeof(*header));
 
 		header->size = cpu_to_le16(0);
 		header->vpi = cpu_to_le16(0);
@@ -1465,7 +1470,7 @@ static void fpga_remove(struct pci_dev *dev)
 	kfree(card);
 }
 
-static const struct pci_device_id fpga_pci_tbl[] = {
+static struct pci_device_id fpga_pci_tbl[] = {
 	{ 0x10ee, 0x0300, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
 	{ 0, }
 };

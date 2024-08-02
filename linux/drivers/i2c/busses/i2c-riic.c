@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Renesas RIIC driver
  *
  * Copyright (C) 2013 Wolfram Sang <wsa@sang-engineering.com>
  * Copyright (C) 2013 Renesas Solutions Corp.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
  */
 
 /*
@@ -43,7 +46,6 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
-#include <linux/pm_runtime.h>
 
 #define RIIC_ICCR1	0x00
 #define RIIC_ICCR2	0x04
@@ -78,11 +80,15 @@
 #define ICIER_TEIE	0x40
 #define ICIER_RIE	0x20
 #define ICIER_NAKIE	0x10
-#define ICIER_SPIE	0x08
 
 #define ICSR2_NACKF	0x10
 
+/* ICBRx (@ PCLK 33MHz) */
 #define ICBR_RESERVED	0xe0 /* Should be 1 on writes */
+#define ICBRL_SP100K	(19 | ICBR_RESERVED)
+#define ICBRH_SP100K	(16 | ICBR_RESERVED)
+#define ICBRL_SP400K	(21 | ICBR_RESERVED)
+#define ICBRH_SP400K	(9 | ICBR_RESERVED)
 
 #define RIIC_INIT_MSG	-1
 
@@ -113,10 +119,12 @@ static int riic_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 {
 	struct riic_dev *riic = i2c_get_adapdata(adap);
 	unsigned long time_left;
-	int i;
+	int i, ret;
 	u8 start_bit;
 
-	pm_runtime_get_sync(adap->dev.parent);
+	ret = clk_prepare_enable(riic->clk);
+	if (ret)
+		return ret;
 
 	if (readb(riic->base + RIIC_ICCR2) & ICCR2_BBSY) {
 		riic->err = -EBUSY;
@@ -149,7 +157,7 @@ static int riic_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 	}
 
  out:
-	pm_runtime_put(adap->dev.parent);
+	clk_disable_unprepare(riic->clk);
 
 	return riic->err ?: num;
 }
@@ -163,14 +171,15 @@ static irqreturn_t riic_tdre_isr(int irq, void *data)
 		return IRQ_NONE;
 
 	if (riic->bytes_left == RIIC_INIT_MSG) {
-		if (riic->msg->flags & I2C_M_RD)
+		val = !!(riic->msg->flags & I2C_M_RD);
+		if (val)
 			/* On read, switch over to receive interrupt */
 			riic_clear_set_bit(riic, ICIER_TIE, ICIER_RIE, RIIC_ICIER);
 		else
 			/* On write, initialize length */
 			riic->bytes_left = riic->msg->len;
 
-		val = i2c_8bit_addr_from_msg(riic->msg);
+		val |= (riic->msg->addr << 1);
 	} else {
 		val = *riic->buf;
 		riic->buf++;
@@ -202,20 +211,16 @@ static irqreturn_t riic_tend_isr(int irq, void *data)
 	if (readb(riic->base + RIIC_ICSR2) & ICSR2_NACKF) {
 		/* We got a NACKIE */
 		readb(riic->base + RIIC_ICDRR);	/* dummy read */
-		riic_clear_set_bit(riic, ICSR2_NACKF, 0, RIIC_ICSR2);
 		riic->err = -ENXIO;
 	} else if (riic->bytes_left) {
 		return IRQ_NONE;
 	}
 
-	if (riic->is_last || riic->err) {
-		riic_clear_set_bit(riic, ICIER_TEIE, ICIER_SPIE, RIIC_ICIER);
+	if (riic->is_last || riic->err)
 		writeb(ICCR2_SP, riic->base + RIIC_ICCR2);
-	} else {
-		/* Transfer is complete, but do not send STOP */
-		riic_clear_set_bit(riic, ICIER_TEIE, 0, RIIC_ICIER);
-		complete(&riic->msg_done);
-	}
+
+	writeb(0, riic->base + RIIC_ICIER);
+	complete(&riic->msg_done);
 
 	return IRQ_HANDLED;
 }
@@ -235,13 +240,13 @@ static irqreturn_t riic_rdrf_isr(int irq, void *data)
 
 	if (riic->bytes_left == 1) {
 		/* STOP must come before we set ACKBT! */
-		if (riic->is_last) {
-			riic_clear_set_bit(riic, 0, ICIER_SPIE, RIIC_ICIER);
+		if (riic->is_last)
 			writeb(ICCR2_SP, riic->base + RIIC_ICCR2);
-		}
 
 		riic_clear_set_bit(riic, 0, ICMR3_ACKBT, RIIC_ICMR3);
 
+		writeb(0, riic->base + RIIC_ICIER);
+		complete(&riic->msg_done);
 	} else {
 		riic_clear_set_bit(riic, ICMR3_ACKBT, 0, RIIC_ICMR3);
 	}
@@ -250,21 +255,6 @@ static irqreturn_t riic_rdrf_isr(int irq, void *data)
 	*riic->buf = readb(riic->base + RIIC_ICDRR);
 	riic->buf++;
 	riic->bytes_left--;
-
-	return IRQ_HANDLED;
-}
-
-static irqreturn_t riic_stop_isr(int irq, void *data)
-{
-	struct riic_dev *riic = data;
-
-	/* read back registers to confirm writes have fully propagated */
-	writeb(0, riic->base + RIIC_ICSR2);
-	readb(riic->base + RIIC_ICSR2);
-	writeb(0, riic->base + RIIC_ICIER);
-	readb(riic->base + RIIC_ICIER);
-
-	complete(&riic->msg_done);
 
 	return IRQ_HANDLED;
 }
@@ -279,122 +269,73 @@ static const struct i2c_algorithm riic_algo = {
 	.functionality	= riic_func,
 };
 
-static int riic_init_hw(struct riic_dev *riic, struct i2c_timings *t)
+static int riic_init_hw(struct riic_dev *riic, u32 spd)
 {
-	int ret = 0;
+	int ret;
 	unsigned long rate;
-	int total_ticks, cks, brl, brh;
 
-	pm_runtime_get_sync(riic->adapter.dev.parent);
+	ret = clk_prepare_enable(riic->clk);
+	if (ret)
+		return ret;
 
-	if (t->bus_freq_hz > 400000) {
-		dev_err(&riic->adapter.dev,
-			"unsupported bus speed (%dHz). 400000 max\n",
-			t->bus_freq_hz);
-		ret = -EINVAL;
-		goto out;
-	}
-
+	/*
+	 * TODO: Implement formula to calculate the timing values depending on
+	 * variable parent clock rate and arbitrary bus speed
+	 */
 	rate = clk_get_rate(riic->clk);
-
-	/*
-	 * Assume the default register settings:
-	 *  FER.SCLE = 1 (SCL sync circuit enabled, adds 2 or 3 cycles)
-	 *  FER.NFE = 1 (noise circuit enabled)
-	 *  MR3.NF = 0 (1 cycle of noise filtered out)
-	 *
-	 * Freq (CKS=000) = (I2CCLK + tr + tf)/ (BRH + 3 + 1) + (BRL + 3 + 1)
-	 * Freq (CKS!=000) = (I2CCLK + tr + tf)/ (BRH + 2 + 1) + (BRL + 2 + 1)
-	 */
-
-	/*
-	 * Determine reference clock rate. We must be able to get the desired
-	 * frequency with only 62 clock ticks max (31 high, 31 low).
-	 * Aim for a duty of 60% LOW, 40% HIGH.
-	 */
-	total_ticks = DIV_ROUND_UP(rate, t->bus_freq_hz);
-
-	for (cks = 0; cks < 7; cks++) {
-		/*
-		 * 60% low time must be less than BRL + 2 + 1
-		 * BRL max register value is 0x1F.
-		 */
-		brl = ((total_ticks * 6) / 10);
-		if (brl <= (0x1F + 3))
-			break;
-
-		total_ticks /= 2;
-		rate /= 2;
+	if (rate != 33325000) {
+		dev_err(&riic->adapter.dev,
+			"invalid parent clk (%lu). Must be 33325000Hz\n", rate);
+		clk_disable_unprepare(riic->clk);
+		return -EINVAL;
 	}
-
-	if (brl > (0x1F + 3)) {
-		dev_err(&riic->adapter.dev, "invalid speed (%lu). Too slow.\n",
-			(unsigned long)t->bus_freq_hz);
-		ret = -EINVAL;
-		goto out;
-	}
-
-	brh = total_ticks - brl;
-
-	/* Remove automatic clock ticks for sync circuit and NF */
-	if (cks == 0) {
-		brl -= 4;
-		brh -= 4;
-	} else {
-		brl -= 3;
-		brh -= 3;
-	}
-
-	/*
-	 * Remove clock ticks for rise and fall times. Convert ns to clock
-	 * ticks.
-	 */
-	brl -= t->scl_fall_ns / (1000000000 / rate);
-	brh -= t->scl_rise_ns / (1000000000 / rate);
-
-	/* Adjust for min register values for when SCLE=1 and NFE=1 */
-	if (brl < 1)
-		brl = 1;
-	if (brh < 1)
-		brh = 1;
-
-	pr_debug("i2c-riic: freq=%lu, duty=%d, fall=%lu, rise=%lu, cks=%d, brl=%d, brh=%d\n",
-		 rate / total_ticks, ((brl + 3) * 100) / (brl + brh + 6),
-		 t->scl_fall_ns / (1000000000 / rate),
-		 t->scl_rise_ns / (1000000000 / rate), cks, brl, brh);
 
 	/* Changing the order of accessing IICRST and ICE may break things! */
 	writeb(ICCR1_IICRST | ICCR1_SOWP, riic->base + RIIC_ICCR1);
 	riic_clear_set_bit(riic, 0, ICCR1_ICE, RIIC_ICCR1);
 
-	writeb(ICMR1_CKS(cks), riic->base + RIIC_ICMR1);
-	writeb(brh | ICBR_RESERVED, riic->base + RIIC_ICBRH);
-	writeb(brl | ICBR_RESERVED, riic->base + RIIC_ICBRL);
+	switch (spd) {
+	case 100000:
+		writeb(ICMR1_CKS(3), riic->base + RIIC_ICMR1);
+		writeb(ICBRH_SP100K, riic->base + RIIC_ICBRH);
+		writeb(ICBRL_SP100K, riic->base + RIIC_ICBRL);
+		break;
+	case 400000:
+		writeb(ICMR1_CKS(1), riic->base + RIIC_ICMR1);
+		writeb(ICBRH_SP400K, riic->base + RIIC_ICBRH);
+		writeb(ICBRL_SP400K, riic->base + RIIC_ICBRL);
+		break;
+	default:
+		dev_err(&riic->adapter.dev,
+			"unsupported bus speed (%dHz). Use 100000 or 400000\n", spd);
+		clk_disable_unprepare(riic->clk);
+		return -EINVAL;
+	}
 
 	writeb(0, riic->base + RIIC_ICSER);
 	writeb(ICMR3_ACKWP | ICMR3_RDRFS, riic->base + RIIC_ICMR3);
 
 	riic_clear_set_bit(riic, ICCR1_IICRST, 0, RIIC_ICCR1);
 
-out:
-	pm_runtime_put(riic->adapter.dev.parent);
-	return ret;
+	clk_disable_unprepare(riic->clk);
+
+	return 0;
 }
 
 static struct riic_irq_desc riic_irqs[] = {
 	{ .res_num = 0, .isr = riic_tend_isr, .name = "riic-tend" },
 	{ .res_num = 1, .isr = riic_rdrf_isr, .name = "riic-rdrf" },
 	{ .res_num = 2, .isr = riic_tdre_isr, .name = "riic-tdre" },
-	{ .res_num = 3, .isr = riic_stop_isr, .name = "riic-stop" },
 	{ .res_num = 5, .isr = riic_tend_isr, .name = "riic-nack" },
 };
 
 static int riic_i2c_probe(struct platform_device *pdev)
 {
+	struct device_node *np = pdev->dev.of_node;
 	struct riic_dev *riic;
 	struct i2c_adapter *adap;
 	struct resource *res;
-	struct i2c_timings i2c_t;
+	u32 bus_rate = 0;
 	int i, ret;
 
 	riic = devm_kzalloc(&pdev->dev, sizeof(*riic), GFP_KERNEL);
@@ -435,38 +376,30 @@ static int riic_i2c_probe(struct platform_device *pdev)
 
 	init_completion(&riic->msg_done);
 
-	i2c_parse_fw_timings(&pdev->dev, &i2c_t, true);
-
-	pm_runtime_enable(&pdev->dev);
-
-	ret = riic_init_hw(riic, &i2c_t);
+	of_property_read_u32(np, "clock-frequency", &bus_rate);
+	ret = riic_init_hw(riic, bus_rate);
 	if (ret)
-		goto out;
+		return ret;
+
 
 	ret = i2c_add_adapter(adap);
-	if (ret)
-		goto out;
+	if (ret) {
+		dev_err(&pdev->dev, "failed to add adapter\n");
+		return ret;
+	}
 
 	platform_set_drvdata(pdev, riic);
 
-	dev_info(&pdev->dev, "registered with %dHz bus speed\n",
-		 i2c_t.bus_freq_hz);
+	dev_info(&pdev->dev, "registered with %dHz bus speed\n", bus_rate);
 	return 0;
-
-out:
-	pm_runtime_disable(&pdev->dev);
-	return ret;
 }
 
 static int riic_i2c_remove(struct platform_device *pdev)
 {
 	struct riic_dev *riic = platform_get_drvdata(pdev);
 
-	pm_runtime_get_sync(&pdev->dev);
 	writeb(0, riic->base + RIIC_ICIER);
-	pm_runtime_put(&pdev->dev);
 	i2c_del_adapter(&riic->adapter);
-	pm_runtime_disable(&pdev->dev);
 
 	return 0;
 }

@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* Daemon interface
  *
  * Copyright (C) 2007 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public Licence
+ * as published by the Free Software Foundation; either version
+ * 2 of the Licence, or (at your option) any later version.
  */
 
 #include <linux/module.h>
@@ -27,7 +31,7 @@ static ssize_t cachefiles_daemon_read(struct file *, char __user *, size_t,
 				      loff_t *);
 static ssize_t cachefiles_daemon_write(struct file *, const char __user *,
 				       size_t, loff_t *);
-static __poll_t cachefiles_daemon_poll(struct file *,
+static unsigned int cachefiles_daemon_poll(struct file *,
 					   struct poll_table_struct *);
 static int cachefiles_daemon_frun(struct cachefiles_cache *, char *);
 static int cachefiles_daemon_fcull(struct cachefiles_cache *, char *);
@@ -158,8 +162,6 @@ static ssize_t cachefiles_daemon_read(struct file *file, char __user *_buffer,
 				      size_t buflen, loff_t *pos)
 {
 	struct cachefiles_cache *cache = file->private_data;
-	unsigned long long b_released;
-	unsigned f_released;
 	char buffer[256];
 	int n;
 
@@ -172,8 +174,6 @@ static ssize_t cachefiles_daemon_read(struct file *file, char __user *_buffer,
 	cachefiles_has_space(cache, 0, 0);
 
 	/* summarise */
-	f_released = atomic_xchg(&cache->f_released, 0);
-	b_released = atomic_long_xchg(&cache->b_released, 0);
 	clear_bit(CACHEFILES_STATE_CHANGED, &cache->flags);
 
 	n = snprintf(buffer, sizeof(buffer),
@@ -183,18 +183,15 @@ static ssize_t cachefiles_daemon_read(struct file *file, char __user *_buffer,
 		     " fstop=%llx"
 		     " brun=%llx"
 		     " bcull=%llx"
-		     " bstop=%llx"
-		     " freleased=%x"
-		     " breleased=%llx",
+		     " bstop=%llx",
 		     test_bit(CACHEFILES_CULLING, &cache->flags) ? '1' : '0',
 		     (unsigned long long) cache->frun,
 		     (unsigned long long) cache->fcull,
 		     (unsigned long long) cache->fstop,
 		     (unsigned long long) cache->brun,
 		     (unsigned long long) cache->bcull,
-		     (unsigned long long) cache->bstop,
-		     f_released,
-		     b_released);
+		     (unsigned long long) cache->bstop
+		     );
 
 	if (n > buflen)
 		return -EMSGSIZE;
@@ -229,9 +226,15 @@ static ssize_t cachefiles_daemon_write(struct file *file,
 		return -EOPNOTSUPP;
 
 	/* drag the command string into the kernel so we can parse it */
-	data = memdup_user_nul(_data, datalen);
-	if (IS_ERR(data))
-		return PTR_ERR(data);
+	data = kmalloc(datalen + 1, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	ret = -EFAULT;
+	if (copy_from_user(data, _data, datalen) != 0)
+		goto error;
+
+	data[datalen] = '\0';
 
 	ret = -EINVAL;
 	if (memchr(data, '\0', datalen))
@@ -285,22 +288,22 @@ found_command:
 
 /*
  * poll for culling state
- * - use EPOLLOUT to indicate culling state
+ * - use POLLOUT to indicate culling state
  */
-static __poll_t cachefiles_daemon_poll(struct file *file,
+static unsigned int cachefiles_daemon_poll(struct file *file,
 					   struct poll_table_struct *poll)
 {
 	struct cachefiles_cache *cache = file->private_data;
-	__poll_t mask;
+	unsigned int mask;
 
 	poll_wait(file, &cache->daemon_pollwq, poll);
 	mask = 0;
 
 	if (test_bit(CACHEFILES_STATE_CHANGED, &cache->flags))
-		mask |= EPOLLIN;
+		mask |= POLLIN;
 
 	if (test_bit(CACHEFILES_CULLING, &cache->flags))
-		mask |= EPOLLOUT;
+		mask |= POLLOUT;
 
 	return mask;
 }

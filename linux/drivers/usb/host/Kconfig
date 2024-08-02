@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 #
 # USB Host Controller Drivers
 #
@@ -6,7 +5,6 @@ comment "USB Host Controller Drivers"
 
 config USB_C67X00_HCD
 	tristate "Cypress C67x00 HCD support"
-	depends on HAS_IOMEM
 	help
 	  The Cypress C67x00 (EZ-Host/EZ-OTG) chips are dual-role
 	  host/peripheral/OTG USB controllers.
@@ -19,7 +17,6 @@ config USB_C67X00_HCD
 
 config USB_XHCI_HCD
 	tristate "xHCI HCD (USB 3.0) support"
-	depends on HAS_DMA && HAS_IOMEM
 	---help---
 	  The eXtensible Host Controller Interface (xHCI) is standard for USB 3.0
 	  "SuperSpeed" host controller hardware.
@@ -28,23 +25,14 @@ config USB_XHCI_HCD
 	  module will be called xhci-hcd.
 
 if USB_XHCI_HCD
-config USB_XHCI_DBGCAP
-	bool "xHCI support for debug capability"
-	depends on TTY
-	---help---
-	  Say 'Y' to enable the support for the xHCI debug capability. Make
-	  sure that your xHCI host supports the extended debug capability and
-	  you want a TTY serial device based on the xHCI debug capability
-	  before enabling this option. If unsure, say 'N'.
 
 config USB_XHCI_PCI
        tristate
-       depends on USB_PCI
+       depends on PCI
        default y
 
 config USB_XHCI_PLATFORM
 	tristate "Generic xHCI driver for a platform device"
-	select USB_XHCI_RCAR if ARCH_RENESAS
 	---help---
 	  Adds an xHCI host driver for a generic platform device, which
 	  provides a memory space and an irq.
@@ -53,53 +41,26 @@ config USB_XHCI_PLATFORM
 
 	  If unsure, say N.
 
-config USB_XHCI_HISTB
-	tristate "xHCI support for HiSilicon STB SoCs"
-	depends on USB_XHCI_PLATFORM && (ARCH_HISI || COMPILE_TEST)
-	help
-	  Say 'Y' to enable the support for the xHCI host controller
-	  found in HiSilicon STB SoCs.
-
-config USB_XHCI_MTK
-	tristate "xHCI support for MediaTek SoCs"
-	select MFD_SYSCON
-	depends on (MIPS && SOC_MT7621) || ARCH_MEDIATEK || COMPILE_TEST
-	---help---
-	  Say 'Y' to enable the support for the xHCI host controller
-	  found in MediaTek SoCs.
-	  If unsure, say N.
-
 config USB_XHCI_MVEBU
-	tristate "xHCI support for Marvell Armada 375/38x/37xx"
+	tristate "xHCI support for Marvell Armada 375/38x"
 	select USB_XHCI_PLATFORM
-	depends on HAS_IOMEM
 	depends on ARCH_MVEBU || COMPILE_TEST
 	---help---
 	  Say 'Y' to enable the support for the xHCI host controller
-	  found in Marvell Armada 375/38x/37xx ARM SOCs.
+	  found in Marvell Armada 375/38x ARM SOCs.
 
 config USB_XHCI_RCAR
 	tristate "xHCI support for Renesas R-Car SoCs"
-	depends on USB_XHCI_PLATFORM
-	depends on ARCH_RENESAS || COMPILE_TEST
+	select USB_XHCI_PLATFORM
+	depends on ARCH_SHMOBILE || COMPILE_TEST
 	---help---
 	  Say 'Y' to enable the support for the xHCI host controller
 	  found in Renesas R-Car ARM SoCs.
-
-config USB_XHCI_TEGRA
-	tristate "xHCI support for NVIDIA Tegra SoCs"
-	depends on PHY_TEGRA_XUSB
-	depends on RESET_CONTROLLER
-	select FW_LOADER
-	---help---
-	  Say 'Y' to enable the support for the xHCI host controller
-	  found in NVIDIA Tegra124 and later SoCs.
 
 endif # USB_XHCI_HCD
 
 config USB_EHCI_HCD
 	tristate "EHCI HCD (USB 2.0) support"
-	depends on HAS_DMA && HAS_IOMEM
 	---help---
 	  The Enhanced Host Controller Interface (EHCI) is standard for USB 2.0
 	  "high speed" (480 Mbit/sec, 60 Mbyte/sec) host controller hardware.
@@ -114,7 +75,7 @@ config USB_EHCI_HCD
 	  Controller Driver or UHCI (for Via motherboards) Host Controller
 	  Driver too.
 
-	  You may want to read <file:Documentation/usb/ehci.rst>.
+	  You may want to read <file:Documentation/usb/ehci.txt>.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called ehci-hcd.
@@ -151,16 +112,20 @@ config USB_EHCI_TT_NEWSCHED
 
 	  If unsure, say Y.
 
+config USB_FSL_MPH_DR_OF
+	tristate
+
 if USB_EHCI_HCD
 
 config USB_EHCI_PCI
 	tristate
-	depends on USB_PCI
+	depends on PCI
 	default y
 
 config USB_EHCI_HCD_PMC_MSP
 	tristate "EHCI support for on-chip PMC MSP71xx USB controller"
 	depends on MSP_HAS_USB
+	default n
 	select USB_EHCI_BIG_ENDIAN_DESC
 	select USB_EHCI_BIG_ENDIAN_MMIO
 	---help---
@@ -179,8 +144,10 @@ config XPS_USB_HCD_XILINX
 		devices only.
 
 config USB_EHCI_FSL
-	tristate "Support for Freescale on-chip EHCI USB controller"
+	tristate "Support for Freescale PPC on-chip EHCI USB controller"
+	depends on FSL_SOC
 	select USB_EHCI_ROOT_HUB_TT
+	select USB_FSL_MPH_DR_OF if OF
 	---help---
 	  Variation of ARC USB block used in some Freescale chips.
 
@@ -191,18 +158,10 @@ config USB_EHCI_MXC
 	---help---
 	  Variation of ARC USB block used in some Freescale chips.
 
-config USB_EHCI_HCD_NPCM7XX
-	tristate "Support for Nuvoton NPCM7XX on-chip EHCI USB controller"
-	depends on (USB_EHCI_HCD && ARCH_NPCM7XX) || COMPILE_TEST
-	default y if (USB_EHCI_HCD && ARCH_NPCM7XX)
-	help
-	  Enables support for the on-chip EHCI controller on
-	  Nuvoton NPCM7XX chips.
-
 config USB_EHCI_HCD_OMAP
 	tristate "EHCI support for OMAP3 and later chips"
 	depends on ARCH_OMAP
-	depends on NOP_USB_XCEIV
+	select NOP_USB_XCEIV
 	default y
 	---help---
 	  Enables support for the on-chip EHCI controller on
@@ -210,7 +169,7 @@ config USB_EHCI_HCD_OMAP
 
 config USB_EHCI_HCD_ORION
 	tristate  "Support for Marvell EBU on-chip EHCI USB controller"
-	depends on USB_EHCI_HCD && (PLAT_ORION || ARCH_MVEBU)
+	depends on USB_EHCI_HCD && PLAT_ORION
 	default y
 	---help---
 	  Enables support for the on-chip EHCI controller on Marvell's
@@ -244,11 +203,23 @@ config USB_EHCI_HCD_AT91
           Enables support for the on-chip EHCI controller on
           Atmel chips.
 
+config USB_EHCI_MSM
+	tristate "Support for Qualcomm QSD/MSM on-chip EHCI USB controller"
+	depends on ARCH_QCOM
+	select USB_EHCI_ROOT_HUB_TT
+	---help---
+	  Enables support for the USB Host controller present on the
+	  Qualcomm chipsets. Root Hub has inbuilt TT.
+	  This driver depends on OTG driver for PHY initialization,
+	  clock management, powering up VBUS, and power management.
+	  This driver is not supported on boards like trout which
+	  has an external PHY.
+
 config USB_EHCI_TEGRA
        tristate "NVIDIA Tegra HCD support"
        depends on ARCH_TEGRA
        select USB_EHCI_ROOT_HUB_TT
-       select USB_TEGRA_PHY
+       select USB_PHY
        help
          This driver enables support for the internal USB Host Controllers
          found in NVIDIA Tegra SoCs. The controllers are EHCI compliant.
@@ -275,7 +246,7 @@ config USB_EHCI_EXYNOS
 	Enable support for the Samsung Exynos SOC's on-chip EHCI controller.
 
 config USB_EHCI_MV
-	tristate "EHCI support for Marvell PXA/MMP USB controller"
+	bool "EHCI support for Marvell PXA/MMP USB controller"
 	depends on (ARCH_PXA || ARCH_MMP)
 	select USB_EHCI_ROOT_HUB_TT
 	---help---
@@ -286,6 +257,12 @@ config USB_EHCI_MV
 	  controller used by the EBU-type SoCs including Orion, Kirkwood,
 	  Dova, Armada 370 and Armada XP. See "Support for Marvell EBU
 	  on-chip EHCI USB controller" for those.
+
+config USB_W90X900_EHCI
+	tristate "W90X900(W90P910) EHCI support"
+	depends on ARCH_W90X900
+	---help---
+		Enables support for the W90X900 USB controller
 
 config USB_CNS3XXX_EHCI
 	bool "Cavium CNS3XXX EHCI Module (DEPRECATED)"
@@ -299,8 +276,22 @@ config USB_CNS3XXX_EHCI
 	  It is needed for high-speed (480Mbit/sec) USB 2.0 device
 	  support.
 
+config USB_EHCI_ATH79
+	bool "EHCI support for AR7XXX/AR9XXX SoCs (DEPRECATED)"
+	depends on (SOC_AR71XX || SOC_AR724X || SOC_AR913X || SOC_AR933X || SOC_AR934X)
+	select USB_EHCI_ROOT_HUB_TT
+	select USB_EHCI_HCD_PLATFORM
+	default y
+	---help---
+	  This option is deprecated now and the driver was removed, use
+	  USB_EHCI_HCD_PLATFORM instead.
+
+	  Enables support for the built-in EHCI controller present
+	  on the Atheros AR7XXX/AR9XXX SoCs.
+
 config USB_EHCI_HCD_PLATFORM
 	tristate "Generic EHCI driver for a platform device"
+	default n
 	---help---
 	  Adds an EHCI host driver for a generic platform device, which
 	  provides a memory space and an irq.
@@ -310,6 +301,7 @@ config USB_EHCI_HCD_PLATFORM
 config USB_OCTEON_EHCI
 	bool "Octeon on-chip EHCI support (DEPRECATED)"
 	depends on CAVIUM_OCTEON_SOC
+	default n
 	select USB_EHCI_BIG_ENDIAN_MMIO if CPU_BIG_ENDIAN
 	select USB_EHCI_HCD_PLATFORM
 	help
@@ -325,7 +317,6 @@ endif # USB_EHCI_HCD
 
 config USB_OXU210HP_HCD
 	tristate "OXU210HP HCD support"
-	depends on HAS_IOMEM
 	---help---
 	  The OXU210HP is an USB host/OTG/device controller. Enable this
 	  option if your board has this chip. If unsure, say N.
@@ -338,7 +329,6 @@ config USB_OXU210HP_HCD
 
 config USB_ISP116X_HCD
 	tristate "ISP116X HCD support"
-	depends on HAS_IOMEM
 	---help---
 	  The ISP1160 and ISP1161 chips are USB host controllers. Enable this
 	  option if your board has this chip. If unsure, say N.
@@ -350,8 +340,6 @@ config USB_ISP116X_HCD
 
 config USB_ISP1362_HCD
 	tristate "ISP1362 HCD support"
-	depends on HAS_IOMEM
-	depends on COMPILE_TEST # nothing uses this
 	---help---
 	  Supports the Philips ISP1362 chip as a host controller
 
@@ -362,7 +350,7 @@ config USB_ISP1362_HCD
 
 config USB_FOTG210_HCD
 	tristate "FOTG210 HCD support"
-	depends on USB && HAS_DMA && HAS_IOMEM
+	depends on USB
 	---help---
 	  Faraday FOTG210 is an OTG controller which can be configured as
 	  an USB2.0 host. It is designed to meet USB2.0 EHCI specification
@@ -384,7 +372,6 @@ config USB_MAX3421_HCD
 
 config USB_OHCI_HCD
 	tristate "OHCI HCD (USB 1.1) support"
-	depends on HAS_DMA && HAS_IOMEM
 	---help---
 	  The Open Host Controller Interface (OHCI) is a standard for accessing
 	  USB 1.1 host controller hardware.  It does more in hardware than Intel's
@@ -435,8 +422,7 @@ config USB_OHCI_HCD_S3C2410
 
 config USB_OHCI_HCD_LPC32XX
 	tristate "Support for LPC on-chip OHCI USB controller"
-	depends on USB_OHCI_HCD
-	depends on ARCH_LPC32XX || COMPILE_TEST
+	depends on USB_OHCI_HCD && ARCH_LPC32XX
 	depends on USB_ISP1301
 	default y
 	---help---
@@ -461,26 +447,33 @@ config USB_OHCI_HCD_AT91
 
 config USB_OHCI_HCD_OMAP3
 	tristate "OHCI support for OMAP3 and later chips"
-	depends on (ARCH_OMAP3 || ARCH_OMAP4 || SOC_OMAP5)
+	depends on (ARCH_OMAP3 || ARCH_OMAP4)
+	default y
+	---help---
+	  Enables support for the on-chip OHCI controller on
+	  OMAP3 and later chips.
+
+config USB_OHCI_HCD_DAVINCI
+	bool "OHCI support for TI DaVinci DA8xx"
+	depends on ARCH_DAVINCI_DA8XX
+	depends on USB_OHCI_HCD=y
+	default y
+	help
+	  Enables support for the DaVinci DA8xx integrated OHCI
+	  controller. This driver cannot currently be a loadable
+	  module because it lacks a proper PHY abstraction.
+
+config USB_OHCI_ATH79
+	bool "USB OHCI support for the Atheros AR71XX/AR7240 SoCs (DEPRECATED)"
+	depends on (SOC_AR71XX || SOC_AR724X)
 	select USB_OHCI_HCD_PLATFORM
 	default y
 	help
 	  This option is deprecated now and the driver was removed, use
 	  USB_OHCI_HCD_PLATFORM instead.
 
-	  Enables support for the on-chip OHCI controller on
-	  OMAP3 and later chips.
-
-config USB_OHCI_HCD_DAVINCI
-	tristate "OHCI support for TI DaVinci DA8xx"
-	depends on ARCH_DAVINCI_DA8XX
-	depends on USB_OHCI_HCD
-	select PHY_DA8XX_USB
-	default y
-	help
-	  Enables support for the DaVinci DA8xx integrated OHCI
-	  controller. This driver cannot currently be a loadable
-	  module because it lacks a proper PHY abstraction.
+	  Enables support for the built-in OHCI controller present on the
+	  Atheros AR71XX/AR7240 SoCs.
 
 config USB_OHCI_HCD_PPC_OF_BE
 	bool "OHCI support for OF platform bus (big endian)"
@@ -506,7 +499,7 @@ config USB_OHCI_HCD_PPC_OF
 
 config USB_OHCI_HCD_PCI
 	tristate "OHCI support for PCI-bus USB controllers"
-	depends on USB_PCI
+	depends on PCI
 	default y
 	select USB_OHCI_LITTLE_ENDIAN
 	---help---
@@ -518,6 +511,7 @@ config USB_OHCI_HCD_SSB
 	depends on (SSB = y || SSB = USB_OHCI_HCD)
 	select USB_HCD_SSB
 	select USB_OHCI_HCD_PLATFORM
+	default n
 	---help---
 	  This option is deprecated now and the driver was removed, use
 	  USB_HCD_SSB and USB_OHCI_HCD_PLATFORM instead.
@@ -560,6 +554,7 @@ config USB_CNS3XXX_OHCI
 
 config USB_OHCI_HCD_PLATFORM
 	tristate "Generic OHCI driver for a platform device"
+	default n
 	---help---
 	  Adds an OHCI host driver for a generic platform device, which
 	  provides a memory space and an irq.
@@ -585,7 +580,7 @@ endif # USB_OHCI_HCD
 
 config USB_UHCI_HCD
 	tristate "UHCI HCD (most Intel and VIA) support"
-	depends on USB_PCI || USB_UHCI_SUPPORT_NON_PCI_HC
+	depends on PCI || USB_UHCI_SUPPORT_NON_PCI_HC
 	---help---
 	  The Universal Host Controller Interface is a standard by Intel for
 	  accessing the USB hardware in the PC (which is also called the USB
@@ -606,11 +601,15 @@ config USB_UHCI_SUPPORT_NON_PCI_HC
 
 config USB_UHCI_PLATFORM
 	bool
-	default y if (ARCH_VT8500 || ARCH_ASPEED)
+	default y if ARCH_VT8500
 
-config USB_UHCI_ASPEED
-       bool
-       default y if ARCH_ASPEED
+config USB_UHCI_BIG_ENDIAN_MMIO
+	bool
+	default y if SPARC_LEON
+
+config USB_UHCI_BIG_ENDIAN_DESC
+	bool
+	default y if SPARC_LEON
 
 config USB_FHCI_HCD
 	tristate "Freescale QE USB Host Controller support"
@@ -658,7 +657,6 @@ config USB_U132_HCD
 
 config USB_SL811_HCD
 	tristate "SL811HS HCD support"
-	depends on HAS_IOMEM
 	help
 	  The SL811HS is a single-port USB controller that supports either
 	  host side or peripheral side roles.  Enable this option if your
@@ -690,7 +688,6 @@ config USB_SL811_CS
 
 config USB_R8A66597_HCD
 	tristate "R8A66597 HCD support"
-	depends on HAS_IOMEM
 	help
 	  The R8A66597 is a USB 2.0 host and peripheral controller.
 
@@ -699,6 +696,25 @@ config USB_R8A66597_HCD
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called r8a66597-hcd.
+
+config USB_DWC_OTG
+	tristate "Synopsys DesignWare Cores Hi-Speed USB On-The-Go (OTG)"
+	depends on USB && CPU_CAVIUM_OCTEON
+	---help---
+	  The DWC_otg core is a Dual-Role Device (DRD) controller, which
+	  supports both device and host functions and is fully compliant with
+	  the On-The-Go Supplement to the USB 2.0 Specification, Revision 1.0a.
+	  It can also be configured as a Host-only or Device-only controller,
+	  fully compliant with the USB 2.0 Specification. DWC_otg USB 2.0
+	  configurations support high-speed (HS, 480-Mbps), full-speed
+	  (FS, 12-Mbps), and low-speed (LS, 1.5-Mbps) transfers. Additionally,
+	  DWC_otg can be configured as a USB 1.1 full-speed/low-speed DRD. The
+	  DWC_otg core connects to the industry-standard AMBA High-Performance
+	  Bus (AHB) for communicating with the application and system memory,
+	  and is fully compliant with the AMBA Specification, Revision 2.0.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called "dwc_otg".
 
 config USB_RENESAS_USBHS_HCD
 	tristate "Renesas USBHS HCD support"
@@ -711,6 +727,32 @@ config USB_RENESAS_USBHS_HCD
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called renesas-usbhs.
+
+config USB_WHCI_HCD
+	tristate "Wireless USB Host Controller Interface (WHCI) driver"
+	depends on PCI && USB && UWB
+	select USB_WUSB
+	select UWB_WHCI
+	help
+	  A driver for PCI-based Wireless USB Host Controllers that are
+	  compliant with the WHCI specification.
+
+	  To compile this driver a module, choose M here: the module
+	  will be called "whci-hcd".
+
+config USB_HWA_HCD
+	tristate "Host Wire Adapter (HWA) driver"
+	depends on USB && UWB
+	select USB_WUSB
+	select UWB_HWA
+	help
+	  This driver enables you to connect Wireless USB devices to
+	  your system using a Host Wire Adaptor USB dongle. This is an
+	  UWB Radio Controller and WUSB Host Controller connected to
+	  your machine via USB (specified in WUSB1.0).
+
+	  To compile this driver a module, choose M here: the module
+	  will be called "hwa-hc".
 
 config USB_IMX21_HCD
        tristate "i.MX21 HCD support"
@@ -762,3 +804,22 @@ config USB_HCD_TEST_MODE
 	  This option is of interest only to developers who need to validate
 	  their USB hardware designs.  It is not needed for normal use.  If
 	  unsure, say N.
+
+config USB_MARVELL_ERRATA_FE_9049667
+	bool "Marvell High speed detection WA"
+	depends on (MACH_ARMADA_XP || MACH_ARMADA_370) && USB_EHCI_HCD_ORION
+	default y
+	help
+	  In a370 and axp USB UTMI PHY there is an errata which causes
+	  errors in detection of high speed devices. For certain devices
+	  with low pull up values the USB MAC doesnt detect the end of the
+	  device chirp K signal and therefore remains stuck in reset
+	  state.
+	  The workaround solves this issue by modifying the UTMI PHY
+	  squelch threshold once a high speed port reset error is detected.
+	  Modifying the squelch level enables the MAC to detect the end of
+	  device chirp K signal and to come out of reset. Once the MAC
+	  comes out of reset a consecutive reset attempt is made by the
+	  USB stack. That reset attempt succeeds due to the updated squelch
+	  level. Since the optimal squelch level is device dependant the WA
+	  toggles between 2 verfied squelch levels 0xA and 0xE.

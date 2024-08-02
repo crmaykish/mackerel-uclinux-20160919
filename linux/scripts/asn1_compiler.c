@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* Simplified ASN.1 notation parser
  *
  * Copyright (C) 2012 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public Licence
+ * as published by the Free Software Foundation; either version
+ * 2 of the Licence, or (at your option) any later version.
  */
 
 #include <stdarg.h>
@@ -409,7 +413,7 @@ static void tokenise(char *buffer, char *end)
 
 			/* Handle string tokens */
 			if (isalpha(*p)) {
-				const char **dir;
+				const char **dir, *start = p;
 
 				/* Can be a directive, type name or element
 				 * name.  Find the end of the name.
@@ -625,7 +629,7 @@ int main(int argc, char **argv)
 	p = strrchr(argv[1], '/');
 	p = p ? p + 1 : argv[1];
 	grammar_name = strdup(p);
-	if (!grammar_name) {
+	if (!p) {
 		perror(NULL);
 		exit(1);
 	}
@@ -646,7 +650,7 @@ int main(int argc, char **argv)
 	}
 
 	hdr = fopen(headername, "w");
-	if (!hdr) {
+	if (!out) {
 		perror(headername);
 		exit(1);
 	}
@@ -1315,7 +1319,7 @@ static void render(FILE *out, FILE *hdr)
 	fprintf(out, " * ASN.1 parser for %s\n", grammar_name);
 	fprintf(out, " */\n");
 	fprintf(out, "#include <linux/asn1_ber_bytecode.h>\n");
-	fprintf(out, "#include \"%s.asn1.h\"\n", grammar_name);
+	fprintf(out, "#include \"%s-asn1.h\"\n", grammar_name);
 	fprintf(out, "\n");
 	if (ferror(out)) {
 		perror(outputname);

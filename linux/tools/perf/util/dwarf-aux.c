@@ -1,16 +1,26 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * dwarf-aux.c : libdw auxiliary interfaces
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ *
  */
 
-#include <errno.h>
-#include <inttypes.h>
 #include <stdbool.h>
-#include <stdlib.h>
+#include "util.h"
 #include "debug.h"
 #include "dwarf-aux.h"
-#include "strbuf.h"
-#include "string2.h"
 
 /**
  * cu_find_realpath - Find the realpath of the target file
@@ -120,22 +130,6 @@ int cu_walk_functions_at(Dwarf_Die *cu_die, Dwarf_Addr addr,
 }
 
 /**
- * die_get_linkage_name - Get the linkage name of the object
- * @dw_die: A DIE of the object
- *
- * Get the linkage name attiribute of given @dw_die.
- * For C++ binary, the linkage name will be the mangled symbol.
- */
-const char *die_get_linkage_name(Dwarf_Die *dw_die)
-{
-	Dwarf_Attribute attr;
-
-	if (dwarf_attr_integrate(dw_die, DW_AT_linkage_name, &attr) == NULL)
-		return NULL;
-	return dwarf_formstring(&attr);
-}
-
-/**
  * die_compare_name - Compare diename and tname
  * @dw_die: a DIE
  * @tname: a string of target name
@@ -151,26 +145,18 @@ bool die_compare_name(Dwarf_Die *dw_die, const char *tname)
 }
 
 /**
- * die_match_name - Match diename/linkage name and glob
+ * die_match_name - Match diename and glob
  * @dw_die: a DIE
  * @glob: a string of target glob pattern
  *
  * Glob matching the name of @dw_die and @glob. Return false if matching fail.
- * This also match linkage name.
  */
 bool die_match_name(Dwarf_Die *dw_die, const char *glob)
 {
 	const char *name;
 
 	name = dwarf_diename(dw_die);
-	if (name && strglobmatch(name, glob))
-		return true;
-	/* fall back to check linkage name */
-	name = die_get_linkage_name(dw_die);
-	if (name && strglobmatch(name, glob))
-		return true;
-
-	return false;
+	return name ? strglobmatch(name, glob) : false;
 }
 
 /**
@@ -254,8 +240,21 @@ static int die_get_attr_udata(Dwarf_Die *tp_die, unsigned int attr_name,
 {
 	Dwarf_Attribute attr;
 
-	if (dwarf_attr_integrate(tp_die, attr_name, &attr) == NULL ||
+	if (dwarf_attr(tp_die, attr_name, &attr) == NULL ||
 	    dwarf_formudata(&attr, result) != 0)
+		return -ENOENT;
+
+	return 0;
+}
+
+/* Get attribute and translate it as a sdata */
+static int die_get_attr_sdata(Dwarf_Die *tp_die, unsigned int attr_name,
+			      Dwarf_Sword *result)
+{
+	Dwarf_Attribute attr;
+
+	if (dwarf_attr(tp_die, attr_name, &attr) == NULL ||
+	    dwarf_formsdata(&attr, result) != 0)
 		return -ENOENT;
 
 	return 0;
@@ -295,58 +294,20 @@ bool die_is_func_def(Dwarf_Die *dw_die)
 }
 
 /**
- * die_entrypc - Returns entry PC (the lowest address) of a DIE
- * @dw_die: a DIE
- * @addr: where to store entry PC
- *
- * Since dwarf_entrypc() does not return entry PC if the DIE has only address
- * range, we have to use this to retrieve the lowest address from the address
- * range attribute.
- */
-int die_entrypc(Dwarf_Die *dw_die, Dwarf_Addr *addr)
-{
-	Dwarf_Addr base, end;
-	Dwarf_Attribute attr;
-
-	if (!addr)
-		return -EINVAL;
-
-	if (dwarf_entrypc(dw_die, addr) == 0)
-		return 0;
-
-	/*
-	 *  Since the dwarf_ranges() will return 0 if there is no
-	 * DW_AT_ranges attribute, we should check it first.
-	 */
-	if (!dwarf_attr(dw_die, DW_AT_ranges, &attr))
-		return -ENOENT;
-
-	return dwarf_ranges(dw_die, 0, &base, addr, &end) < 0 ? -ENOENT : 0;
-}
-
-/**
  * die_is_func_instance - Ensure that this DIE is an instance of a subprogram
  * @dw_die: a DIE
  *
  * Ensure that this DIE is an instance (which has an entry address).
- * This returns true if @dw_die is a function instance. If not, the @dw_die
- * must be a prototype. You can use die_walk_instances() to find actual
- * instances.
+ * This returns true if @dw_die is a function instance. If not, you need to
+ * call die_walk_instances() to find actual instances.
  **/
 bool die_is_func_instance(Dwarf_Die *dw_die)
 {
 	Dwarf_Addr tmp;
-	Dwarf_Attribute attr_mem;
-	int tag = dwarf_tag(dw_die);
 
-	if (tag != DW_TAG_subprogram &&
-	    tag != DW_TAG_inlined_subroutine)
-		return false;
-
-	return dwarf_entrypc(dw_die, &tmp) == 0 ||
-		dwarf_attr(dw_die, DW_AT_ranges, &attr_mem) != NULL;
+	/* Actually gcc optimizes non-inline as like as inlined */
+	return !dwarf_func_inline(dw_die) && dwarf_entrypc(dw_die, &tmp) == 0;
 }
-
 /**
  * die_get_data_member_location - Get the data-member offset
  * @mb_die: a DIE of a member of a data structure
@@ -384,9 +345,9 @@ int die_get_data_member_location(Dwarf_Die *mb_die, Dwarf_Word *offs)
 /* Get the call file index number in CU DIE */
 static int die_get_call_fileno(Dwarf_Die *in_die)
 {
-	Dwarf_Word idx;
+	Dwarf_Sword idx;
 
-	if (die_get_attr_udata(in_die, DW_AT_call_file, &idx) == 0)
+	if (die_get_attr_sdata(in_die, DW_AT_call_file, &idx) == 0)
 		return (int)idx;
 	else
 		return -ENOENT;
@@ -395,9 +356,9 @@ static int die_get_call_fileno(Dwarf_Die *in_die)
 /* Get the declared file index number in CU DIE */
 static int die_get_decl_fileno(Dwarf_Die *pdie)
 {
-	Dwarf_Word idx;
+	Dwarf_Sword idx;
 
-	if (die_get_attr_udata(pdie, DW_AT_decl_file, &idx) == 0)
+	if (die_get_attr_sdata(pdie, DW_AT_decl_file, &idx) == 0)
 		return (int)idx;
 	else
 		return -ENOENT;
@@ -623,9 +584,6 @@ static int __die_walk_instances_cb(Dwarf_Die *inst, void *data)
 	Dwarf_Die *origin;
 	int tmp;
 
-	if (!die_is_func_instance(inst))
-		return DIE_FIND_CB_CONTINUE;
-
 	attr = dwarf_attr(inst, DW_AT_abstract_origin, &attr_mem);
 	if (attr == NULL)
 		return DIE_FIND_CB_CONTINUE;
@@ -697,14 +655,15 @@ static int __die_walk_funclines_cb(Dwarf_Die *in_die, void *data)
 	if (dwarf_tag(in_die) == DW_TAG_inlined_subroutine) {
 		fname = die_get_call_file(in_die);
 		lineno = die_get_call_lineno(in_die);
-		if (fname && lineno > 0 && die_entrypc(in_die, &addr) == 0) {
+		if (fname && lineno > 0 && dwarf_entrypc(in_die, &addr) == 0) {
 			lw->retval = lw->callback(fname, lineno, addr, lw->data);
 			if (lw->retval != 0)
 				return DIE_FIND_CB_END;
 		}
-		if (!lw->recursive)
-			return DIE_FIND_CB_SIBLING;
 	}
+	if (!lw->recursive)
+		/* Don't need to search recursively */
+		return DIE_FIND_CB_SIBLING;
 
 	if (addr) {
 		fname = dwarf_decl_file(in_die);
@@ -737,7 +696,7 @@ static int __die_walk_funclines(Dwarf_Die *sp_die, bool recursive,
 	/* Handle function declaration line */
 	fname = dwarf_decl_file(sp_die);
 	if (fname && dwarf_decl_line(sp_die, &lineno) == 0 &&
-	    die_entrypc(sp_die, &addr) == 0) {
+	    dwarf_entrypc(sp_die, &addr) == 0) {
 		lw.retval = callback(fname, lineno, addr, data);
 		if (lw.retval != 0)
 			goto done;
@@ -751,10 +710,6 @@ static int __die_walk_culines_cb(Dwarf_Die *sp_die, void *data)
 {
 	struct __line_walk_param *lw = data;
 
-	/*
-	 * Since inlined function can include another inlined function in
-	 * the same file, we need to walk in it recursively.
-	 */
 	lw->retval = __die_walk_funclines(sp_die, true, lw->callback, lw->data);
 	if (lw->retval != 0)
 		return DWARF_CB_ABORT;
@@ -779,12 +734,11 @@ int die_walk_lines(Dwarf_Die *rt_die, line_walk_callback_t callback, void *data)
 	Dwarf_Lines *lines;
 	Dwarf_Line *line;
 	Dwarf_Addr addr;
-	const char *fname, *decf = NULL, *inf = NULL;
+	const char *fname, *decf = NULL;
 	int lineno, ret = 0;
 	int decl = 0, inl;
 	Dwarf_Die die_mem, *cu_die;
 	size_t nlines, i;
-	bool flag;
 
 	/* Get the CU die */
 	if (dwarf_tag(rt_die) != DW_TAG_compile_unit) {
@@ -815,12 +769,6 @@ int die_walk_lines(Dwarf_Die *rt_die, line_walk_callback_t callback, void *data)
 				  "Possible error in debuginfo.\n");
 			continue;
 		}
-		/* Skip end-of-sequence */
-		if (dwarf_lineendsequence(line, &flag) != 0 || flag)
-			continue;
-		/* Skip Non statement line-info */
-		if (dwarf_linebeginstatement(line, &flag) != 0 || !flag)
-			continue;
 		/* Filter lines based on address */
 		if (rt_die != cu_die) {
 			/*
@@ -830,21 +778,13 @@ int die_walk_lines(Dwarf_Die *rt_die, line_walk_callback_t callback, void *data)
 			 */
 			if (!dwarf_haspc(rt_die, addr))
 				continue;
-
 			if (die_find_inlinefunc(rt_die, addr, &die_mem)) {
-				/* Call-site check */
-				inf = die_get_call_file(&die_mem);
-				if ((inf && !strcmp(inf, decf)) &&
-				    die_get_call_lineno(&die_mem) == lineno)
-					goto found;
-
 				dwarf_decl_line(&die_mem, &inl);
 				if (inl != decl ||
 				    decf != dwarf_decl_file(&die_mem))
 					continue;
 			}
 		}
-found:
 		/* Get source line */
 		fname = dwarf_linesrc(line, NULL, NULL);
 
@@ -859,9 +799,8 @@ found:
 	 */
 	if (rt_die != cu_die)
 		/*
-		 * Don't need walk inlined functions recursively, because
-		 * inner inlined functions don't have the lines of the
-		 * specified function.
+		 * Don't need walk functions recursively, because nested
+		 * inlined functions don't have lines of the specified DIE.
 		 */
 		ret = __die_walk_funclines(rt_die, false, callback, data);
 	else {
@@ -976,7 +915,8 @@ int die_get_typename(Dwarf_Die *vr_die, struct strbuf *buf)
 		tmp = "*";
 	else if (tag == DW_TAG_subroutine_type) {
 		/* Function pointer */
-		return strbuf_add(buf, "(function_type)", 15);
+		strbuf_addf(buf, "(function_type)");
+		return 0;
 	} else {
 		if (!dwarf_diename(&type))
 			return -ENOENT;
@@ -987,10 +927,14 @@ int die_get_typename(Dwarf_Die *vr_die, struct strbuf *buf)
 		else if (tag == DW_TAG_enumeration_type)
 			tmp = "enum ";
 		/* Write a base name */
-		return strbuf_addf(buf, "%s%s", tmp, dwarf_diename(&type));
+		strbuf_addf(buf, "%s%s", tmp, dwarf_diename(&type));
+		return 0;
 	}
 	ret = die_get_typename(&type, buf);
-	return ret ? ret : strbuf_addstr(buf, tmp);
+	if (ret == 0)
+		strbuf_addf(buf, "%s", tmp);
+
+	return ret;
 }
 
 /**
@@ -1007,13 +951,14 @@ int die_get_varname(Dwarf_Die *vr_die, struct strbuf *buf)
 	ret = die_get_typename(vr_die, buf);
 	if (ret < 0) {
 		pr_debug("Failed to get type, make it unknown.\n");
-		ret = strbuf_add(buf, "(unknown_type)", 14);
+		strbuf_addf(buf, "(unknown_type)");
 	}
 
-	return ret < 0 ? ret : strbuf_addf(buf, "\t%s", dwarf_diename(vr_die));
+	strbuf_addf(buf, "\t%s", dwarf_diename(vr_die));
+
+	return 0;
 }
 
-#ifdef HAVE_DWARF_GETLOCATIONS_SUPPORT
 /**
  * die_get_var_innermost_scope - Get innermost scope range of given variable DIE
  * @sp_die: a subprogram DIE
@@ -1036,7 +981,7 @@ static int die_get_var_innermost_scope(Dwarf_Die *sp_die, Dwarf_Die *vr_die,
 	bool first = true;
 	const char *name;
 
-	ret = die_entrypc(sp_die, &entry);
+	ret = dwarf_entrypc(sp_die, &entry);
 	if (ret)
 		return ret;
 
@@ -1053,24 +998,22 @@ static int die_get_var_innermost_scope(Dwarf_Die *sp_die, Dwarf_Die *vr_die,
 	}
 
 	while ((offset = dwarf_ranges(&scopes[1], offset, &base,
-					&start, &end)) > 0) {
+				&start, &end)) > 0) {
 		start -= entry;
 		end -= entry;
 
 		if (first) {
-			ret = strbuf_addf(buf, "@<%s+[%" PRIu64 "-%" PRIu64,
-					  name, start, end);
+			strbuf_addf(buf, "@<%s+[%" PRIu64 "-%" PRIu64,
+				name, start, end);
 			first = false;
 		} else {
-			ret = strbuf_addf(buf, ",%" PRIu64 "-%" PRIu64,
-					  start, end);
+			strbuf_addf(buf, ",%" PRIu64 "-%" PRIu64,
+				start, end);
 		}
-		if (ret < 0)
-			goto out;
 	}
 
 	if (!first)
-		ret = strbuf_add(buf, "]>", 2);
+		strbuf_addf(buf, "]>");
 
 out:
 	free(scopes);
@@ -1099,7 +1042,7 @@ int die_get_var_range(Dwarf_Die *sp_die, Dwarf_Die *vr_die, struct strbuf *buf)
 	bool first = true;
 	const char *name;
 
-	ret = die_entrypc(sp_die, &entry);
+	ret = dwarf_entrypc(sp_die, &entry);
 	if (ret)
 		return ret;
 
@@ -1110,218 +1053,30 @@ int die_get_var_range(Dwarf_Die *sp_die, Dwarf_Die *vr_die, struct strbuf *buf)
 	if (dwarf_attr(vr_die, DW_AT_location, &attr) == NULL)
 		return -EINVAL;
 
-	while ((offset = dwarf_getlocations(&attr, offset, &base,
-					&start, &end, &op, &nops)) > 0) {
+	while ((offset = dwarf_getlocations(
+				&attr, offset, &base,
+				&start, &end, &op, &nops)) > 0) {
 		if (start == 0) {
 			/* Single Location Descriptions */
 			ret = die_get_var_innermost_scope(sp_die, vr_die, buf);
-			goto out;
+			return ret;
 		}
 
 		/* Location Lists */
 		start -= entry;
 		end -= entry;
 		if (first) {
-			ret = strbuf_addf(buf, "@<%s+[%" PRIu64 "-%" PRIu64,
-					  name, start, end);
+			strbuf_addf(buf, "@<%s+[%" PRIu64 "-%" PRIu64,
+				name, start, end);
 			first = false;
 		} else {
-			ret = strbuf_addf(buf, ",%" PRIu64 "-%" PRIu64,
-					  start, end);
+			strbuf_addf(buf, ",%" PRIu64 "-%" PRIu64,
+				start, end);
 		}
-		if (ret < 0)
-			goto out;
 	}
 
 	if (!first)
-		ret = strbuf_add(buf, "]>", 2);
-out:
+		strbuf_addf(buf, "]>");
+
 	return ret;
-}
-#else
-int die_get_var_range(Dwarf_Die *sp_die __maybe_unused,
-		      Dwarf_Die *vr_die __maybe_unused,
-		      struct strbuf *buf __maybe_unused)
-{
-	return -ENOTSUP;
-}
-#endif
-
-/*
- * die_has_loclist - Check if DW_AT_location of @vr_die is a location list
- * @vr_die: a variable DIE
- */
-static bool die_has_loclist(Dwarf_Die *vr_die)
-{
-	Dwarf_Attribute loc;
-	int tag = dwarf_tag(vr_die);
-
-	if (tag != DW_TAG_formal_parameter &&
-	    tag != DW_TAG_variable)
-		return false;
-
-	return (dwarf_attr_integrate(vr_die, DW_AT_location, &loc) &&
-		dwarf_whatform(&loc) == DW_FORM_sec_offset);
-}
-
-/*
- * die_is_optimized_target - Check if target program is compiled with
- * optimization
- * @cu_die: a CU DIE
- *
- * For any object in given CU whose DW_AT_location is a location list,
- * target program is compiled with optimization. This is applicable to
- * clang as well.
- */
-bool die_is_optimized_target(Dwarf_Die *cu_die)
-{
-	Dwarf_Die tmp_die;
-
-	if (die_has_loclist(cu_die))
-		return true;
-
-	if (!dwarf_child(cu_die, &tmp_die) &&
-	    die_is_optimized_target(&tmp_die))
-		return true;
-
-	if (!dwarf_siblingof(cu_die, &tmp_die) &&
-	    die_is_optimized_target(&tmp_die))
-		return true;
-
-	return false;
-}
-
-/*
- * die_search_idx - Search index of given line address
- * @lines: Line records of single CU
- * @nr_lines: Number of @lines
- * @addr: address we are looking for
- * @idx: index to be set by this function (return value)
- *
- * Search for @addr by looping over every lines of CU. If address
- * matches, set index of that line in @idx. Note that single source
- * line can have multiple line records. i.e. single source line can
- * have multiple index.
- */
-static bool die_search_idx(Dwarf_Lines *lines, unsigned long nr_lines,
-			   Dwarf_Addr addr, unsigned long *idx)
-{
-	unsigned long i;
-	Dwarf_Addr tmp;
-
-	for (i = 0; i < nr_lines; i++) {
-		if (dwarf_lineaddr(dwarf_onesrcline(lines, i), &tmp))
-			return false;
-
-		if (tmp == addr) {
-			*idx = i;
-			return true;
-		}
-	}
-	return false;
-}
-
-/*
- * die_get_postprologue_addr - Search next address after function prologue
- * @entrypc_idx: entrypc index
- * @lines: Line records of single CU
- * @nr_lines: Number of @lines
- * @hignpc: high PC address of function
- * @postprologue_addr: Next address after function prologue (return value)
- *
- * Look for prologue-end marker. If there is no explicit marker, return
- * address of next line record or next source line.
- */
-static bool die_get_postprologue_addr(unsigned long entrypc_idx,
-				      Dwarf_Lines *lines,
-				      unsigned long nr_lines,
-				      Dwarf_Addr highpc,
-				      Dwarf_Addr *postprologue_addr)
-{
-	unsigned long i;
-	int entrypc_lno, lno;
-	Dwarf_Line *line;
-	Dwarf_Addr addr;
-	bool p_end;
-
-	/* entrypc_lno is actual source line number */
-	line = dwarf_onesrcline(lines, entrypc_idx);
-	if (dwarf_lineno(line, &entrypc_lno))
-		return false;
-
-	for (i = entrypc_idx; i < nr_lines; i++) {
-		line = dwarf_onesrcline(lines, i);
-
-		if (dwarf_lineaddr(line, &addr) ||
-		    dwarf_lineno(line, &lno)    ||
-		    dwarf_lineprologueend(line, &p_end))
-			return false;
-
-		/* highpc is exclusive. [entrypc,highpc) */
-		if (addr >= highpc)
-			break;
-
-		/* clang supports prologue-end marker */
-		if (p_end)
-			break;
-
-		/* Actual next line in source */
-		if (lno != entrypc_lno)
-			break;
-
-		/*
-		 * Single source line can have multiple line records.
-		 * For Example,
-		 *     void foo() { printf("hello\n"); }
-		 * contains two line records. One points to declaration and
-		 * other points to printf() line. Variable 'lno' won't get
-		 * incremented in this case but 'i' will.
-		 */
-		if (i != entrypc_idx)
-			break;
-	}
-
-	dwarf_lineaddr(line, postprologue_addr);
-	if (*postprologue_addr >= highpc)
-		dwarf_lineaddr(dwarf_onesrcline(lines, i - 1),
-			       postprologue_addr);
-
-	return true;
-}
-
-/*
- * die_skip_prologue - Use next address after prologue as probe location
- * @sp_die: a subprogram DIE
- * @cu_die: a CU DIE
- * @entrypc: entrypc of the function
- *
- * Function prologue prepares stack and registers before executing function
- * logic. When target program is compiled without optimization, function
- * parameter information is only valid after prologue. When we probe entrypc
- * of the function, and try to record function parameter, it contains
- * garbage value.
- */
-void die_skip_prologue(Dwarf_Die *sp_die, Dwarf_Die *cu_die,
-		       Dwarf_Addr *entrypc)
-{
-	size_t nr_lines = 0;
-	unsigned long entrypc_idx = 0;
-	Dwarf_Lines *lines = NULL;
-	Dwarf_Addr postprologue_addr;
-	Dwarf_Addr highpc;
-
-	if (dwarf_highpc(sp_die, &highpc))
-		return;
-
-	if (dwarf_getsrclines(cu_die, &lines, &nr_lines))
-		return;
-
-	if (!die_search_idx(lines, nr_lines, *entrypc, &entrypc_idx))
-		return;
-
-	if (!die_get_postprologue_addr(entrypc_idx, lines, nr_lines,
-				       highpc, &postprologue_addr))
-		return;
-
-	*entrypc = postprologue_addr;
 }

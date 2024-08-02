@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * z/VM IUCV hypervisor console (HVC) device driver
  *
@@ -1252,7 +1251,7 @@ static int hvc_iucv_setup_filter(const char *val)
 	if (size > MAX_VMID_FILTER)
 		return -ENOSPC;
 
-	array = kcalloc(size, 8, GFP_KERNEL);
+	array = kzalloc(size * 8, GFP_KERNEL);
 	if (!array)
 		return -ENOMEM;
 
@@ -1470,9 +1469,7 @@ out_error:
  */
 static	int __init hvc_iucv_config(char *val)
 {
-	if (kstrtoul(val, 10, &hvc_iucv_devices))
-		pr_warn("hvc_iucv= invalid parameter value '%s'\n", val);
-	return 1;
+	 return kstrtoul(val, 10, &hvc_iucv_devices);
 }
 
 

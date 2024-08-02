@@ -1,8 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * System Control and Power Interface (SCPI) Protocol based clock driver
  *
  * Copyright (C) 2015 ARM Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/clk-provider.h>
@@ -60,15 +71,15 @@ static const struct clk_ops scpi_clk_ops = {
 };
 
 /* find closest match to given frequency in OPP table */
-static long __scpi_dvfs_round_rate(struct scpi_clk *clk, unsigned long rate)
+static int __scpi_dvfs_round_rate(struct scpi_clk *clk, unsigned long rate)
 {
 	int idx;
-	unsigned long fmin = 0, fmax = ~0, ftmp;
+	u32 fmin = 0, fmax = ~0, ftmp;
 	const struct scpi_opp *opp = clk->info->opps;
 
 	for (idx = 0; idx < clk->info->count; idx++, opp++) {
 		ftmp = opp->freq;
-		if (ftmp >= rate) {
+		if (ftmp >= (u32)rate) {
 			if (ftmp <= fmax)
 				fmax = ftmp;
 			break;
@@ -135,16 +146,16 @@ static const struct of_device_id scpi_clk_match[] = {
 	{}
 };
 
-static int
+static struct clk *
 scpi_clk_ops_init(struct device *dev, const struct of_device_id *match,
 		  struct scpi_clk *sclk, const char *name)
 {
 	struct clk_init_data init;
+	struct clk *clk;
 	unsigned long min = 0, max = 0;
-	int ret;
 
 	init.name = name;
-	init.flags = 0;
+	init.flags = CLK_IS_ROOT;
 	init.num_parents = 0;
 	init.ops = match->data;
 	sclk->hw.init = &init;
@@ -153,18 +164,18 @@ scpi_clk_ops_init(struct device *dev, const struct of_device_id *match,
 	if (init.ops == &scpi_dvfs_ops) {
 		sclk->info = sclk->scpi_ops->dvfs_get_info(sclk->id);
 		if (IS_ERR(sclk->info))
-			return PTR_ERR(sclk->info);
+			return NULL;
 	} else if (init.ops == &scpi_clk_ops) {
 		if (sclk->scpi_ops->clk_get_range(sclk->id, &min, &max) || !max)
-			return -EINVAL;
+			return NULL;
 	} else {
-		return -EINVAL;
+		return NULL;
 	}
 
-	ret = devm_clk_hw_register(dev, &sclk->hw);
-	if (!ret && max)
+	clk = devm_clk_register(dev, &sclk->hw);
+	if (!IS_ERR(clk) && max)
 		clk_hw_set_rate_range(&sclk->hw, min, max);
-	return ret;
+	return clk;
 }
 
 struct scpi_clk_data {
@@ -172,7 +183,7 @@ struct scpi_clk_data {
 	unsigned int clk_num;
 };
 
-static struct clk_hw *
+static struct clk *
 scpi_of_clk_src_get(struct of_phandle_args *clkspec, void *data)
 {
 	struct scpi_clk *sclk;
@@ -182,7 +193,7 @@ scpi_of_clk_src_get(struct of_phandle_args *clkspec, void *data)
 	for (count = 0; count < clk_data->clk_num; count++) {
 		sclk = clk_data->clk[count];
 		if (idx == sclk->id)
-			return &sclk->hw;
+			return sclk->hw.clk;
 	}
 
 	return ERR_PTR(-EINVAL);
@@ -191,12 +202,13 @@ scpi_of_clk_src_get(struct of_phandle_args *clkspec, void *data)
 static int scpi_clk_add(struct device *dev, struct device_node *np,
 			const struct of_device_id *match)
 {
-	int idx, count, err;
+	struct clk **clks;
+	int idx, count;
 	struct scpi_clk_data *clk_data;
 
 	count = of_property_count_strings(np, "clock-output-names");
 	if (count < 0) {
-		dev_err(dev, "%pOFn: invalid clock output count\n", np);
+		dev_err(dev, "%s: invalid clock output count\n", np->name);
 		return -EINVAL;
 	}
 
@@ -210,6 +222,10 @@ static int scpi_clk_add(struct device *dev, struct device_node *np,
 	if (!clk_data->clk)
 		return -ENOMEM;
 
+	clks = devm_kcalloc(dev, count, sizeof(*clks), GFP_KERNEL);
+	if (!clks)
+		return -ENOMEM;
+
 	for (idx = 0; idx < count; idx++) {
 		struct scpi_clk *sclk;
 		const char *name;
@@ -221,29 +237,27 @@ static int scpi_clk_add(struct device *dev, struct device_node *np,
 
 		if (of_property_read_string_index(np, "clock-output-names",
 						  idx, &name)) {
-			dev_err(dev, "invalid clock name @ %pOFn\n", np);
+			dev_err(dev, "invalid clock name @ %s\n", np->name);
 			return -EINVAL;
 		}
 
 		if (of_property_read_u32_index(np, "clock-indices",
 					       idx, &val)) {
-			dev_err(dev, "invalid clock index @ %pOFn\n", np);
+			dev_err(dev, "invalid clock index @ %s\n", np->name);
 			return -EINVAL;
 		}
 
 		sclk->id = val;
 
-		err = scpi_clk_ops_init(dev, match, sclk, name);
-		if (err) {
+		clks[idx] = scpi_clk_ops_init(dev, match, sclk, name);
+		if (IS_ERR_OR_NULL(clks[idx]))
 			dev_err(dev, "failed to register clock '%s'\n", name);
-			return err;
-		}
-
-		dev_dbg(dev, "Registered clock '%s'\n", name);
+		else
+			dev_dbg(dev, "Registered clock '%s'\n", name);
 		clk_data->clk[idx] = sclk;
 	}
 
-	return of_clk_add_hw_provider(np, scpi_of_clk_src_get, clk_data);
+	return of_clk_add_provider(np, scpi_of_clk_src_get, clk_data);
 }
 
 static int scpi_clocks_remove(struct platform_device *pdev)
@@ -281,15 +295,13 @@ static int scpi_clocks_probe(struct platform_device *pdev)
 			of_node_put(child);
 			return ret;
 		}
-
-		if (match->data != &scpi_dvfs_ops)
-			continue;
-		/* Add the virtual cpufreq device if it's DVFS clock provider */
-		cpufreq_dev = platform_device_register_simple("scpi-cpufreq",
-							      -1, NULL, 0);
-		if (IS_ERR(cpufreq_dev))
-			pr_warn("unable to register cpufreq device");
 	}
+	/* Add the virtual cpufreq device */
+	cpufreq_dev = platform_device_register_simple("scpi-cpufreq",
+						      -1, NULL, 0);
+	if (!cpufreq_dev)
+		pr_warn("unable to register cpufreq device");
+
 	return 0;
 }
 

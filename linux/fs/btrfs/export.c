@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
-
 #include <linux/fs.h>
 #include <linux/types.h>
 #include "ctree.h"
@@ -32,8 +30,8 @@ static int btrfs_encode_fh(struct inode *inode, u32 *fh, int *max_len,
 	len  = BTRFS_FID_SIZE_NON_CONNECTABLE;
 	type = FILEID_BTRFS_WITHOUT_PARENT;
 
-	fid->objectid = btrfs_ino(BTRFS_I(inode));
-	fid->root_objectid = BTRFS_I(inode)->root->root_key.objectid;
+	fid->objectid = btrfs_ino(inode);
+	fid->root_objectid = BTRFS_I(inode)->root->objectid;
 	fid->gen = inode->i_generation;
 
 	if (parent) {
@@ -41,7 +39,7 @@ static int btrfs_encode_fh(struct inode *inode, u32 *fh, int *max_len,
 
 		fid->parent_objectid = BTRFS_I(parent)->location.objectid;
 		fid->parent_gen = parent->i_generation;
-		parent_root_id = BTRFS_I(parent)->root->root_key.objectid;
+		parent_root_id = BTRFS_I(parent)->root->objectid;
 
 		if (parent_root_id != fid->root_objectid) {
 			fid->parent_root_objectid = parent_root_id;
@@ -57,9 +55,9 @@ static int btrfs_encode_fh(struct inode *inode, u32 *fh, int *max_len,
 	return type;
 }
 
-struct dentry *btrfs_get_dentry(struct super_block *sb, u64 objectid,
-				u64 root_objectid, u64 generation,
-				int check_generation)
+static struct dentry *btrfs_get_dentry(struct super_block *sb, u64 objectid,
+				       u64 root_objectid, u32 generation,
+				       int check_generation)
 {
 	struct btrfs_fs_info *fs_info = btrfs_sb(sb);
 	struct btrfs_root *root;
@@ -152,10 +150,9 @@ static struct dentry *btrfs_fh_to_dentry(struct super_block *sb, struct fid *fh,
 	return btrfs_get_dentry(sb, objectid, root_objectid, generation, 1);
 }
 
-struct dentry *btrfs_get_parent(struct dentry *child)
+static struct dentry *btrfs_get_parent(struct dentry *child)
 {
 	struct inode *dir = d_inode(child);
-	struct btrfs_fs_info *fs_info = btrfs_sb(dir->i_sb);
 	struct btrfs_root *root = BTRFS_I(dir)->root;
 	struct btrfs_path *path;
 	struct extent_buffer *leaf;
@@ -168,13 +165,13 @@ struct dentry *btrfs_get_parent(struct dentry *child)
 	if (!path)
 		return ERR_PTR(-ENOMEM);
 
-	if (btrfs_ino(BTRFS_I(dir)) == BTRFS_FIRST_FREE_OBJECTID) {
+	if (btrfs_ino(dir) == BTRFS_FIRST_FREE_OBJECTID) {
 		key.objectid = root->root_key.objectid;
 		key.type = BTRFS_ROOT_BACKREF_KEY;
 		key.offset = (u64)-1;
-		root = fs_info->tree_root;
+		root = root->fs_info->tree_root;
 	} else {
-		key.objectid = btrfs_ino(BTRFS_I(dir));
+		key.objectid = btrfs_ino(dir);
 		key.type = BTRFS_INODE_REF_KEY;
 		key.offset = (u64)-1;
 	}
@@ -182,15 +179,8 @@ struct dentry *btrfs_get_parent(struct dentry *child)
 	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 	if (ret < 0)
 		goto fail;
-	if (ret == 0) {
-		/*
-		 * Key with offset of -1 found, there would have to exist an
-		 * inode with such number or a root with such id.
-		 */
-		ret = -EUCLEAN;
-		goto fail;
-	}
 
+	BUG_ON(ret == 0); /* Key with offset of -1 found */
 	if (path->slots[0] == 0) {
 		ret = -ENOENT;
 		goto fail;
@@ -215,13 +205,13 @@ struct dentry *btrfs_get_parent(struct dentry *child)
 	btrfs_free_path(path);
 
 	if (found_key.type == BTRFS_ROOT_BACKREF_KEY) {
-		return btrfs_get_dentry(fs_info->sb, key.objectid,
+		return btrfs_get_dentry(root->fs_info->sb, key.objectid,
 					found_key.offset, 0, 0);
 	}
 
 	key.type = BTRFS_INODE_ITEM_KEY;
 	key.offset = 0;
-	return d_obtain_alias(btrfs_iget(fs_info->sb, &key, root, NULL));
+	return d_obtain_alias(btrfs_iget(root->fs_info->sb, &key, root, NULL));
 fail:
 	btrfs_free_path(path);
 	return ERR_PTR(ret);
@@ -232,7 +222,6 @@ static int btrfs_get_name(struct dentry *parent, char *name,
 {
 	struct inode *inode = d_inode(child);
 	struct inode *dir = d_inode(parent);
-	struct btrfs_fs_info *fs_info = btrfs_sb(inode->i_sb);
 	struct btrfs_path *path;
 	struct btrfs_root *root = BTRFS_I(dir)->root;
 	struct btrfs_inode_ref *iref;
@@ -244,10 +233,13 @@ static int btrfs_get_name(struct dentry *parent, char *name,
 	int ret;
 	u64 ino;
 
+	if (!dir || !inode)
+		return -EINVAL;
+
 	if (!S_ISDIR(dir->i_mode))
 		return -EINVAL;
 
-	ino = btrfs_ino(BTRFS_I(inode));
+	ino = btrfs_ino(inode);
 
 	path = btrfs_alloc_path();
 	if (!path)
@@ -258,10 +250,10 @@ static int btrfs_get_name(struct dentry *parent, char *name,
 		key.objectid = BTRFS_I(inode)->root->root_key.objectid;
 		key.type = BTRFS_ROOT_BACKREF_KEY;
 		key.offset = (u64)-1;
-		root = fs_info->tree_root;
+		root = root->fs_info->tree_root;
 	} else {
 		key.objectid = ino;
-		key.offset = btrfs_ino(BTRFS_I(dir));
+		key.offset = btrfs_ino(dir);
 		key.type = BTRFS_INODE_REF_KEY;
 	}
 

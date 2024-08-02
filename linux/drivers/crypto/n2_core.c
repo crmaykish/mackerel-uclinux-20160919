@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* n2_core.c: Niagara2 Stream Processing Unit (SPU) crypto support.
  *
  * Copyright (C) 2010, 2011 David S. Miller <davem@davemloft.net>
@@ -17,7 +16,7 @@
 #include <crypto/md5.h>
 #include <crypto/sha.h>
 #include <crypto/aes.h>
-#include <crypto/internal/des.h>
+#include <crypto/des.h>
 #include <linux/mutex.h>
 #include <linux/delay.h>
 #include <linux/sched.h>
@@ -64,11 +63,6 @@ struct spu_queue {
 	unsigned int		irq;
 
 	struct list_head	list;
-};
-
-struct spu_qreg {
-	struct spu_queue	*queue;
-	unsigned long		type;
 };
 
 static struct spu_queue **cpu_to_cwq;
@@ -247,7 +241,7 @@ static inline bool n2_should_run_async(struct spu_queue *qp, int this_len)
 
 struct n2_ahash_alg {
 	struct list_head	entry;
-	const u8		*hash_zero;
+	const char		*hash_zero;
 	const u32		*hash_init;
 	u8			hw_op_hashsz;
 	u8			digest_size;
@@ -360,16 +354,6 @@ static int n2_hash_async_finup(struct ahash_request *req)
 	return crypto_ahash_finup(&rctx->fallback_req);
 }
 
-static int n2_hash_async_noimport(struct ahash_request *req, const void *in)
-{
-	return -ENOSYS;
-}
-
-static int n2_hash_async_noexport(struct ahash_request *req, void *out)
-{
-	return -ENOSYS;
-}
-
 static int n2_hash_cra_init(struct crypto_tfm *tfm)
 {
 	const char *fallback_driver_name = crypto_tfm_alg_name(tfm);
@@ -470,6 +454,8 @@ static int n2_hmac_async_setkey(struct crypto_ahash *tfm, const u8 *key,
 		return err;
 
 	shash->tfm = child_shash;
+	shash->flags = crypto_ahash_get_flags(tfm) &
+		CRYPTO_TFM_REQ_MAY_SLEEP;
 
 	bs = crypto_shash_blocksize(child_shash);
 	ds = crypto_shash_digestsize(child_shash);
@@ -760,13 +746,21 @@ static int n2_des_setkey(struct crypto_ablkcipher *cipher, const u8 *key,
 	struct crypto_tfm *tfm = crypto_ablkcipher_tfm(cipher);
 	struct n2_cipher_context *ctx = crypto_tfm_ctx(tfm);
 	struct n2_cipher_alg *n2alg = n2_cipher_alg(tfm);
+	u32 tmp[DES_EXPKEY_WORDS];
 	int err;
 
-	err = verify_ablkcipher_des_key(cipher, key);
-	if (err)
-		return err;
-
 	ctx->enc_type = n2alg->enc_type;
+
+	if (keylen != DES_KEY_SIZE) {
+		crypto_ablkcipher_set_flags(cipher, CRYPTO_TFM_RES_BAD_KEY_LEN);
+		return -EINVAL;
+	}
+
+	err = des_ekey(tmp, key);
+	if (err == 0 && (tfm->crt_flags & CRYPTO_TFM_REQ_WEAK_KEY)) {
+		tfm->crt_flags |= CRYPTO_TFM_RES_WEAK_KEY;
+		return -EINVAL;
+	}
 
 	ctx->key_len = keylen;
 	memcpy(ctx->key.des, key, keylen);
@@ -779,14 +773,13 @@ static int n2_3des_setkey(struct crypto_ablkcipher *cipher, const u8 *key,
 	struct crypto_tfm *tfm = crypto_ablkcipher_tfm(cipher);
 	struct n2_cipher_context *ctx = crypto_tfm_ctx(tfm);
 	struct n2_cipher_alg *n2alg = n2_cipher_alg(tfm);
-	int err;
-
-	err = verify_ablkcipher_des3_key(cipher, key);
-	if (err)
-		return err;
 
 	ctx->enc_type = n2alg->enc_type;
 
+	if (keylen != (3 * DES_KEY_SIZE)) {
+		crypto_ablkcipher_set_flags(cipher, CRYPTO_TFM_RES_BAD_KEY_LEN);
+		return -EINVAL;
+	}
 	ctx->key_len = keylen;
 	memcpy(ctx->key.des3, key, keylen);
 	return 0;
@@ -1274,70 +1267,86 @@ static LIST_HEAD(cipher_algs);
 
 struct n2_hash_tmpl {
 	const char	*name;
-	const u8	*hash_zero;
+	const char	*hash_zero;
 	const u32	*hash_init;
 	u8		hw_op_hashsz;
 	u8		digest_size;
-	u8		statesize;
 	u8		block_size;
 	u8		auth_type;
 	u8		hmac_type;
 };
 
-static const u32 n2_md5_init[MD5_HASH_WORDS] = {
+static const char md5_zero[MD5_DIGEST_SIZE] = {
+	0xd4, 0x1d, 0x8c, 0xd9, 0x8f, 0x00, 0xb2, 0x04,
+	0xe9, 0x80, 0x09, 0x98, 0xec, 0xf8, 0x42, 0x7e,
+};
+static const u32 md5_init[MD5_HASH_WORDS] = {
 	cpu_to_le32(MD5_H0),
 	cpu_to_le32(MD5_H1),
 	cpu_to_le32(MD5_H2),
 	cpu_to_le32(MD5_H3),
 };
-static const u32 n2_sha1_init[SHA1_DIGEST_SIZE / 4] = {
+static const char sha1_zero[SHA1_DIGEST_SIZE] = {
+	0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32,
+	0x55, 0xbf, 0xef, 0x95, 0x60, 0x18, 0x90, 0xaf, 0xd8,
+	0x07, 0x09
+};
+static const u32 sha1_init[SHA1_DIGEST_SIZE / 4] = {
 	SHA1_H0, SHA1_H1, SHA1_H2, SHA1_H3, SHA1_H4,
 };
-static const u32 n2_sha256_init[SHA256_DIGEST_SIZE / 4] = {
+static const char sha256_zero[SHA256_DIGEST_SIZE] = {
+	0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a,
+	0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24, 0x27, 0xae,
+	0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99,
+	0x1b, 0x78, 0x52, 0xb8, 0x55
+};
+static const u32 sha256_init[SHA256_DIGEST_SIZE / 4] = {
 	SHA256_H0, SHA256_H1, SHA256_H2, SHA256_H3,
 	SHA256_H4, SHA256_H5, SHA256_H6, SHA256_H7,
 };
-static const u32 n2_sha224_init[SHA256_DIGEST_SIZE / 4] = {
+static const char sha224_zero[SHA224_DIGEST_SIZE] = {
+	0xd1, 0x4a, 0x02, 0x8c, 0x2a, 0x3a, 0x2b, 0xc9, 0x47,
+	0x61, 0x02, 0xbb, 0x28, 0x82, 0x34, 0xc4, 0x15, 0xa2,
+	0xb0, 0x1f, 0x82, 0x8e, 0xa6, 0x2a, 0xc5, 0xb3, 0xe4,
+	0x2f
+};
+static const u32 sha224_init[SHA256_DIGEST_SIZE / 4] = {
 	SHA224_H0, SHA224_H1, SHA224_H2, SHA224_H3,
 	SHA224_H4, SHA224_H5, SHA224_H6, SHA224_H7,
 };
 
 static const struct n2_hash_tmpl hash_tmpls[] = {
 	{ .name		= "md5",
-	  .hash_zero	= md5_zero_message_hash,
-	  .hash_init	= n2_md5_init,
+	  .hash_zero	= md5_zero,
+	  .hash_init	= md5_init,
 	  .auth_type	= AUTH_TYPE_MD5,
 	  .hmac_type	= AUTH_TYPE_HMAC_MD5,
 	  .hw_op_hashsz	= MD5_DIGEST_SIZE,
 	  .digest_size	= MD5_DIGEST_SIZE,
-	  .statesize	= sizeof(struct md5_state),
 	  .block_size	= MD5_HMAC_BLOCK_SIZE },
 	{ .name		= "sha1",
-	  .hash_zero	= sha1_zero_message_hash,
-	  .hash_init	= n2_sha1_init,
+	  .hash_zero	= sha1_zero,
+	  .hash_init	= sha1_init,
 	  .auth_type	= AUTH_TYPE_SHA1,
 	  .hmac_type	= AUTH_TYPE_HMAC_SHA1,
 	  .hw_op_hashsz	= SHA1_DIGEST_SIZE,
 	  .digest_size	= SHA1_DIGEST_SIZE,
-	  .statesize	= sizeof(struct sha1_state),
 	  .block_size	= SHA1_BLOCK_SIZE },
 	{ .name		= "sha256",
-	  .hash_zero	= sha256_zero_message_hash,
-	  .hash_init	= n2_sha256_init,
+	  .hash_zero	= sha256_zero,
+	  .hash_init	= sha256_init,
 	  .auth_type	= AUTH_TYPE_SHA256,
 	  .hmac_type	= AUTH_TYPE_HMAC_SHA256,
 	  .hw_op_hashsz	= SHA256_DIGEST_SIZE,
 	  .digest_size	= SHA256_DIGEST_SIZE,
-	  .statesize	= sizeof(struct sha256_state),
 	  .block_size	= SHA256_BLOCK_SIZE },
 	{ .name		= "sha224",
-	  .hash_zero	= sha224_zero_message_hash,
-	  .hash_init	= n2_sha224_init,
+	  .hash_zero	= sha224_zero,
+	  .hash_init	= sha224_init,
 	  .auth_type	= AUTH_TYPE_SHA256,
 	  .hmac_type	= AUTH_TYPE_RESERVED,
 	  .hw_op_hashsz	= SHA256_DIGEST_SIZE,
 	  .digest_size	= SHA224_DIGEST_SIZE,
-	  .statesize	= sizeof(struct sha256_state),
 	  .block_size	= SHA224_BLOCK_SIZE },
 };
 #define NUM_HASH_TMPLS ARRAY_SIZE(hash_tmpls)
@@ -1474,18 +1483,16 @@ static int __n2_register_one_ahash(const struct n2_hash_tmpl *tmpl)
 	ahash->final = n2_hash_async_final;
 	ahash->finup = n2_hash_async_finup;
 	ahash->digest = n2_hash_async_digest;
-	ahash->export = n2_hash_async_noexport;
-	ahash->import = n2_hash_async_noimport;
 
 	halg = &ahash->halg;
 	halg->digestsize = tmpl->digest_size;
-	halg->statesize = tmpl->statesize;
 
 	base = &halg->base;
 	snprintf(base->cra_name, CRYPTO_MAX_ALG_NAME, "%s", tmpl->name);
 	snprintf(base->cra_driver_name, CRYPTO_MAX_ALG_NAME, "%s-n2", tmpl->name);
 	base->cra_priority = N2_CRA_PRIORITY;
-	base->cra_flags = CRYPTO_ALG_KERN_DRIVER_ONLY |
+	base->cra_flags = CRYPTO_ALG_TYPE_AHASH |
+			  CRYPTO_ALG_KERN_DRIVER_ONLY |
 			  CRYPTO_ALG_NEED_FALLBACK;
 	base->cra_blocksize = tmpl->block_size;
 	base->cra_ctxsize = sizeof(struct n2_hash_ctx);
@@ -1612,7 +1619,7 @@ static void *new_queue(unsigned long q_type)
 
 static void free_queue(void *p, unsigned long q_type)
 {
-	kmem_cache_free(queue_cache[q_type - 1], p);
+	return kmem_cache_free(queue_cache[q_type - 1], p);
 }
 
 static int queue_cache_init(void)
@@ -1634,7 +1641,6 @@ static int queue_cache_init(void)
 					  CWQ_ENTRY_SIZE, 0, NULL);
 	if (!queue_cache[HV_NCS_QTYPE_CWQ - 1]) {
 		kmem_cache_destroy(queue_cache[HV_NCS_QTYPE_MAU - 1]);
-		queue_cache[HV_NCS_QTYPE_MAU - 1] = NULL;
 		return -ENOMEM;
 	}
 	return 0;
@@ -1644,31 +1650,33 @@ static void queue_cache_destroy(void)
 {
 	kmem_cache_destroy(queue_cache[HV_NCS_QTYPE_MAU - 1]);
 	kmem_cache_destroy(queue_cache[HV_NCS_QTYPE_CWQ - 1]);
-	queue_cache[HV_NCS_QTYPE_MAU - 1] = NULL;
-	queue_cache[HV_NCS_QTYPE_CWQ - 1] = NULL;
 }
 
-static long spu_queue_register_workfn(void *arg)
+static int spu_queue_register(struct spu_queue *p, unsigned long q_type)
 {
-	struct spu_qreg *qr = arg;
-	struct spu_queue *p = qr->queue;
-	unsigned long q_type = qr->type;
+	cpumask_var_t old_allowed;
 	unsigned long hv_ret;
+
+	if (cpumask_empty(&p->sharing))
+		return -EINVAL;
+
+	if (!alloc_cpumask_var(&old_allowed, GFP_KERNEL))
+		return -ENOMEM;
+
+	cpumask_copy(old_allowed, &current->cpus_allowed);
+
+	set_cpus_allowed_ptr(current, &p->sharing);
 
 	hv_ret = sun4v_ncs_qconf(q_type, __pa(p->q),
 				 CWQ_NUM_ENTRIES, &p->qhandle);
 	if (!hv_ret)
 		sun4v_ncs_sethead_marker(p->qhandle, 0);
 
-	return hv_ret ? -EINVAL : 0;
-}
+	set_cpus_allowed_ptr(current, old_allowed);
 
-static int spu_queue_register(struct spu_queue *p, unsigned long q_type)
-{
-	int cpu = cpumask_any_and(&p->sharing, cpu_online_mask);
-	struct spu_qreg qr = { .queue = p, .type = q_type };
+	free_cpumask_var(old_allowed);
 
-	return work_on_cpu_safe(cpu, spu_queue_register_workfn, &qr);
+	return (hv_ret ? -EINVAL : 0);
 }
 
 static int spu_queue_setup(struct spu_queue *p)
@@ -1742,8 +1750,8 @@ static int spu_mdesc_walk_arcs(struct mdesc_handle *mdesc,
 			continue;
 		id = mdesc_get_property(mdesc, tgt, "id", NULL);
 		if (table[*id] != NULL) {
-			dev_err(&dev->dev, "%pOF: SPU cpu slot already set.\n",
-				dev->dev.of_node);
+			dev_err(&dev->dev, "%s: SPU cpu slot already set.\n",
+				dev->dev.of_node->full_name);
 			return -EINVAL;
 		}
 		cpumask_set_cpu(*id, &p->sharing);
@@ -1763,8 +1771,8 @@ static int handle_exec_unit(struct spu_mdesc_info *ip, struct list_head *list,
 
 	p = kzalloc(sizeof(struct spu_queue), GFP_KERNEL);
 	if (!p) {
-		dev_err(&dev->dev, "%pOF: Could not allocate SPU queue.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Could not allocate SPU queue.\n",
+			dev->dev.of_node->full_name);
 		return -ENOMEM;
 	}
 
@@ -1916,12 +1924,12 @@ static int grab_global_resources(void)
 		goto out_hvapi_release;
 
 	err = -ENOMEM;
-	cpu_to_cwq = kcalloc(NR_CPUS, sizeof(struct spu_queue *),
+	cpu_to_cwq = kzalloc(sizeof(struct spu_queue *) * NR_CPUS,
 			     GFP_KERNEL);
 	if (!cpu_to_cwq)
 		goto out_queue_cache_destroy;
 
-	cpu_to_mau = kcalloc(NR_CPUS, sizeof(struct spu_queue *),
+	cpu_to_mau = kzalloc(sizeof(struct spu_queue *) * NR_CPUS,
 			     GFP_KERNEL);
 	if (!cpu_to_mau)
 		goto out_free_cwq_table;
@@ -1974,8 +1982,10 @@ static struct n2_crypto *alloc_n2cp(void)
 
 static void free_n2cp(struct n2_crypto *np)
 {
-	kfree(np->cwq_info.ino_table);
-	np->cwq_info.ino_table = NULL;
+	if (np->cwq_info.ino_table) {
+		kfree(np->cwq_info.ino_table);
+		np->cwq_info.ino_table = NULL;
+	}
 
 	kfree(np);
 }
@@ -1991,39 +2001,41 @@ static void n2_spu_driver_version(void)
 static int n2_crypto_probe(struct platform_device *dev)
 {
 	struct mdesc_handle *mdesc;
+	const char *full_name;
 	struct n2_crypto *np;
 	int err;
 
 	n2_spu_driver_version();
 
-	pr_info("Found N2CP at %pOF\n", dev->dev.of_node);
+	full_name = dev->dev.of_node->full_name;
+	pr_info("Found N2CP at %s\n", full_name);
 
 	np = alloc_n2cp();
 	if (!np) {
-		dev_err(&dev->dev, "%pOF: Unable to allocate n2cp.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Unable to allocate n2cp.\n",
+			full_name);
 		return -ENOMEM;
 	}
 
 	err = grab_global_resources();
 	if (err) {
-		dev_err(&dev->dev, "%pOF: Unable to grab global resources.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Unable to grab "
+			"global resources.\n", full_name);
 		goto out_free_n2cp;
 	}
 
 	mdesc = mdesc_grab();
 
 	if (!mdesc) {
-		dev_err(&dev->dev, "%pOF: Unable to grab MDESC.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Unable to grab MDESC.\n",
+			full_name);
 		err = -ENODEV;
 		goto out_free_global;
 	}
 	err = grab_mdesc_irq_props(mdesc, dev, &np->cwq_info, "n2cp");
 	if (err) {
-		dev_err(&dev->dev, "%pOF: Unable to grab IRQ props.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Unable to grab IRQ props.\n",
+			full_name);
 		mdesc_release(mdesc);
 		goto out_free_global;
 	}
@@ -2034,15 +2046,15 @@ static int n2_crypto_probe(struct platform_device *dev)
 	mdesc_release(mdesc);
 
 	if (err) {
-		dev_err(&dev->dev, "%pOF: CWQ MDESC scan failed.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: CWQ MDESC scan failed.\n",
+			full_name);
 		goto out_free_global;
 	}
 
 	err = n2_register_algs();
 	if (err) {
-		dev_err(&dev->dev, "%pOF: Unable to register algorithms.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Unable to register algorithms.\n",
+			full_name);
 		goto out_free_spu_list;
 	}
 
@@ -2089,8 +2101,10 @@ static struct n2_mau *alloc_ncp(void)
 
 static void free_ncp(struct n2_mau *mp)
 {
-	kfree(mp->mau_info.ino_table);
-	mp->mau_info.ino_table = NULL;
+	if (mp->mau_info.ino_table) {
+		kfree(mp->mau_info.ino_table);
+		mp->mau_info.ino_table = NULL;
+	}
 
 	kfree(mp);
 }
@@ -2098,40 +2112,42 @@ static void free_ncp(struct n2_mau *mp)
 static int n2_mau_probe(struct platform_device *dev)
 {
 	struct mdesc_handle *mdesc;
+	const char *full_name;
 	struct n2_mau *mp;
 	int err;
 
 	n2_spu_driver_version();
 
-	pr_info("Found NCP at %pOF\n", dev->dev.of_node);
+	full_name = dev->dev.of_node->full_name;
+	pr_info("Found NCP at %s\n", full_name);
 
 	mp = alloc_ncp();
 	if (!mp) {
-		dev_err(&dev->dev, "%pOF: Unable to allocate ncp.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Unable to allocate ncp.\n",
+			full_name);
 		return -ENOMEM;
 	}
 
 	err = grab_global_resources();
 	if (err) {
-		dev_err(&dev->dev, "%pOF: Unable to grab global resources.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Unable to grab "
+			"global resources.\n", full_name);
 		goto out_free_ncp;
 	}
 
 	mdesc = mdesc_grab();
 
 	if (!mdesc) {
-		dev_err(&dev->dev, "%pOF: Unable to grab MDESC.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Unable to grab MDESC.\n",
+			full_name);
 		err = -ENODEV;
 		goto out_free_global;
 	}
 
 	err = grab_mdesc_irq_props(mdesc, dev, &mp->mau_info, "ncp");
 	if (err) {
-		dev_err(&dev->dev, "%pOF: Unable to grab IRQ props.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: Unable to grab IRQ props.\n",
+			full_name);
 		mdesc_release(mdesc);
 		goto out_free_global;
 	}
@@ -2142,8 +2158,8 @@ static int n2_mau_probe(struct platform_device *dev)
 	mdesc_release(mdesc);
 
 	if (err) {
-		dev_err(&dev->dev, "%pOF: MAU MDESC scan failed.\n",
-			dev->dev.of_node);
+		dev_err(&dev->dev, "%s: MAU MDESC scan failed.\n",
+			full_name);
 		goto out_free_global;
 	}
 
@@ -2173,7 +2189,7 @@ static int n2_mau_remove(struct platform_device *dev)
 	return 0;
 }
 
-static const struct of_device_id n2_crypto_match[] = {
+static struct of_device_id n2_crypto_match[] = {
 	{
 		.name = "n2cp",
 		.compatible = "SUNW,n2-cwq",
@@ -2200,7 +2216,7 @@ static struct platform_driver n2_crypto_driver = {
 	.remove		=	n2_crypto_remove,
 };
 
-static const struct of_device_id n2_mau_match[] = {
+static struct of_device_id n2_mau_match[] = {
 	{
 		.name = "ncp",
 		.compatible = "SUNW,n2-mau",
@@ -2227,19 +2243,22 @@ static struct platform_driver n2_mau_driver = {
 	.remove		=	n2_mau_remove,
 };
 
-static struct platform_driver * const drivers[] = {
-	&n2_crypto_driver,
-	&n2_mau_driver,
-};
-
 static int __init n2_init(void)
 {
-	return platform_register_drivers(drivers, ARRAY_SIZE(drivers));
+	int err = platform_driver_register(&n2_crypto_driver);
+
+	if (!err) {
+		err = platform_driver_register(&n2_mau_driver);
+		if (err)
+			platform_driver_unregister(&n2_crypto_driver);
+	}
+	return err;
 }
 
 static void __exit n2_exit(void)
 {
-	platform_unregister_drivers(drivers, ARRAY_SIZE(drivers));
+	platform_driver_unregister(&n2_mau_driver);
+	platform_driver_unregister(&n2_crypto_driver);
 }
 
 module_init(n2_init);

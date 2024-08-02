@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Extensible Firmware Interface
  *
@@ -39,23 +38,14 @@
  * say 0 - 3G.
  */
 
-int __init efi_alloc_page_tables(void)
-{
-	return 0;
-}
-
 void efi_sync_low_kernel_mappings(void) {}
-
-void __init efi_dump_pagetable(void)
-{
-#ifdef CONFIG_EFI_PGT_DUMP
-	ptdump_walk_pgd_level(NULL, swapper_pg_dir);
-#endif
-}
-
+void __init efi_dump_pagetable(void) {}
 int __init efi_setup_page_tables(unsigned long pa_memmap, unsigned num_pages)
 {
 	return 0;
+}
+void __init efi_cleanup_page_tables(unsigned long pa_memmap, unsigned num_pages)
+{
 }
 
 void __init efi_map_region(efi_memory_desc_t *md)
@@ -76,7 +66,7 @@ pgd_t * __init efi_call_phys_prolog(void)
 	load_cr3(initial_page_table);
 	__flush_tlb_all();
 
-	gdt_descr.address = get_cpu_gdt_paddr(0);
+	gdt_descr.address = __pa(get_cpu_gdt_table(0));
 	gdt_descr.size = GDT_SIZE - 1;
 	load_gdt(&gdt_descr);
 
@@ -85,12 +75,17 @@ pgd_t * __init efi_call_phys_prolog(void)
 
 void __init efi_call_phys_epilog(pgd_t *save_pgd)
 {
-	load_fixmap_gdt(0);
+	struct desc_ptr gdt_descr;
+
+	gdt_descr.address = (unsigned long)get_cpu_gdt_table(0);
+	gdt_descr.size = GDT_SIZE - 1;
+	load_gdt(&gdt_descr);
+
 	load_cr3(save_pgd);
 	__flush_tlb_all();
 }
 
-void __init efi_runtime_update_mappings(void)
+void __init efi_runtime_mkexec(void)
 {
 	if (__supported_pte_mask & _PAGE_NX)
 		runtime_code_page_mkexec();

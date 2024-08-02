@@ -1,9 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /** -*- linux-c -*- ***********************************************************
  * Linux PPP over Ethernet (PPPoX/PPPoE) Sockets
  *
  * PPPoX --- Generic PPP encapsulation socket family
  * PPPoE --- PPP over Ethernet (RFC 2516)
+ *
  *
  * Version:	0.7.0
  *
@@ -50,6 +50,11 @@
  *		David S. Miller (davem@redhat.com)
  *
  * License:
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
+ *
  */
 
 #include <linux/string.h>
@@ -78,7 +83,7 @@
 #include <net/netns/generic.h>
 #include <net/sock.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define PPPOE_HASH_BITS 4
 #define PPPOE_HASH_SIZE (1 << PPPOE_HASH_BITS)
@@ -90,7 +95,7 @@ static const struct proto_ops pppoe_ops;
 static const struct ppp_channel_ops pppoe_chan_ops;
 
 /* per-net private data for this module */
-static unsigned int pppoe_net_id __read_mostly;
+static int pppoe_net_id __read_mostly;
 struct pppoe_net {
 	/*
 	 * we could use _single_ hash table for all
@@ -306,7 +311,7 @@ static void pppoe_flush_dev(struct net_device *dev)
 			lock_sock(sk);
 
 			if (po->pppoe_dev == dev &&
-			    sk->sk_state & (PPPOX_CONNECTED | PPPOX_BOUND)) {
+			    sk->sk_state & (PPPOX_CONNECTED | PPPOX_BOUND | PPPOX_ZOMBIE)) {
 				pppox_unbind_sock(sk);
 				sk->sk_state_change(sk);
 				po->pppoe_dev = NULL;
@@ -390,8 +395,6 @@ static int pppoe_rcv_core(struct sock *sk, struct sk_buff *skb)
 
 		if (!__pppoe_xmit(sk_pppox(relay_po), skb))
 			goto abort_put;
-
-		sock_put(sk_pppox(relay_po));
 	} else {
 		if (sock_queue_rcv_skb(sk, skb))
 			goto abort_kfree;
@@ -424,9 +427,6 @@ static int pppoe_rcv(struct sk_buff *skb, struct net_device *dev,
 	if (!skb)
 		goto out;
 
-	if (skb_mac_header_len(skb) < ETH_HLEN)
-		goto drop;
-
 	if (!pskb_may_pull(skb, sizeof(struct pppoe_hdr)))
 		goto drop;
 
@@ -440,7 +440,6 @@ static int pppoe_rcv(struct sk_buff *skb, struct net_device *dev,
 	if (pskb_trim_rcsum(skb, len))
 		goto drop;
 
-	ph = pppoe_hdr(skb);
 	pn = pppoe_pernet(dev_net(dev));
 
 	/* Note that get_item does a sock_hold(), so sk_pppox(po)
@@ -492,9 +491,6 @@ static int pppoe_disc_rcv(struct sk_buff *skb, struct net_device *dev,
 	if (!skb)
 		goto out;
 
-	if (skb->pkt_type != PACKET_HOST)
-		goto abort;
-
 	if (!pskb_may_pull(skb, sizeof(struct pppoe_hdr)))
 		goto abort;
 
@@ -504,9 +500,27 @@ static int pppoe_disc_rcv(struct sk_buff *skb, struct net_device *dev,
 
 	pn = pppoe_pernet(dev_net(dev));
 	po = get_item(pn, ph->sid, eth_hdr(skb)->h_source, dev->ifindex);
-	if (po)
+	if (po) {
+		struct sock *sk = sk_pppox(po);
+
+		bh_lock_sock(sk);
+
+		/* If the user has locked the socket, just ignore
+		 * the packet.  With the way two rcv protocols hook into
+		 * one socket family type, we cannot (easily) distinguish
+		 * what kind of SKB it is during backlog rcv.
+		 */
+		if (sock_owned_by_user(sk) == 0) {
+			/* We're no longer connect at the PPPOE layer,
+			 * and must wait for ppp channel to disconnect us.
+			 */
+			sk->sk_state = PPPOX_ZOMBIE;
+		}
+
+		bh_unlock_sock(sk);
 		if (!schedule_work(&po->proto.pppoe.padt_work))
-			sock_put(sk_pppox(po));
+			sock_put(sk);
+	}
 
 abort:
 	kfree_skb(skb);
@@ -622,10 +636,6 @@ static int pppoe_connect(struct socket *sock, struct sockaddr *uservaddr,
 	lock_sock(sk);
 
 	error = -EINVAL;
-
-	if (sockaddr_len != sizeof(struct sockaddr_pppox))
-		goto end;
-
 	if (sp->sa_protocol != PX_PROTO_OE)
 		goto end;
 
@@ -720,7 +730,7 @@ err_put:
 }
 
 static int pppoe_getname(struct socket *sock, struct sockaddr *uaddr,
-		  int peer)
+		  int *usockaddr_len, int peer)
 {
 	int len = sizeof(struct sockaddr_pppox);
 	struct sockaddr_pppox sp;
@@ -732,7 +742,9 @@ static int pppoe_getname(struct socket *sock, struct sockaddr *uaddr,
 
 	memcpy(uaddr, &sp, len);
 
-	return len;
+	*usockaddr_len = len;
+
+	return 0;
 }
 
 static int pppoe_ioctl(struct socket *sock, unsigned int cmd,
@@ -787,7 +799,7 @@ static int pppoe_ioctl(struct socket *sock, unsigned int cmd,
 		struct pppox_sock *relay_po;
 
 		err = -EBUSY;
-		if (sk->sk_state & (PPPOX_BOUND | PPPOX_DEAD))
+		if (sk->sk_state & (PPPOX_BOUND | PPPOX_ZOMBIE | PPPOX_DEAD))
 			break;
 
 		err = -ENOTCONN;
@@ -846,7 +858,6 @@ static int pppoe_sendmsg(struct socket *sock, struct msghdr *m,
 	struct pppoe_hdr *ph;
 	struct net_device *dev;
 	char *start;
-	int hlen;
 
 	lock_sock(sk);
 	if (sock_flag(sk, SOCK_DEAD) || !(sk->sk_state & PPPOX_CONNECTED)) {
@@ -865,16 +876,16 @@ static int pppoe_sendmsg(struct socket *sock, struct msghdr *m,
 	if (total_len > (dev->mtu + dev->hard_header_len))
 		goto end;
 
-	hlen = LL_RESERVED_SPACE(dev);
-	skb = sock_wmalloc(sk, hlen + sizeof(*ph) + total_len +
-			   dev->needed_tailroom, 0, GFP_KERNEL);
+
+	skb = sock_wmalloc(sk, total_len + dev->hard_header_len + 32,
+			   0, GFP_KERNEL);
 	if (!skb) {
 		error = -ENOMEM;
 		goto end;
 	}
 
 	/* Reserve space for headers. */
-	skb_reserve(skb, hlen);
+	skb_reserve(skb, dev->hard_header_len);
 	skb_reset_network_header(skb);
 
 	skb->dev = dev;
@@ -882,7 +893,7 @@ static int pppoe_sendmsg(struct socket *sock, struct msghdr *m,
 	skb->priority = sk->sk_priority;
 	skb->protocol = cpu_to_be16(ETH_P_PPP_SES);
 
-	ph = skb_put(skb, total_len + sizeof(struct pppoe_hdr));
+	ph = (struct pppoe_hdr *)skb_put(skb, total_len + sizeof(struct pppoe_hdr));
 	start = (char *)&ph->tag[0];
 
 	error = memcpy_from_msg(start, m, total_len);
@@ -935,7 +946,7 @@ static int __pppoe_xmit(struct sock *sk, struct sk_buff *skb)
 	/* Copy the data if there is no space for the header or if it's
 	 * read-only.
 	 */
-	if (skb_cow_head(skb, LL_RESERVED_SPACE(dev) + sizeof(*ph)))
+	if (skb_cow_head(skb, sizeof(*ph) + dev->hard_header_len))
 		goto abort;
 
 	__skb_push(skb, sizeof(*ph));
@@ -1098,6 +1109,21 @@ static const struct seq_operations pppoe_seq_ops = {
 	.stop		= pppoe_seq_stop,
 	.show		= pppoe_seq_show,
 };
+
+static int pppoe_seq_open(struct inode *inode, struct file *file)
+{
+	return seq_open_net(inode, file, &pppoe_seq_ops,
+			sizeof(struct seq_net_private));
+}
+
+static const struct file_operations pppoe_seq_fops = {
+	.owner		= THIS_MODULE,
+	.open		= pppoe_seq_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release_net,
+};
+
 #endif /* CONFIG_PROC_FS */
 
 static const struct proto_ops pppoe_ops = {
@@ -1118,9 +1144,6 @@ static const struct proto_ops pppoe_ops = {
 	.recvmsg	= pppoe_recvmsg,
 	.mmap		= sock_no_mmap,
 	.ioctl		= pppox_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl	= pppox_compat_ioctl,
-#endif
 };
 
 static const struct pppox_proto pppoe_proto = {
@@ -1136,8 +1159,7 @@ static __net_init int pppoe_init_net(struct net *net)
 
 	rwlock_init(&pn->hash_lock);
 
-	pde = proc_create_net("pppoe", 0444, net->proc_net,
-			&pppoe_seq_ops, sizeof(struct seq_net_private));
+	pde = proc_create("pppoe", S_IRUGO, net->proc_net, &pppoe_seq_fops);
 #ifdef CONFIG_PROC_FS
 	if (!pde)
 		return -ENOMEM;
@@ -1204,4 +1226,4 @@ module_exit(pppoe_exit);
 MODULE_AUTHOR("Michal Ostrowski <mostrows@speakeasy.net>");
 MODULE_DESCRIPTION("PPP over Ethernet driver");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_NET_PF_PROTO(PF_PPPOX, PX_PROTO_OE);
+MODULE_ALIAS_NETPROTO(PF_PPPOX);

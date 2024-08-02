@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * TCP Illinois congestion control.
  * Home page:
@@ -7,7 +6,7 @@
  * The algorithm is described in:
  * "TCP-Illinois: A Loss and Delay-Based Congestion Control Algorithm
  *  for High-Speed Networks"
- * http://tamerbasar.csl.illinois.edu/LiuBasarSrikantPerfEvalArtJun2008.pdf
+ * http://www.ifp.illinois.edu/~srikant/Papers/liubassri06perf.pdf
  *
  * Implemented from description in paper and ns-2 simulation.
  * Copyright (C) 2007 Stephen Hemminger <shemminger@linux-foundation.org>
@@ -83,31 +82,30 @@ static void tcp_illinois_init(struct sock *sk)
 }
 
 /* Measure RTT for each ack. */
-static void tcp_illinois_acked(struct sock *sk, const struct ack_sample *sample)
+static void tcp_illinois_acked(struct sock *sk, u32 pkts_acked, s32 rtt)
 {
 	struct illinois *ca = inet_csk_ca(sk);
-	s32 rtt_us = sample->rtt_us;
 
-	ca->acked = sample->pkts_acked;
+	ca->acked = pkts_acked;
 
 	/* dup ack, no rtt sample */
-	if (rtt_us < 0)
+	if (rtt < 0)
 		return;
 
 	/* ignore bogus values, this prevents wraparound in alpha math */
-	if (rtt_us > RTT_MAX)
-		rtt_us = RTT_MAX;
+	if (rtt > RTT_MAX)
+		rtt = RTT_MAX;
 
 	/* keep track of minimum RTT seen so far */
-	if (ca->base_rtt > rtt_us)
-		ca->base_rtt = rtt_us;
+	if (ca->base_rtt > rtt)
+		ca->base_rtt = rtt;
 
 	/* and max */
-	if (ca->max_rtt < rtt_us)
-		ca->max_rtt = rtt_us;
+	if (ca->max_rtt < rtt)
+		ca->max_rtt = rtt;
 
 	++ca->cnt_rtt;
-	ca->sum_rtt += rtt_us;
+	ca->sum_rtt += rtt;
 }
 
 /* Maximum queuing delay */
@@ -328,7 +326,6 @@ static size_t tcp_illinois_info(struct sock *sk, u32 ext, int *attr,
 static struct tcp_congestion_ops tcp_illinois __read_mostly = {
 	.init		= tcp_illinois_init,
 	.ssthresh	= tcp_illinois_ssthresh,
-	.undo_cwnd	= tcp_reno_undo_cwnd,
 	.cong_avoid	= tcp_illinois_cong_avoid,
 	.set_state	= tcp_illinois_state,
 	.get_info	= tcp_illinois_info,

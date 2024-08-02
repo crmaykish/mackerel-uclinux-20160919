@@ -1,10 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * leds-lm3533.c -- LM3533 LED driver
  *
  * Copyright (C) 2011-2012 Texas Instruments
  *
  * Author: Johan Hovold <jhovold@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under  the terms of the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the License, or (at your
+ * option) any later version.
  */
 
 #include <linux/module.h>
@@ -13,6 +17,7 @@
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <linux/workqueue.h>
 
 #include <linux/mfd/lm3533.h>
 
@@ -48,6 +53,9 @@ struct lm3533_led {
 
 	struct mutex mutex;
 	unsigned long flags;
+
+	struct work_struct work;
+	u8 new_brightness;
 };
 
 
@@ -115,17 +123,27 @@ out:
 	return ret;
 }
 
-static int lm3533_led_set(struct led_classdev *cdev,
+static void lm3533_led_work(struct work_struct *work)
+{
+	struct lm3533_led *led = container_of(work, struct lm3533_led, work);
+
+	dev_dbg(led->cdev.dev, "%s - %u\n", __func__, led->new_brightness);
+
+	if (led->new_brightness == 0)
+		lm3533_led_pattern_enable(led, 0);	/* disable blink */
+
+	lm3533_ctrlbank_set_brightness(&led->cb, led->new_brightness);
+}
+
+static void lm3533_led_set(struct led_classdev *cdev,
 						enum led_brightness value)
 {
 	struct lm3533_led *led = to_lm3533_led(cdev);
 
 	dev_dbg(led->cdev.dev, "%s - %d\n", __func__, value);
 
-	if (value == 0)
-		lm3533_led_pattern_enable(led, 0);	/* disable blink */
-
-	return lm3533_ctrlbank_set_brightness(&led->cb, value);
+	led->new_brightness = value;
+	schedule_work(&led->work);
 }
 
 static enum led_brightness lm3533_led_get(struct led_classdev *cdev)
@@ -622,7 +640,7 @@ static umode_t lm3533_led_attr_is_visible(struct kobject *kobj,
 	return mode;
 };
 
-static const struct attribute_group lm3533_led_attribute_group = {
+static struct attribute_group lm3533_led_attribute_group = {
 	.is_visible	= lm3533_led_attr_is_visible,
 	.attrs		= lm3533_led_attributes
 };
@@ -675,7 +693,7 @@ static int lm3533_led_probe(struct platform_device *pdev)
 	led->lm3533 = lm3533;
 	led->cdev.name = pdata->name;
 	led->cdev.default_trigger = pdata->default_trigger;
-	led->cdev.brightness_set_blocking = lm3533_led_set;
+	led->cdev.brightness_set = lm3533_led_set;
 	led->cdev.brightness_get = lm3533_led_get;
 	led->cdev.blink_set = lm3533_led_blink_set;
 	led->cdev.brightness = LED_OFF;
@@ -683,6 +701,7 @@ static int lm3533_led_probe(struct platform_device *pdev)
 	led->id = pdev->id;
 
 	mutex_init(&led->mutex);
+	INIT_WORK(&led->work, lm3533_led_work);
 
 	/* The class framework makes a callback to get brightness during
 	 * registration so use parent device (for error reporting) until
@@ -704,16 +723,17 @@ static int lm3533_led_probe(struct platform_device *pdev)
 
 	ret = lm3533_led_setup(led, pdata);
 	if (ret)
-		goto err_deregister;
+		goto err_unregister;
 
 	ret = lm3533_ctrlbank_enable(&led->cb);
 	if (ret)
-		goto err_deregister;
+		goto err_unregister;
 
 	return 0;
 
-err_deregister:
+err_unregister:
 	led_classdev_unregister(&led->cdev);
+	flush_work(&led->work);
 
 	return ret;
 }
@@ -726,6 +746,7 @@ static int lm3533_led_remove(struct platform_device *pdev)
 
 	lm3533_ctrlbank_disable(&led->cb);
 	led_classdev_unregister(&led->cdev);
+	flush_work(&led->work);
 
 	return 0;
 }
@@ -739,6 +760,7 @@ static void lm3533_led_shutdown(struct platform_device *pdev)
 
 	lm3533_ctrlbank_disable(&led->cb);
 	lm3533_led_set(&led->cdev, LED_OFF);		/* disable blink */
+	flush_work(&led->work);
 }
 
 static struct platform_driver lm3533_led_driver = {

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Most of the string-functions are rather heavily hand-optimized,
  * see especially strsep,strstr,str[c]spn. They should work, but are not
@@ -12,7 +11,7 @@
  */
 
 #include <linux/string.h>
-#include <linux/export.h>
+#include <linux/module.h>
 
 #ifdef __HAVE_ARCH_STRCPY
 char *strcpy(char *dest, const char *src)

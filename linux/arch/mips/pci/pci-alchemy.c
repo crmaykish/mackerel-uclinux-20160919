@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Alchemy PCI host mode support.
  *
@@ -77,7 +76,7 @@ static void mod_wired_entry(int entry, unsigned long entrylo0,
 	unsigned long old_ctx;
 
 	/* Save old context and create impossible VPN2 value */
-	old_ctx = read_c0_entryhi() & MIPS_ENTRYHI_ASID;
+	old_ctx = read_c0_entryhi() & 0xff;
 	old_pagemask = read_c0_pagemask();
 	write_c0_index(entry);
 	write_c0_pagemask(pagemask);
@@ -430,8 +429,7 @@ static int alchemy_pci_probe(struct platform_device *pdev)
 
 	/* Au1500 revisions older than AD have borked coherent PCI */
 	if ((alchemy_get_cputype() == ALCHEMY_CPU_AU1500) &&
-	    (read_c0_prid() < 0x01030202) &&
-	    (coherentio == IO_COHERENCE_DISABLED)) {
+	    (read_c0_prid() < 0x01030202) && !coherentio) {
 		val = __raw_readl(ctx->regs + PCI_REG_CONFIG);
 		val |= PCI_CONFIG_NC;
 		__raw_writel(val, ctx->regs + PCI_REG_CONFIG);
@@ -523,7 +521,7 @@ static int __init alchemy_pci_init(void)
 arch_initcall(alchemy_pci_init);
 
 
-int pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
+int __init pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	struct alchemy_pci_context *ctx = dev->sysdata;
 	if (ctx && ctx->board_map_irq)

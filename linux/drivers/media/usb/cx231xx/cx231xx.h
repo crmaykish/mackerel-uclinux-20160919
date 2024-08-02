@@ -1,10 +1,22 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
    cx231xx.h - driver for Conexant Cx23100/101/102 USB video capture devices
 
    Copyright (C) 2008 <srinivasa.deevi at conexant dot com>
 	Based on em28xx driver
 
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #ifndef _CX231XX_H
@@ -18,14 +30,15 @@
 #include <linux/mutex.h>
 #include <linux/usb.h>
 
-#include <media/drv-intf/cx2341x.h>
+#include <media/cx2341x.h>
 
 #include <media/videobuf-vmalloc.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-fh.h>
 #include <media/rc-core.h>
-#include <media/i2c/ir-kbd-i2c.h>
+#include <media/ir-kbd-i2c.h>
+#include <media/videobuf-dvb.h>
 
 #include "cx231xx-reg.h"
 #include "cx231xx-pcb-cfg.h"
@@ -65,11 +78,6 @@
 #define CX231XX_BOARD_HAUPPAUGE_930C_HD_1114xx 20
 #define CX231XX_BOARD_HAUPPAUGE_955Q 21
 #define CX231XX_BOARD_TERRATEC_GRABBY 22
-#define CX231XX_BOARD_EVROMEDIA_FULL_HYBRID_FULLHD 23
-#define CX231XX_BOARD_ASTROMETA_T2HYBRID 24
-#define CX231XX_BOARD_THE_IMAGING_SOURCE_DFG_USB2_PRO 25
-#define CX231XX_BOARD_HAUPPAUGE_935C 26
-#define CX231XX_BOARD_HAUPPAUGE_975 27
 
 /* Limits minimum and default number of buffers */
 #define CX231XX_MIN_BUF                 4
@@ -121,6 +129,7 @@
 #define CX23417_RESET    9
 
 struct cx23417_fmt {
+	char  *name;
 	u32   fourcc;          /* v4l2 format id */
 	int   depth;
 	int   flags;
@@ -272,6 +281,7 @@ enum cx231xx_itype {
 	CX231XX_VMUX_CABLE,
 	CX231XX_RADIO,
 	CX231XX_VMUX_DVB,
+	CX231XX_VMUX_DEBUG
 };
 
 enum cx231xx_v_input {
@@ -331,7 +341,6 @@ struct cx231xx_board {
 
 	/* demod related */
 	int demod_addr;
-	int demod_addr2;
 	u8 demod_xfer_mode;	/* 0 - Serial; 1 - parallel */
 
 	/* GPIO Pins */
@@ -466,7 +475,7 @@ struct cx231xx_i2c {
 
 	/* i2c i/o */
 	struct i2c_adapter i2c_adap;
-	int i2c_rc;
+	u32 i2c_rc;
 
 	/* different settings for each bus */
 	u8 i2c_period;
@@ -531,6 +540,8 @@ struct cx231xx_tsport {
 
 	int                        nr;
 	int                        sram_chno;
+
+	struct videobuf_dvb_frontends frontends;
 
 	/* dma queues */
 
@@ -614,7 +625,6 @@ struct cx231xx {
 
 	/* I2C adapters: Master 1 & 2 (External) & Master 3 (Internal only) */
 	struct cx231xx_i2c i2c_bus[3];
-	struct i2c_mux_core *muxc;
 	struct i2c_adapter *i2c_mux_adap[2];
 
 	unsigned int xc_fw_load_done:1;
@@ -633,7 +643,7 @@ struct cx231xx {
 	/* frame properties */
 	int width;		/* current frame width */
 	int height;		/* current frame height */
-	int interlaced;		/* 1=interlace fields, 0=just top fields */
+	int interlaced;		/* 1=interlace fileds, 0=just top fileds */
 
 	struct cx231xx_audio adev;
 
@@ -653,8 +663,6 @@ struct cx231xx {
 #if defined(CONFIG_MEDIA_CONTROLLER)
 	struct media_device *media_dev;
 	struct media_pad video_pad, vbi_pad;
-	struct media_entity input_ent[MAX_CX231XX_INPUT];
-	struct media_pad input_pad[MAX_CX231XX_INPUT];
 #endif
 
 	unsigned char eedata[256];
@@ -750,10 +758,9 @@ int cx231xx_reset_analog_tuner(struct cx231xx *dev);
 /* Provided by cx231xx-i2c.c */
 void cx231xx_do_i2c_scan(struct cx231xx *dev, int i2c_port);
 int cx231xx_i2c_register(struct cx231xx_i2c *bus);
-void cx231xx_i2c_unregister(struct cx231xx_i2c *bus);
-int cx231xx_i2c_mux_create(struct cx231xx *dev);
+int cx231xx_i2c_unregister(struct cx231xx_i2c *bus);
 int cx231xx_i2c_mux_register(struct cx231xx *dev, int mux_no);
-void cx231xx_i2c_mux_unregister(struct cx231xx *dev);
+void cx231xx_i2c_mux_unregister(struct cx231xx *dev, int mux_no);
 struct i2c_adapter *cx231xx_get_i2c_adap(struct cx231xx *dev, int i2c_port);
 
 /* Internal block control functions */
@@ -936,7 +943,6 @@ int cx231xx_register_extension(struct cx231xx_ops *dev);
 void cx231xx_unregister_extension(struct cx231xx_ops *dev);
 void cx231xx_init_extension(struct cx231xx *dev);
 void cx231xx_close_extension(struct cx231xx *dev);
-void cx231xx_v4l2_create_entities(struct cx231xx *dev);
 int cx231xx_querycap(struct file *file, void *priv,
 			   struct v4l2_capability *cap);
 int cx231xx_g_tuner(struct file *file, void *priv, struct v4l2_tuner *t);

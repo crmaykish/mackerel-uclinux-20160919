@@ -1,10 +1,25 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* -*- mode: c; c-basic-offset: 8; -*-
  * vim: noexpandtab sw=8 ts=8 sts=0:
  *
  * dlmcommon.h
  *
  * Copyright (C) 2004 Oracle.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public
+ * License along with this program; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 021110-1307, USA.
+ *
  */
 
 #ifndef DLMCOMMON_H
@@ -32,7 +47,7 @@
 #define DLM_HASH_BUCKETS	(DLM_HASH_PAGES * DLM_BUCKETS_PER_PAGE)
 
 /* Intended to make it easier for us to switch out hash functions */
-#define dlm_lockid_hash(_n, _l) full_name_hash(NULL, _n, _l)
+#define dlm_lockid_hash(_n, _l) full_name_hash(_n, _l)
 
 enum dlm_mle_type {
 	DLM_MLE_BLOCK = 0,
@@ -125,7 +140,6 @@ struct dlm_ctxt
 	u8 node_num;
 	u32 key;
 	u8  joining_node;
-	u8 migrate_done; /* set to 1 means node has migrated all lock resources */
 	wait_queue_head_t dlm_join_events;
 	unsigned long live_nodes_map[BITS_TO_LONGS(O2NM_MAX_NODES)];
 	unsigned long domain_map[BITS_TO_LONGS(O2NM_MAX_NODES)];
@@ -142,6 +156,7 @@ struct dlm_ctxt
 	atomic_t res_tot_count;
 	atomic_t res_cur_count;
 
+	struct dlm_debug_ctxt *dlm_debug_ctxt;
 	struct dentry *dlm_debugfs_subroot;
 
 	/* NOTE: Next three are protected by dlm_domain_lock */
@@ -267,7 +282,6 @@ static inline void __dlm_set_joining_node(struct dlm_ctxt *dlm,
 #define DLM_LOCK_RES_DROPPING_REF         0x00000040
 #define DLM_LOCK_RES_BLOCK_DIRTY          0x00001000
 #define DLM_LOCK_RES_SETREF_INPROG        0x00002000
-#define DLM_LOCK_RES_RECOVERY_WAITING     0x00004000
 
 /* max milliseconds to wait to sync up a network failure with a node death */
 #define DLM_NODE_DEATH_WAIT_MAX (5 * 1000)
@@ -362,6 +376,17 @@ struct dlm_lock
 		 lksb_kernel_allocated:1;
 };
 
+
+#define DLM_LKSB_UNUSED1           0x01
+#define DLM_LKSB_PUT_LVB           0x02
+#define DLM_LKSB_GET_LVB           0x04
+#define DLM_LKSB_UNUSED2           0x08
+#define DLM_LKSB_UNUSED3           0x10
+#define DLM_LKSB_UNUSED4           0x20
+#define DLM_LKSB_UNUSED5           0x40
+#define DLM_LKSB_UNUSED6           0x80
+
+
 enum dlm_lockres_list {
 	DLM_GRANTED_LIST = 0,
 	DLM_CONVERTING_LIST = 1,
@@ -437,7 +462,6 @@ enum {
 	DLM_QUERY_REGION		= 519,
 	DLM_QUERY_NODEINFO		= 520,
 	DLM_BEGIN_EXIT_DOMAIN_MSG	= 521,
-	DLM_DEREF_LOCKRES_DONE		= 522,
 };
 
 struct dlm_reco_node_data
@@ -532,7 +556,7 @@ struct dlm_master_requery
  * };
  *
  * from ../cluster/tcp.h
- *    O2NET_MAX_PAYLOAD_BYTES  (4096 - sizeof(net_msg))
+ *    NET_MAX_PAYLOAD_BYTES  (4096 - sizeof(net_msg))
  *    (roughly 4080 bytes)
  * and sizeof(dlm_migratable_lockres) = 112 bytes
  * and sizeof(dlm_migratable_lock) = 16 bytes
@@ -573,7 +597,7 @@ struct dlm_migratable_lockres
 
 /* from above, 128 bytes
  * for some undetermined future use */
-#define DLM_MIG_LOCKRES_RESERVED   (O2NET_MAX_PAYLOAD_BYTES - \
+#define DLM_MIG_LOCKRES_RESERVED   (NET_MAX_PAYLOAD_BYTES - \
 				    DLM_MIG_LOCKRES_MAX_LEN)
 
 struct dlm_create_lock
@@ -688,6 +712,10 @@ struct dlm_begin_reco
 	__be32 pad2;
 };
 
+
+#define BITS_PER_BYTE 8
+#define BITS_TO_BYTES(bits) (((bits)+BITS_PER_BYTE-1)/BITS_PER_BYTE)
+
 struct dlm_query_join_request
 {
 	u8 node_idx;
@@ -765,20 +793,6 @@ struct dlm_deref_lockres
 	u8 name[O2NM_MAX_NAME_LEN];
 };
 
-enum {
-	DLM_DEREF_RESPONSE_DONE = 0,
-	DLM_DEREF_RESPONSE_INPROG = 1,
-};
-
-struct dlm_deref_lockres_done {
-	u32 pad1;
-	u16 pad2;
-	u8 node_idx;
-	u8 namelen;
-
-	u8 name[O2NM_MAX_NAME_LEN];
-};
-
 static inline enum dlm_status
 __dlm_lockres_state_to_status(struct dlm_lock_resource *res)
 {
@@ -786,8 +800,7 @@ __dlm_lockres_state_to_status(struct dlm_lock_resource *res)
 
 	assert_spin_locked(&res->spinlock);
 
-	if (res->state & (DLM_LOCK_RES_RECOVERING|
-			DLM_LOCK_RES_RECOVERY_WAITING))
+	if (res->state & DLM_LOCK_RES_RECOVERING)
 		status = DLM_RECOVERING;
 	else if (res->state & DLM_LOCK_RES_MIGRATING)
 		status = DLM_MIGRATING;
@@ -941,10 +954,13 @@ static inline int dlm_send_proxy_ast(struct dlm_ctxt *dlm,
 void dlm_print_one_lock_resource(struct dlm_lock_resource *res);
 void __dlm_print_one_lock_resource(struct dlm_lock_resource *res);
 
+u8 dlm_nm_this_node(struct dlm_ctxt *dlm);
 void dlm_kick_thread(struct dlm_ctxt *dlm, struct dlm_lock_resource *res);
 void __dlm_dirty_lockres(struct dlm_ctxt *dlm, struct dlm_lock_resource *res);
 
 
+int dlm_nm_init(struct dlm_ctxt *dlm);
+int dlm_heartbeat_init(struct dlm_ctxt *dlm);
 void dlm_hb_node_down_cb(struct o2nm_node *node, int idx, void *data);
 void dlm_hb_node_up_cb(struct o2nm_node *node, int idx, void *data);
 
@@ -963,8 +979,6 @@ int dlm_assert_master_handler(struct o2net_msg *msg, u32 len, void *data,
 void dlm_assert_master_post_handler(int status, void *data, void *ret_data);
 int dlm_deref_lockres_handler(struct o2net_msg *msg, u32 len, void *data,
 			      void **ret_data);
-int dlm_deref_lockres_done_handler(struct o2net_msg *msg, u32 len, void *data,
-			      void **ret_data);
 int dlm_migrate_request_handler(struct o2net_msg *msg, u32 len, void *data,
 				void **ret_data);
 int dlm_mig_lockres_handler(struct o2net_msg *msg, u32 len, void *data,
@@ -982,8 +996,6 @@ int dlm_finalize_reco_handler(struct o2net_msg *msg, u32 len, void *data,
 int dlm_do_master_requery(struct dlm_ctxt *dlm, struct dlm_lock_resource *res,
 			  u8 nodenum, u8 *real_master);
 
-void __dlm_do_purge_lockres(struct dlm_ctxt *dlm,
-		struct dlm_lock_resource *res);
 
 int dlm_dispatch_assert_master(struct dlm_ctxt *dlm,
 			       struct dlm_lock_resource *res,
@@ -1008,7 +1020,6 @@ static inline void __dlm_wait_on_lockres(struct dlm_lock_resource *res)
 {
 	__dlm_wait_on_lockres_flags(res, (DLM_LOCK_RES_IN_PROGRESS|
 				    	  DLM_LOCK_RES_RECOVERING|
-					  DLM_LOCK_RES_RECOVERY_WAITING|
 					  DLM_LOCK_RES_MIGRATING));
 }
 

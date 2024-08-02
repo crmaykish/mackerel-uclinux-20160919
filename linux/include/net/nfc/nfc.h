@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (C) 2011 Instituto Nokia de Tecnologia
  * Copyright (C) 2014 Marvell International Ltd.
@@ -6,6 +5,19 @@
  * Authors:
  *    Lauro Ramos Venancio <lauro.venancio@openbossa.org>
  *    Aloisio Almeida Jr <aloisio.almeida@openbossa.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __NET_NFC_H
@@ -15,7 +27,6 @@
 #include <linux/device.h>
 #include <linux/skbuff.h>
 
-#define nfc_dbg(dev, fmt, ...) dev_dbg((dev), "NFC: " fmt, ##__VA_ARGS__)
 #define nfc_info(dev, fmt, ...) dev_info((dev), "NFC: " fmt, ##__VA_ARGS__)
 #define nfc_err(dev, fmt, ...) dev_err((dev), "NFC: " fmt, ##__VA_ARGS__)
 
@@ -266,7 +277,7 @@ struct sk_buff *nfc_alloc_send_skb(struct nfc_dev *dev, struct sock *sk,
 struct sk_buff *nfc_alloc_recv_skb(unsigned int size, gfp_t gfp);
 
 int nfc_set_remote_general_bytes(struct nfc_dev *dev,
-				 const u8 *gt, u8 gt_len);
+				 u8 *gt, u8 gt_len);
 u8 *nfc_get_local_general_bytes(struct nfc_dev *dev, size_t *gb_len);
 
 int nfc_fw_download_done(struct nfc_dev *dev, const char *firmware_name,
@@ -280,7 +291,7 @@ int nfc_dep_link_is_up(struct nfc_dev *dev, u32 target_idx,
 		       u8 comm_mode, u8 rf_mode);
 
 int nfc_tm_activated(struct nfc_dev *dev, u32 protocol, u8 comm_mode,
-		     const u8 *gb, size_t gb_len);
+		     u8 *gb, size_t gb_len);
 int nfc_tm_deactivated(struct nfc_dev *dev);
 int nfc_tm_data_received(struct nfc_dev *dev, struct sk_buff *skb);
 
@@ -288,7 +299,6 @@ void nfc_driver_failure(struct nfc_dev *dev, int err);
 
 int nfc_se_transaction(struct nfc_dev *dev, u8 se_idx,
 		       struct nfc_evt_transaction *evt_transaction);
-int nfc_se_connectivity(struct nfc_dev *dev, u8 se_idx);
 int nfc_add_se(struct nfc_dev *dev, u32 se_idx, u16 type);
 int nfc_remove_se(struct nfc_dev *dev, u32 se_idx);
 struct nfc_se *nfc_find_se(struct nfc_dev *dev, u32 se_idx);

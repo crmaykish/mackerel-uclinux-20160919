@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * LED driver : leds-ktd2692.c
  *
  * Copyright (C) 2015 Samsung Electronics
  * Ingi Kim <ingi2.kim@samsung.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -15,11 +18,12 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/workqueue.h>
 
 /* Value related the movie mode */
 #define KTD2692_MOVIE_MODE_CURRENT_LEVELS	16
 #define KTD2692_MM_TO_FL_RATIO(x)		((x) / 3)
-#define KTD2692_MM_MIN_CURR_THRESHOLD_SCALE	8
+#define KTD2962_MM_MIN_CURR_THRESHOLD_SCALE	8
 
 /* Value related the flash mode */
 #define KTD2692_FLASH_MODE_TIMEOUT_LEVELS	8
@@ -78,6 +82,7 @@ struct ktd2692_context {
 	/* secures access to the device */
 	struct mutex lock;
 	struct regulator *regulator;
+	struct work_struct work_brightness_set;
 
 	struct gpio_desc *aux_gpio;
 	struct gpio_desc *ctrl_gpio;
@@ -153,12 +158,9 @@ static void ktd2692_expresswire_write(struct ktd2692_context *led, u8 value)
 	ktd2692_expresswire_end(led);
 }
 
-static int ktd2692_led_brightness_set(struct led_classdev *led_cdev,
-				       enum led_brightness brightness)
+static void ktd2692_brightness_set(struct ktd2692_context *led,
+				   enum led_brightness brightness)
 {
-	struct led_classdev_flash *fled_cdev = lcdev_to_flcdev(led_cdev);
-	struct ktd2692_context *led = fled_cdev_to_led(fled_cdev);
-
 	mutex_lock(&led->lock);
 
 	if (brightness == LED_OFF) {
@@ -172,6 +174,33 @@ static int ktd2692_led_brightness_set(struct led_classdev *led_cdev,
 
 	ktd2692_expresswire_write(led, led->mode | KTD2692_REG_MODE_BASE);
 	mutex_unlock(&led->lock);
+}
+
+static void ktd2692_brightness_set_work(struct work_struct *work)
+{
+	struct ktd2692_context *led =
+		container_of(work, struct ktd2692_context, work_brightness_set);
+
+	ktd2692_brightness_set(led, led->torch_brightness);
+}
+
+static void ktd2692_led_brightness_set(struct led_classdev *led_cdev,
+				       enum led_brightness brightness)
+{
+	struct led_classdev_flash *fled_cdev = lcdev_to_flcdev(led_cdev);
+	struct ktd2692_context *led = fled_cdev_to_led(fled_cdev);
+
+	led->torch_brightness = brightness;
+	schedule_work(&led->work_brightness_set);
+}
+
+static int ktd2692_led_brightness_set_sync(struct led_classdev *led_cdev,
+					   enum led_brightness brightness)
+{
+	struct led_classdev_flash *fled_cdev = lcdev_to_flcdev(led_cdev);
+	struct ktd2692_context *led = fled_cdev_to_led(fled_cdev);
+
+	ktd2692_brightness_set(led, brightness);
 
 	return 0;
 }
@@ -250,21 +279,10 @@ static void ktd2692_setup(struct ktd2692_context *led)
 	ktd2692_expresswire_reset(led);
 	gpiod_direction_output(led->aux_gpio, KTD2692_LOW);
 
-	ktd2692_expresswire_write(led, (KTD2692_MM_MIN_CURR_THRESHOLD_SCALE - 1)
+	ktd2692_expresswire_write(led, (KTD2962_MM_MIN_CURR_THRESHOLD_SCALE - 1)
 				 | KTD2692_REG_MM_MIN_CURR_THRESHOLD_BASE);
 	ktd2692_expresswire_write(led, KTD2692_FLASH_MODE_CURR_PERCENT(45)
 				 | KTD2692_REG_FLASH_CURRENT_BASE);
-}
-
-static void regulator_disable_action(void *_data)
-{
-	struct device *dev = _data;
-	struct ktd2692_context *led = dev_get_drvdata(dev);
-	int ret;
-
-	ret = regulator_disable(led->regulator);
-	if (ret)
-		dev_err(dev, "Failed to disable supply: %d\n", ret);
 }
 
 static int ktd2692_parse_dt(struct ktd2692_context *led, struct device *dev,
@@ -278,15 +296,15 @@ static int ktd2692_parse_dt(struct ktd2692_context *led, struct device *dev,
 		return -ENXIO;
 
 	led->ctrl_gpio = devm_gpiod_get(dev, "ctrl", GPIOD_ASIS);
-	ret = PTR_ERR_OR_ZERO(led->ctrl_gpio);
-	if (ret) {
+	if (IS_ERR(led->ctrl_gpio)) {
+		ret = PTR_ERR(led->ctrl_gpio);
 		dev_err(dev, "cannot get ctrl-gpios %d\n", ret);
 		return ret;
 	}
 
 	led->aux_gpio = devm_gpiod_get(dev, "aux", GPIOD_ASIS);
-	ret = PTR_ERR_OR_ZERO(led->aux_gpio);
-	if (ret) {
+	if (IS_ERR(led->aux_gpio)) {
+		ret = PTR_ERR(led->aux_gpio);
 		dev_err(dev, "cannot get aux-gpios %d\n", ret);
 		return ret;
 	}
@@ -297,14 +315,8 @@ static int ktd2692_parse_dt(struct ktd2692_context *led, struct device *dev,
 
 	if (led->regulator) {
 		ret = regulator_enable(led->regulator);
-		if (ret) {
+		if (ret)
 			dev_err(dev, "Failed to enable supply: %d\n", ret);
-		} else {
-			ret = devm_add_action_or_reset(dev,
-						regulator_disable_action, dev);
-			if (ret)
-				return ret;
-		}
 	}
 
 	child_node = of_get_next_available_child(np, NULL);
@@ -320,24 +332,21 @@ static int ktd2692_parse_dt(struct ktd2692_context *led, struct device *dev,
 				   &cfg->movie_max_microamp);
 	if (ret) {
 		dev_err(dev, "failed to parse led-max-microamp\n");
-		goto err_parse_dt;
+		return ret;
 	}
 
 	ret = of_property_read_u32(child_node, "flash-max-microamp",
 				   &cfg->flash_max_microamp);
 	if (ret) {
 		dev_err(dev, "failed to parse flash-max-microamp\n");
-		goto err_parse_dt;
+		return ret;
 	}
 
 	ret = of_property_read_u32(child_node, "flash-max-timeout-us",
 				   &cfg->flash_max_timeout);
-	if (ret) {
+	if (ret)
 		dev_err(dev, "failed to parse flash-max-timeout-us\n");
-		goto err_parse_dt;
-	}
 
-err_parse_dt:
 	of_node_put(child_node);
 	return ret;
 }
@@ -372,10 +381,12 @@ static int ktd2692_probe(struct platform_device *pdev)
 	fled_cdev->ops = &flash_ops;
 
 	led_cdev->max_brightness = led_cfg.max_brightness;
-	led_cdev->brightness_set_blocking = ktd2692_led_brightness_set;
+	led_cdev->brightness_set = ktd2692_led_brightness_set;
+	led_cdev->brightness_set_sync = ktd2692_led_brightness_set_sync;
 	led_cdev->flags |= LED_CORE_SUSPENDRESUME | LED_DEV_CAP_FLASH;
 
 	mutex_init(&led->lock);
+	INIT_WORK(&led->work_brightness_set, ktd2692_brightness_set_work);
 
 	platform_set_drvdata(pdev, led);
 
@@ -394,8 +405,17 @@ static int ktd2692_probe(struct platform_device *pdev)
 static int ktd2692_remove(struct platform_device *pdev)
 {
 	struct ktd2692_context *led = platform_get_drvdata(pdev);
+	int ret;
 
 	led_classdev_flash_unregister(&led->fled_cdev);
+	cancel_work_sync(&led->work_brightness_set);
+
+	if (led->regulator) {
+		ret = regulator_disable(led->regulator);
+		if (ret)
+			dev_err(&pdev->dev,
+				"Failed to disable supply: %d\n", ret);
+	}
 
 	mutex_destroy(&led->lock);
 
