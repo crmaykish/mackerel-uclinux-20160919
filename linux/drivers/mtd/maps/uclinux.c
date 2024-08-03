@@ -75,16 +75,16 @@ static int __init uclinux_mtd_init(void)
 
 	printk(KERN_INFO "MTD init address: %X\r", mtd_address);
 
-	if (physaddr == -1)
+	// if (physaddr == -1)
 		mapp->phys = (resource_size_t)mtd_address;
-	else
-		mapp->phys = physaddr;
+	// else
+	// 	mapp->phys = physaddr;
 
 	if (!mapp->size)
 		mapp->size = PAGE_ALIGN(ntohl(*((unsigned long *)(mapp->phys + 8))));
 	mapp->bankwidth = 4;
 
-	printk("uclinux[mtd]: probe address=0x%x size=0x%x\n",
+	printk(KERN_INFO "uclinux[mtd]: probe address=0x%x size=0x%x\n",
 	       	(int) mapp->phys, (int) mapp->size);
 
 	/*
@@ -95,8 +95,10 @@ static int __init uclinux_mtd_init(void)
 	 */
 	mapp->virt = phys_to_virt(mapp->phys);
 
+	printk(KERN_INFO "MTD virt address: %X\r", mapp->virt);
+
 	if (mapp->virt == 0) {
-		printk("uclinux[mtd]: no virtual mapping?\n");
+		printk(KERN_INFO "uclinux[mtd]: no virtual mapping?\n");
 		return(-EIO);
 	}
 
@@ -104,7 +106,7 @@ static int __init uclinux_mtd_init(void)
 
 	mtd = do_map_probe("map_" MAP_NAME, mapp);
 	if (!mtd) {
-		printk("uclinux[mtd]: failed to find a mapping?\n");
+		printk(KERN_WARNING "uclinux[mtd]: failed to find a mapping?\n");
 		return(-ENXIO);
 	}
 

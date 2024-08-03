@@ -386,12 +386,14 @@ static void __init get_fs_names(char *page)
 static int __init do_mount_root(char *name, char *fs, int flags, void *data)
 {
 	struct super_block *s;
-	
-	// For some reason, when ext2 support is compiled into the kernel, it tries to mount the ROMFS as ext2 and fails
-	// This is probably a config or /dev/ issue
-	printk(KERN_INFO "HACK! hardcoding rootfs mount as romfs filesystem\n");
-	int err = sys_mount(name, "/root", "romfs", flags, data);
 
+	// sys_mount vs ksys_mount?
+
+	// int err = sys_mount(name, "/root", "romfs", flags, data);
+
+	printk(KERN_INFO "do_mount_root %s, fs: %s\n", name, fs);
+
+	int err = ksys_mount(name, "/root", "romfs", flags, data);
 	if (err)
 		return err;
 
