@@ -1,7 +1,7 @@
-# Colin's Test Tool
-#
-EXEC = colin
-OBJS = main.o
+# Conway's Game of Life
+
+EXEC = conway
+OBJS = conway.o
 
 all: $(EXEC)
 

@@ -414,7 +414,8 @@ dir_$(CONFIG_USER_ZEBRA_OSPFD_OSPFD)        += zebra
 dir_$(CONFIG_USER_ZEBRA_RIPD_RIPD)          += zebra
 dir_$(CONFIG_USER_ZEBRA_ZEBRA_ZEBRA)        += zebra
 
-dir_$(CONFIG_USER_COLIN)                    += colin
+# Custom Mackerel applications
+dir_$(CONFIG_USER_CONWAY)                   += conway
 
 dir_y += games
 

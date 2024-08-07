@@ -245,10 +245,14 @@ config USER_NOOOM_BINARIES
 	default ""
 	help
 
-comment "Colin's Test Tool"
+endmenu 
 
-config USER_COLIN
-	bool "ctt"
+#############################################################################
+
+menu "Mackerel Demo Applications"
+
+config USER_CONWAY
+	bool "Conway's Game of Life"
 
 endmenu
 
