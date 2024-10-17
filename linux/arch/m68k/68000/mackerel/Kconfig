@@ -2,4 +2,16 @@ menuconfig MACKEREL
 	bool "Mackerel-68k board support."
 	depends on M68000
 	help
-	  Support for the Mackerel-68k board.
+	  Support for the Mackerel series of boards.
+
+menuconfig MACKEREL_08
+	bool "Mackerel-08 board support."
+	depends on MACKEREL
+	help
+	  Support for the Mackerel-08 board.
+
+menuconfig MACKEREL_10
+	bool "Mackerel-10 board support."
+	depends on MACKEREL
+	help
+	  Support for the Mackerel-10 board.

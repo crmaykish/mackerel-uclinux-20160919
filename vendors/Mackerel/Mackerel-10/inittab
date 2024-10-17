@@ -1,0 +1,10 @@
+::wait:/bin/hostname mackerel-10
+::wait:/bin/expand /etc/ramfs.img /dev/ram0
+::wait:/bin/mount -t proc proc /proc
+::wait:/bin/mount -t ext2 /dev/ram0 /var
+::wait:/bin/mkdir /var/tmp
+::wait:/bin/mkdir /var/log
+::wait:/bin/mkdir /var/run
+::wait:/bin/mkdir /var/lock
+::wait:/bin/mkdir /var/empty
+::respawn:/bin/cttyhack /bin/nwsh
