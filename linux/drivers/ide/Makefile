@@ -115,3 +115,5 @@ obj-$(CONFIG_BLK_DEV_IDE_TX4938)	+= tx4938ide.o
 obj-$(CONFIG_BLK_DEV_IDE_TX4939)	+= tx4939ide.o
 
 obj-$(CONFIG_BLK_DEV_P20575)		+= p20575.o
+
+obj-$(CONFIG_MACKEREL_10) += mackerel-ide.o
