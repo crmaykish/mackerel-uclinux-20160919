@@ -1,9 +1,7 @@
 #ifndef _MACKEREL_H
 #define _MACKEREL_H
 
-// MC68681P DUART 1
-
-// TODO: ifdef mack-10, mack-08
+// XR68C681 DUART
 #ifdef CONFIG_MACKEREL_10
 #define DUART1_BASE 0xFF8000
 #elif CONFIG_MACKEREL_08
