@@ -104,7 +104,7 @@ static struct clocksource mackerel_clk = {
 
 void mackerel_sched_init(irq_handler_t handler)
 {
-	int timer_int_vec = 4;
+	int timer_int_vec = 1;
 
 	printk(KERN_INFO "Setting up Mackerel timer hardware\n");
 

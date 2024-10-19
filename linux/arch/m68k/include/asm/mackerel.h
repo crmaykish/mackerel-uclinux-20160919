@@ -32,13 +32,30 @@
 #define DUART1_OPR (DUART1_BASE + 0x1D)
 #define DUART1_OPR_RESET (DUART1_BASE + 0x1F)
 
+// IDE
+// #ifdef CONFIG_MACKEREL_10
+#define MACKEREL_IDE_BASE 0xFFC000
+#define MACKEREL_IDE_DATA MACKEREL_IDE_BASE + 0x00
+#define MACKEREL_IDE_FEATURE MACKEREL_IDE_BASE + 0x02
+#define MACKEREL_IDE_SECTOR_COUNT MACKEREL_IDE_BASE + 0x04
+#define MACKEREL_IDE_SECTOR_START MACKEREL_IDE_BASE + 0x06
+#define MACKEREL_IDE_LBA_MID MACKEREL_IDE_BASE + 0x08
+#define MACKEREL_IDE_LBA_HIGH MACKEREL_IDE_BASE + 0x0A
+#define MACKEREL_IDE_DRIVE_SEL MACKEREL_IDE_BASE + 0x0C
+#define MACKEREL_IDE_STATUS MACKEREL_IDE_BASE + 0x0E
+#define MACKEREL_IDE_COMMAND MACKEREL_IDE_BASE + 0x0E
+
+#define MACKEREL_IDE_ALT_STATUS 0xFF4000 + 0x0C  // aka Device Control
+// #endif
+
 // Interrupt bits
 #define DUART_INTR_COUNTER 0b0001000
 #define DUART_INTR_RXRDY 0b00100000
 
 // Get the value at a memory address
 #define MEM(address) (*(volatile unsigned char *)(address))
-
+#define MEM16(address) (*(volatile unsigned short *)(address))
+#define MEM32(address) (*(volatile unsigned int *)(address))
 
 // DUART
 void duart_putc(char c);

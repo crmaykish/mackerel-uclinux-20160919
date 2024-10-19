@@ -35,7 +35,8 @@ DEVICES = \
 	\
 	ipsec,c,36,10 \
 	ledman,c,126,0 \
-	ppp,c,108,0
+	ppp,c,108,0 \
+	hda,b,3,0	hda1,b,3,1	hda2,b,3,2
 
 
 all:

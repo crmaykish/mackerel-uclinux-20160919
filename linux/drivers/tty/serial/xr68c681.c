@@ -166,7 +166,7 @@ static int xr68c681_startup(struct uart_port *port)
 
 	spin_lock_irqsave(&port->lock, flags);
 
-	MEM(DUART1_IVR) = 65; // Interrupt base register
+	MEM(DUART1_IVR) = 66; // Interrupt base register	// IRQ 2
 
 #ifdef CONFIG_MACKEREL_08
 	MEM(DUART1_IMR) = DUART_INTR_COUNTER; // Disable serial interrupts, leave counter enabled
@@ -310,7 +310,7 @@ static int xr68c681_probe(struct platform_device *pdev)
 	port->mapbase = DUART1_BASE;	   // TODO fix
 	port->membase = DUART1_BASE;	   // TODO fix
 	port->uartclk = 1843200;
-	port->irq = 1; // TODO fix
+	port->irq = 2; // TODO fix
 
 	uart_add_one_port(&xr68c681_driver, port);
 	// TODO: platform_set_drvdata?
