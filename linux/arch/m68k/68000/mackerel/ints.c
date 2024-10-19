@@ -50,24 +50,45 @@ asmlinkage irqreturn_t inthandler7(void);
 
 void process_int(int vec, struct pt_regs *fp)
 {
-    int new_vec = vec;
+    int irq_num = 0;
 
     // Determine the type of interrupt and how to handle it
-    if (vec == 0x41) {
-        // DUART interrupt source
-        unsigned char misr = MEM(DUART1_MISR);
+    if (vec >= 65 && vec < 72)
+    {
+#ifdef CONFIG_MACKEREL_08
+        // Mackerel-08 has both the timer and serial Rx interrupts coming from the DUART on the same vector (65)
+        // Check which source triggered the interrupt and determine the IRQ number to act on
+        if (vec == 65)
+        {
+            unsigned char misr = MEM(DUART1_MISR);
 
-        if (misr & DUART_INTR_RXRDY) {
-            // serial Rx interrupt
-            new_vec = 0x41;
+            if (misr & DUART_INTR_RXRDY)
+            {
+                // serial Rx interrupt
+                irq_num = 1;
+            }
+            else if (misr & DUART_INTR_COUNTER)
+            {
+                // timer interrupt
+                irq_num = 4;
+            }
         }
-        else if (misr & DUART_INTR_COUNTER) {
-            // timer interrupt
-            new_vec = 0x42;
+        else
+        {
+            irq_num = vec - 64;
         }
+#elif CONFIG_MACKEREL_10
+        // Mackerel-10 does not have multiple interrupt sources from the DUART
+        // A simple translation from vector to IRQ number is sufficient
+        irq_num = vec - 64;
+#endif
+    }
+    else
+    {
+        printk("Unknown interrupt: 0x%02X\n", vec);
     }
 
-    do_IRQ(new_vec - 0x40, fp);
+    do_IRQ(irq_num, fp);
 }
 
 static void intc_irq_unmask(struct irq_data *d)
@@ -88,21 +109,34 @@ static struct irq_chip intc_irq_chip = {
 
 void __init trap_init(void)
 {
-	int i;
+    int i;
 
-	/* set up the vectors */
-	for (i = 72; i < 256; ++i)
-		_ramvec[i] = (e_vector) bad_interrupt;
+    // NOTE: The autovectors and user interrupts share the same interrupt numbers
+    // i.e. autovector 1 and user interrupt 1 will map to the same handler
+    // Make sure each interrupt number is used by only one hardware peripheral
 
-	_ramvec[32] = system_call;
+    // Autovectors
+    _ramvec[25] = (e_vector)inthandler1;
+    _ramvec[26] = (e_vector)inthandler2;
+    _ramvec[27] = (e_vector)inthandler3;
+    _ramvec[28] = (e_vector)inthandler4;
+    _ramvec[29] = (e_vector)inthandler5;
+    _ramvec[30] = (e_vector)inthandler6;
+    _ramvec[31] = (e_vector)inthandler7;
 
-	_ramvec[65] = (e_vector) inthandler1;
-	_ramvec[66] = (e_vector) inthandler2;
-	_ramvec[67] = (e_vector) inthandler3;
-	_ramvec[68] = (e_vector) inthandler4;
-	_ramvec[69] = (e_vector) inthandler5;
-	_ramvec[70] = (e_vector) inthandler6;
-	_ramvec[71] = (e_vector) inthandler7;
+    _ramvec[32] = system_call;
+
+    // Vectored user interrupts
+    _ramvec[65] = (e_vector)inthandler1;
+    _ramvec[66] = (e_vector)inthandler2;
+    _ramvec[67] = (e_vector)inthandler3;
+    _ramvec[68] = (e_vector)inthandler4;
+    _ramvec[69] = (e_vector)inthandler5;
+    _ramvec[70] = (e_vector)inthandler6;
+    _ramvec[71] = (e_vector)inthandler7;
+
+    for (i = 72; i < 256; ++i)
+        _ramvec[i] = (e_vector)bad_interrupt;
 }
 
 void __init init_IRQ(void)

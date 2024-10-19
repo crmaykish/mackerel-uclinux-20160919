@@ -166,15 +166,24 @@ static int xr68c681_startup(struct uart_port *port)
 
 	spin_lock_irqsave(&port->lock, flags);
 
-	MEM(DUART1_IVR) = 0x41;				  // Interrupt base register
+	MEM(DUART1_IVR) = 65; // Interrupt base register
+
+#ifdef CONFIG_MACKEREL_08
 	MEM(DUART1_IMR) = DUART_INTR_COUNTER; // Disable serial interrupts, leave counter enabled
+#elif CONFIG_MACKEREL_10
+	MEM(DUART1_IMR) = 0; // Disable all DUART interrupts
+#endif
 
 	if (request_irq(port->irq, xr68c681_interrupt, 0, "XR68C681UART", port))
 		printk(KERN_ERR "XR68C681UART: unable to attach XR68C681UART %d "
 						"interrupt vector=%d\n",
 			   port->line, port->irq);
 
-	MEM(DUART1_IMR) = DUART_INTR_COUNTER | DUART_INTR_RXRDY; // Enable Rx interrupts
+#ifdef CONFIG_MACKEREL_08
+	MEM(DUART1_IMR) = DUART_INTR_COUNTER | DUART_INTR_RXRDY; // Enable Rx interrupts, leave counter enabled
+#elif CONFIG_MACKEREL_10
+	MEM(DUART1_IMR) = DUART_INTR_RXRDY; // Enable Rx interrupts
+#endif
 
 	spin_unlock_irqrestore(&port->lock, flags);
 
@@ -226,7 +235,6 @@ static void xr68c681_config_port(struct uart_port *port, int flags)
 	port->fifosize = 3; // TODO is this right? does it matter?
 
 	// TODO: disable interrupts
-
 }
 
 static const struct uart_ops xr68c681_uart_ops = {
