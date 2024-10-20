@@ -104,7 +104,7 @@ static const struct ide_tp_ops mackerel_ide_tp_ops = {
 
 static const struct ide_port_info mackerel_ide_port_info = {
     .tp_ops = &mackerel_ide_tp_ops,
-    .host_flags = IDE_HFLAG_NO_DMA,// | IDE_HFLAG_UNMASK_IRQS,
+    .host_flags = IDE_HFLAG_NO_DMA,
     .chipset = ide_generic,
 };
 
@@ -114,38 +114,12 @@ static int __init mackerel_ide_init(void)
     struct ide_hw hw, *hws[] = {&hw};
     int rc;
 
-    unsigned char ide_status = 0;
-    int i;
-
     printk(KERN_INFO "Mackerel IDE driver (c) 2024 Colin Maykish\n");
-
-    // if (!request_mem_region(MACKEREL_IDE_BASE, 0x4000, "mackerel-ide"))
-    // {
-    //     printk(KERN_ERR "%s: resources busy\n", "mackerel-ide");
-    //     return -EBUSY;
-    // }
 
     memset(&hw, 0, sizeof(hw));
 
     hw.irq = IRQ_NUM_IDE;
     hw.io_ports.data_addr = MACKEREL_IDE_BASE;
-    // hw.io_ports.feature_addr = MACKEREL_IDE_FEATURE;
-    // hw.io_ports.nsect_addr = MACKEREL_IDE_SECTOR_COUNT;
-    // hw.io_ports.lbal_addr = MACKEREL_IDE_SECTOR_START;
-    // hw.io_ports.lbam_addr = MACKEREL_IDE_LBA_MID;
-    // hw.io_ports.lbah_addr = MACKEREL_IDE_LBA_HIGH;
-    // hw.io_ports.device_addr = MACKEREL_IDE_DRIVE_SEL;
-    // hw.io_ports.status_addr = MACKEREL_IDE_STATUS;
-    // hw.io_ports.ctl_addr = MACKEREL_IDE_ALT_STATUS;
-
-
-    printk(KERN_INFO "Clearing any potential IDE interrupts");
-    
-    for (i = 0; i < 100; i++)
-    {
-        ide_status = MEM(MACKEREL_IDE_STATUS);
-    }
-    
 
     host = ide_host_alloc(&mackerel_ide_port_info, hws, 1);
     if (host == NULL)
@@ -161,8 +135,6 @@ static int __init mackerel_ide_init(void)
         ide_host_free(host);
         return rc;
     }
-
-    // return ide_host_add(&mackerel_ide_port_info, hws, 1, NULL);
 
     return 0;
 }
