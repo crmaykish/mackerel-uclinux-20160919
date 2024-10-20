@@ -1,6 +1,10 @@
 #ifndef _MACKEREL_H
 #define _MACKEREL_H
 
+#define IRQ_NUM_IDE 3
+#define IRQ_NUM_DUART 5
+#define IRQ_NUM_TIMER 6
+
 // XR68C681 DUART
 #ifdef CONFIG_MACKEREL_10
 #define DUART1_BASE 0xFF8000

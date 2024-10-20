@@ -104,15 +104,13 @@ static struct clocksource mackerel_clk = {
 
 void mackerel_sched_init(irq_handler_t handler)
 {
-	int timer_int_vec = 1;
-
 	printk(KERN_INFO "Setting up Mackerel timer hardware\n");
 
-	setup_irq(timer_int_vec, &mackerel_timer_irq);
+	setup_irq(IRQ_NUM_TIMER, &mackerel_timer_irq);
 
 #ifdef CONFIG_MACKEREL_08
 	// Setup DUART as 50 Hz interrupt timer
-	MEM(DUART1_IVR) = 0x40 + timer_int_vec; // Interrupt base register
+	MEM(DUART1_IVR) = 0x40 + IRQ_NUM_DUART; // Interrupt base register
 	MEM(DUART1_ACR) = 0xF0;					// Set timer mode X/16
 	MEM(DUART1_IMR) = 0b00001000;			// Unmask counter interrupt
 	MEM(DUART1_CUR) = 0x09;					// Counter upper byte, (3.6864MHz / 2 / 16 / 0x900) = 50 Hz

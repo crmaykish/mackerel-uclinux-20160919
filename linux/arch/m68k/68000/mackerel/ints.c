@@ -88,6 +88,12 @@ void process_int(int vec, struct pt_regs *fp)
         printk("Unknown interrupt: 0x%02X\n", vec);
     }
 
+    if (irq_num == IRQ_NUM_IDE) {
+        // Clear the IDE interrupt by reading the status.
+        // TODO: Why doesn't the IDE driver do this automatically?
+        u8 t = MEM(MACKEREL_IDE_STATUS);
+    }
+
     do_IRQ(irq_num, fp);
 }
 
