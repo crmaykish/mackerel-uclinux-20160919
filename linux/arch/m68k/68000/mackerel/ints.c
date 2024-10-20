@@ -58,19 +58,19 @@ void process_int(int vec, struct pt_regs *fp)
 #ifdef CONFIG_MACKEREL_08
         // Mackerel-08 has both the timer and serial Rx interrupts coming from the DUART on the same vector (65)
         // Check which source triggered the interrupt and determine the IRQ number to act on
-        if (vec == 65)
+        if (vec == (64 + IRQ_NUM_DUART))
         {
             unsigned char misr = MEM(DUART1_MISR);
 
             if (misr & DUART_INTR_RXRDY)
             {
                 // serial Rx interrupt
-                irq_num = 1;
+                irq_num = IRQ_NUM_DUART;
             }
             else if (misr & DUART_INTR_COUNTER)
             {
                 // timer interrupt
-                irq_num = 4;
+                irq_num = IRQ_NUM_TIMER;
             }
         }
         else
@@ -85,14 +85,16 @@ void process_int(int vec, struct pt_regs *fp)
     }
     else
     {
-        printk("Unknown interrupt: 0x%02X\n", vec);
+        printk("Unknown interrupt: %d\n", vec);
     }
-
-    if (irq_num == IRQ_NUM_IDE) {
+#ifdef CONFIG_MACKEREL_10
+    if (irq_num == IRQ_NUM_IDE)
+    {
         // Clear the IDE interrupt by reading the status.
         // TODO: Why doesn't the IDE driver do this automatically?
         u8 t = MEM(MACKEREL_IDE_STATUS);
     }
+#endif
 
     do_IRQ(irq_num, fp);
 }
