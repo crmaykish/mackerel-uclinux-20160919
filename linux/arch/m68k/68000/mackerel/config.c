@@ -16,7 +16,6 @@
 #include <asm/mackerel.h>
 #include <asm/irq.h>
 
-static u32 mackerel_tick_count;
 static irq_handler_t timer_interrupt;
 
 static struct resource uart_res[] = {
@@ -26,17 +25,11 @@ static struct resource uart_res[] = {
 		.flags = IORESOURCE_MEM,
 	},
 	{
-		//         .start          = IRQ_USER + 12,
-		//         .end            = IRQ_USER + 12,
-		// TODO ?
 		.start = 1,
 		.end = 1,
 		.flags = IORESOURCE_IRQ,
 	}};
 
-/*
- * UART device
- */
 static struct platform_device xr68c681_duart_device = {
 	.name = "xr68c681-serial",
 	.id = 0,
@@ -67,13 +60,12 @@ static irqreturn_t hw_tick(int irq, void *dummy)
 	MEM(DUART1_OPR_RESET); // Stop counter, i.e. reset the timer
 #endif
 
-	mackerel_tick_count += 10;
 	return timer_interrupt(irq, dummy);
 }
 
 static struct irqaction mackerel_timer_irq = {
 	.name = "timer",
-	.flags = /*IRQF_DISABLED | */ IRQF_TIMER,
+	.flags = IRQF_TIMER,
 	.handler = hw_tick,
 };
 
@@ -82,25 +74,9 @@ void mackerel_reset(void)
 	local_irq_disable();
 }
 
-static cycle_t mackerel_read_clk(struct clocksource *cs)
+void __init mackerel_init_IRQ(void)
 {
-	unsigned long flags;
-	u32 cycles;
-
-	local_irq_save(flags);
-	cycles = mackerel_tick_count + 100; // TODO: This is definitely not the right value
-	local_irq_restore(flags);
-
-	return cycles;
 }
-
-static struct clocksource mackerel_clk = {
-	.name = "timer",
-	.rating = 250,
-	.read = mackerel_read_clk,
-	.mask = CLOCKSOURCE_MASK(32),
-	.flags = CLOCK_SOURCE_IS_CONTINUOUS,
-};
 
 void mackerel_sched_init(irq_handler_t handler)
 {
@@ -117,8 +93,6 @@ void mackerel_sched_init(irq_handler_t handler)
 	MEM(DUART1_CLR) = 0x00;					// Counter lower byte
 	MEM(DUART1_OPR);						// Start counter
 #endif
-
-	clocksource_register_hz(&mackerel_clk, 10 * 100); // TODO: this should be calculated properly from the interrupt rate and CPU speed and all that
 
 	timer_interrupt = handler;
 }
