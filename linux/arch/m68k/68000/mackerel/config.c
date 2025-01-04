@@ -56,9 +56,7 @@ static struct console mackerel_console_driver = {
 
 static irqreturn_t hw_tick(int irq, void *dummy)
 {
-#ifdef CONFIG_MACKEREL_08
 	MEM(DUART1_OPR_RESET); // Stop counter, i.e. reset the timer
-#endif
 
 	return timer_interrupt(irq, dummy);
 }
@@ -84,7 +82,6 @@ void mackerel_sched_init(irq_handler_t handler)
 
 	setup_irq(IRQ_NUM_TIMER, &mackerel_timer_irq);
 
-#ifdef CONFIG_MACKEREL_08
 	// Setup DUART as 50 Hz interrupt timer
 	MEM(DUART1_IVR) = 0x40 + IRQ_NUM_DUART; // Interrupt base register
 	MEM(DUART1_ACR) = 0xF0;					// Set timer mode X/16
@@ -92,7 +89,6 @@ void mackerel_sched_init(irq_handler_t handler)
 	MEM(DUART1_CUR) = 0x09;					// Counter upper byte, (3.6864MHz / 2 / 16 / 0x900) = 50 Hz
 	MEM(DUART1_CLR) = 0x00;					// Counter lower byte
 	MEM(DUART1_OPR);						// Start counter
-#endif
 
 	timer_interrupt = handler;
 }

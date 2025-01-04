@@ -55,8 +55,8 @@ void process_int(int vec, struct pt_regs *fp)
     // Determine the type of interrupt and how to handle it
     if (vec >= 65 && vec < 72)
     {
-#ifdef CONFIG_MACKEREL_08
-        // Mackerel-08 has both the timer and serial Rx interrupts coming from the DUART on the same vector (65)
+
+        // Mackerel has both the timer and serial Rx interrupts coming from the DUART on the same vector (65)
         // Check which source triggered the interrupt and determine the IRQ number to act on
         if (vec == (64 + IRQ_NUM_DUART))
         {
@@ -77,16 +77,12 @@ void process_int(int vec, struct pt_regs *fp)
         {
             irq_num = vec - 64;
         }
-#elif CONFIG_MACKEREL_10
-        // Mackerel-10 does not have multiple interrupt sources from the DUART
-        // A simple translation from vector to IRQ number is sufficient
-        irq_num = vec - 64;
-#endif
     }
     else
     {
         printk("Unknown interrupt: %d\n", vec);
     }
+
 #ifdef CONFIG_MACKEREL_10
     if (irq_num == IRQ_NUM_IDE)
     {
