@@ -40,9 +40,8 @@ static const char sccsid[] = "@(#)print.c	8.1 (Berkeley) 6/6/93";
 #include "extern.h"
 
 void
-pcrc(fn, val, len)
-	char *fn;
-	u_int32_t val, len;
+pcrc(char *fn,
+	u_int32_t val, u_int32_t len)
 {
 	(void)printf("%lu %lu", (u_long) val, (u_long) len);
 	if (fn)
@@ -51,9 +50,8 @@ pcrc(fn, val, len)
 }
 
 void
-psum1(fn, val, len)
-	char *fn;
-	u_int32_t val, len;
+psum1(char *fn,
+	u_int32_t val, u_int32_t len)
 {
 	(void)printf("%lu %lu", (u_long) val, (u_long) (len + 1023) / 1024);
 	if (fn)
@@ -62,9 +60,8 @@ psum1(fn, val, len)
 }
 
 void
-psum2(fn, val, len)
-	char *fn;
-	u_int32_t val, len;
+psum2(char *fn,
+	u_int32_t val, u_int32_t len)
 {
 	(void)printf("%lu %lu", (u_long) val, (u_long) (len + 511) / 512);
 	if (fn)

@@ -64,9 +64,7 @@ static void usage __P((void));
 int binary = 0;
 
 int
-main(argc, argv)
-	int argc;
-	char **argv;
+main(int argc, char **argv)
 {
 	register int ch, fd, rval;
 	u_int32_t len, val;

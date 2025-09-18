@@ -93,9 +93,8 @@ static const u_int32_t crctab[256] = {
 u_int32_t crc32_total = 0 ;
 
 int
-crc32(fd, cval, clen)
-    register int fd;
-    u_int32_t *cval, *clen;
+crc32(register int fd,
+    u_int32_t *cval, u_int32_t *clen)
 {
     u_int32_t crc = ~0;
     char buf[BUFSIZ], *p ;

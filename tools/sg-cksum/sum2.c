@@ -39,9 +39,9 @@ static const char sccsid[] = "@(#)sum2.c	8.1 (Berkeley) 6/6/93";
 #include <unistd.h>
 
 int
-csum2(fd, cval, clen)
-	register int fd;
-	u_int32_t *cval, *clen;
+csum2(register int fd,
+	u_int32_t *cval, u_int32_t *clen)
+	
 {
 	register u_int32_t crc, total;
 	register int nr;
