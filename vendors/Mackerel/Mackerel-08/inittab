@@ -7,4 +7,5 @@
 ::wait:/bin/mkdir /var/run
 ::wait:/bin/mkdir /var/lock
 ::wait:/bin/mkdir /var/empty
+::wait:/bin/cat /etc/motd
 ::respawn:/bin/cttyhack /bin/nwsh
