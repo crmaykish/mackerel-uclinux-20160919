@@ -96,9 +96,9 @@ void mackerel_sched_init(irq_handler_t handler)
 void __init config_BSP(char *command, int len)
 {
 #ifdef CONFIG_MACKEREL_08
-	printk(KERN_INFO "Mackerel-08 support by Colin Maykish <colin@maykish.com>\n");
+	printk(KERN_INFO "Mackerel-08 support by Colin Maykish <crmaykish@protonmail.com>\n");
 #elif CONFIG_MACKEREL_10
-	printk(KERN_INFO "Mackerel-10 support by Colin Maykish <colin@maykish.com>\n");
+	printk(KERN_INFO "Mackerel-10 support by Colin Maykish <crmaykish@protonmail.com>\n");
 #endif
 
 	// Disable all DUART interrupts
