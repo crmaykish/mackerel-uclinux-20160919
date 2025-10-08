@@ -2,6 +2,7 @@
 ::wait:/bin/expand /etc/ramfs.img /dev/ram0
 ::wait:/bin/mount -t proc proc /proc
 ::wait:/bin/mount -t ext2 /dev/ram0 /var
+::wait:/bin/mount -t ext2 /dev/hda2 /mnt/storage
 ::wait:/bin/mkdir /var/tmp
 ::wait:/bin/mkdir /var/log
 ::wait:/bin/mkdir /var/run
