@@ -30,8 +30,8 @@ sqlite-amalgamation-3.6.23.1_BUILDDIR = sqlite-3.6.23.1
 sqlite-amalgamation-3.6.23.1_CONFOPTS = --disable-threadsafe
 
 AUTOMAKE_y =
-AUTOMAKE_$(CONFIG_USER_LUA) += ncurses-5.7
-AUTOMAKE_$(CONFIG_USER_LUA) += readline-6.1
+# AUTOMAKE_$(CONFIG_USER_LUA) += ncurses-5.7
+# AUTOMAKE_$(CONFIG_USER_LUA) += readline-6.1
 AUTOMAKE_$(CONFIG_USER_LUA_LUASQL_SQLITE3) += sqlite-amalgamation-3.6.23.1
 AUTOMAKE_$(CONFIG_USER_LUA) += lua-5.1.4
 
@@ -74,3 +74,7 @@ ifdef CONFIG_USER_LUA_COSMO
 	$(LUAROCKS_CMD) install cosmo
 endif
 
+
+romfs:
+	echo "PWD: $(shell pwd)"
+	$(ROMFSINST) build/lua-5.1.4/src/lua /bin/lua
