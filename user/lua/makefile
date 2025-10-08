@@ -8,7 +8,7 @@ ncurses-5.7_CONFOPTS  = --without-cxx --without-cxx-binding
 readline-6.1_URL      = ftp://ftp.cwru.edu/pub/bash/readline-6.1.tar.gz
 
 lua-5.1.4_URL         = http://www.lua.org/ftp/lua-5.1.4.tar.gz
-lua-5.1.4_MAKEVARS    = CC="$(CC) $(CFLAGS)" INSTALL_TOP='$(ROMFSDIR)/usr' linux
+lua-5.1.4_MAKEVARS    = CC="$(CC) $(CFLAGS)" INSTALL_TOP='$(ROOTDIR)/user/lua/build/install' posix
 lua-5.1.4_CONFOPTS    = --prefix=/usr
 
 luarocks-2.0.2_URL       = http://luarocks.org/releases/luarocks-2.0.2.tar.gz
@@ -74,7 +74,5 @@ ifdef CONFIG_USER_LUA_COSMO
 	$(LUAROCKS_CMD) install cosmo
 endif
 
-
 romfs:
-	echo "PWD: $(shell pwd)"
 	$(ROMFSINST) build/lua-5.1.4/src/lua /bin/lua
